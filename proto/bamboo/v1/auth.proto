@@ -1,0 +1,144 @@
+syntax = "proto3";
+
+package bamboo.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/hanfour/bamboo/proto/gen/go/bamboo/v1;bamboov1";
+
+// AuthService handles OIDC login flows, token lifecycle, and pre-auth keys.
+service AuthService {
+  // StartOIDCFlow returns a provider redirect URL plus a state token the
+  // client must echo back during the callback step.
+  rpc StartOIDCFlow(StartOIDCFlowRequest) returns (StartOIDCFlowResponse);
+
+  // CompleteOIDCFlow exchanges an authorization code for a session.
+  rpc CompleteOIDCFlow(CompleteOIDCFlowRequest) returns (CompleteOIDCFlowResponse);
+
+  // RefreshToken returns a new access token given a valid refresh token.
+  rpc RefreshToken(RefreshTokenRequest) returns (RefreshTokenResponse);
+
+  // Logout revokes the current session.
+  rpc Logout(LogoutRequest) returns (LogoutResponse);
+
+  // CreatePreAuthKey issues a key for headless / CI registration.
+  rpc CreatePreAuthKey(CreatePreAuthKeyRequest) returns (CreatePreAuthKeyResponse);
+
+  // RedeemPreAuthKey is called by clients to register without interactive login.
+  rpc RedeemPreAuthKey(RedeemPreAuthKeyRequest) returns (RedeemPreAuthKeyResponse);
+
+  // ListPreAuthKeys returns keys belonging to the calling tenant.
+  rpc ListPreAuthKeys(ListPreAuthKeysRequest) returns (ListPreAuthKeysResponse);
+
+  // RevokePreAuthKey invalidates a key by id.
+  rpc RevokePreAuthKey(RevokePreAuthKeyRequest) returns (RevokePreAuthKeyResponse);
+}
+
+// OIDCProvider enumerates supported identity providers.
+enum OIDCProvider {
+  OIDC_PROVIDER_UNSPECIFIED = 0;
+  OIDC_PROVIDER_GOOGLE = 1;
+  OIDC_PROVIDER_GITHUB = 2;
+  OIDC_PROVIDER_MICROSOFT = 3;
+  OIDC_PROVIDER_OKTA = 4;
+}
+
+message StartOIDCFlowRequest {
+  OIDCProvider provider = 1;
+  // redirect_uri is where the provider will send the user after consent.
+  string redirect_uri = 2;
+}
+
+message StartOIDCFlowResponse {
+  string authorization_url = 1;
+  string state = 2;
+}
+
+message CompleteOIDCFlowRequest {
+  OIDCProvider provider = 1;
+  string code = 2;
+  string state = 3;
+  string redirect_uri = 4;
+}
+
+message Session {
+  string access_token = 1;
+  string refresh_token = 2;
+  google.protobuf.Timestamp expires_at = 3;
+  string user_id = 4;
+  string tenant_id = 5;
+}
+
+message CompleteOIDCFlowResponse {
+  Session session = 1;
+}
+
+message RefreshTokenRequest {
+  string refresh_token = 1;
+}
+
+message RefreshTokenResponse {
+  Session session = 1;
+}
+
+message LogoutRequest {
+  // refresh_token, if provided, is also revoked.
+  string refresh_token = 1;
+}
+
+message LogoutResponse {}
+
+// PreAuthKey is a long-lived token usable for headless registration.
+message PreAuthKey {
+  string id = 1;
+  string tenant_id = 2;
+  string description = 3;
+  // tags are auto-applied to peers registered with this key.
+  repeated string tags = 4;
+  bool reusable = 5;
+  bool ephemeral = 6;
+  google.protobuf.Timestamp created_at = 7;
+  google.protobuf.Timestamp expires_at = 8;
+  google.protobuf.Timestamp revoked_at = 9;
+  int64 use_count = 10;
+}
+
+message CreatePreAuthKeyRequest {
+  string description = 1;
+  repeated string tags = 2;
+  bool reusable = 3;
+  bool ephemeral = 4;
+  google.protobuf.Timestamp expires_at = 5;
+}
+
+message CreatePreAuthKeyResponse {
+  PreAuthKey key = 1;
+  // secret is returned exactly once at creation time.
+  string secret = 2;
+}
+
+message RedeemPreAuthKeyRequest {
+  string secret = 1;
+  string hostname = 2;
+}
+
+message RedeemPreAuthKeyResponse {
+  Session session = 1;
+}
+
+message ListPreAuthKeysRequest {
+  // page_size and page_token follow Google AIP-158 pagination.
+  int32 page_size = 1;
+  string page_token = 2;
+}
+
+message ListPreAuthKeysResponse {
+  repeated PreAuthKey keys = 1;
+  string next_page_token = 2;
+}
+
+message RevokePreAuthKeyRequest {
+  string id = 1;
+}
+
+message RevokePreAuthKeyResponse {}

@@ -1,0 +1,94 @@
+syntax = "proto3";
+
+package bamboo.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/hanfour/bamboo/proto/gen/go/bamboo/v1;bamboov1";
+
+// TelemetryService receives connection events and metrics from clients.
+// All events are tenant-scoped and authenticated via the bearer token
+// established at registration.
+service TelemetryService {
+  // ReportConnectionEvents streams events from client to controller.
+  // Server returns when stream closes.
+  rpc ReportConnectionEvents(stream ConnectionEvent) returns (ReportConnectionEventsResponse);
+
+  // ReportMetrics is a unary RPC for periodic snapshot metrics.
+  rpc ReportMetrics(ReportMetricsRequest) returns (ReportMetricsResponse);
+}
+
+// ConnectionEventType describes what happened.
+enum ConnectionEventType {
+  CONNECTION_EVENT_TYPE_UNSPECIFIED = 0;
+  CONNECTION_EVENT_TYPE_CONNECTION_ESTABLISHED = 1;
+  CONNECTION_EVENT_TYPE_CONNECTION_CLOSED = 2;
+  CONNECTION_EVENT_TYPE_HANDSHAKE_FAILED = 3;
+  CONNECTION_EVENT_TYPE_RELAY_FALLBACK = 4;
+  CONNECTION_EVENT_TYPE_PATH_UPGRADED = 5;
+  CONNECTION_EVENT_TYPE_NAT_TYPE_DETECTED = 6;
+  CONNECTION_EVENT_TYPE_ACCESS_DENIED = 7;
+}
+
+// ConnectionPath describes how peers reached each other.
+enum ConnectionPath {
+  CONNECTION_PATH_UNSPECIFIED = 0;
+  CONNECTION_PATH_DIRECT_HOST = 1;
+  CONNECTION_PATH_DIRECT_SRFLX = 2;
+  CONNECTION_PATH_RELAY = 3;
+}
+
+// NATType represents the NAT topology a client observes.
+enum NATType {
+  NAT_TYPE_UNSPECIFIED = 0;
+  NAT_TYPE_NONE = 1;
+  NAT_TYPE_FULL_CONE = 2;
+  NAT_TYPE_RESTRICTED_CONE = 3;
+  NAT_TYPE_PORT_RESTRICTED = 4;
+  NAT_TYPE_SYMMETRIC = 5;
+}
+
+// ConnectionEvent is one observed event from a client.
+message ConnectionEvent {
+  string id = 1;
+  string source_peer_id = 2;
+  string destination_peer_id = 3;
+  ConnectionEventType type = 4;
+  ConnectionPath path = 5;
+  google.protobuf.Timestamp occurred_at = 6;
+  // bytes_sent / bytes_received are cumulative for the connection lifetime
+  // up to the moment of this event. Useful for closed events.
+  int64 bytes_sent = 7;
+  int64 bytes_received = 8;
+  int32 rtt_ms = 9;
+  // For HANDSHAKE_FAILED / ACCESS_DENIED, reason holds the cause.
+  string reason = 10;
+  // For ACCESS_DENIED, matched_rule_id points to the policy rule.
+  string matched_rule_id = 11;
+}
+
+message ReportConnectionEventsResponse {
+  int64 accepted_count = 1;
+}
+
+// PeerMetrics is a snapshot of peer-local statistics, reported on a cadence.
+message PeerMetrics {
+  string peer_id = 1;
+  google.protobuf.Timestamp window_start = 2;
+  google.protobuf.Timestamp window_end = 3;
+  int64 packets_sent = 4;
+  int64 packets_received = 5;
+  int64 bytes_sent = 6;
+  int64 bytes_received = 7;
+  int32 active_connections = 8;
+  NATType nat_type = 9;
+  // CPU / memory of the agent itself, useful for capacity planning.
+  float cpu_percent = 10;
+  int64 memory_bytes = 11;
+}
+
+message ReportMetricsRequest {
+  PeerMetrics metrics = 1;
+}
+
+message ReportMetricsResponse {}

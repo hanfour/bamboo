@@ -18,7 +18,7 @@ build: ## Build all artifacts
 	@echo "==> build (placeholder)"
 
 proto: ## Regenerate gRPC code from proto/
-	@echo "==> proto (placeholder)"
+	@cd proto && buf lint && buf generate
 
 dev: ## Start local development stack (docker-compose)
 	@cd infra && docker compose up

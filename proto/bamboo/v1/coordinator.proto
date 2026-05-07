@@ -1,0 +1,165 @@
+syntax = "proto3";
+
+package bamboo.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/hanfour/bamboo/proto/gen/go/bamboo/v1;bamboov1";
+
+// CoordinatorService manages peer registration, network topology, and the
+// long-poll stream that delivers updates to clients.
+service CoordinatorService {
+  // Register registers a peer with the controller, allocating an IP and
+  // returning the initial peer set. Idempotent: re-registering a known
+  // public key returns the existing peer.
+  rpc Register(RegisterRequest) returns (RegisterResponse);
+
+  // Unregister removes a peer from the network.
+  rpc Unregister(UnregisterRequest) returns (UnregisterResponse);
+
+  // Heartbeat keeps the peer marked online. Clients call this periodically.
+  rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+
+  // WatchPeers streams peer-set and ACL updates to a client.
+  rpc WatchPeers(WatchPeersRequest) returns (stream WatchPeersEvent);
+
+  // GetPeer returns details for a single peer in the calling tenant.
+  rpc GetPeer(GetPeerRequest) returns (GetPeerResponse);
+
+  // ListPeers returns all peers visible to the caller (admin view).
+  rpc ListPeers(ListPeersRequest) returns (ListPeersResponse);
+}
+
+// PeerStatus indicates whether a peer is reachable.
+enum PeerStatus {
+  PEER_STATUS_UNSPECIFIED = 0;
+  PEER_STATUS_ONLINE = 1;
+  PEER_STATUS_OFFLINE = 2;
+  PEER_STATUS_DISABLED = 3;
+}
+
+// Peer represents a single device in the mesh.
+message Peer {
+  string id = 1;
+  string tenant_id = 2;
+  string hostname = 3;
+  string wireguard_public_key = 4;
+  // IP allocated within the tenant's subnet (e.g. 100.64.0.0/10).
+  string ip = 5;
+  repeated string tags = 6;
+  string user_id = 7;
+  PeerStatus status = 8;
+  string os = 9;
+  string client_version = 10;
+  google.protobuf.Timestamp created_at = 11;
+  google.protobuf.Timestamp last_seen_at = 12;
+  // endpoints are candidate ip:port pairs for direct connection.
+  repeated string endpoints = 13;
+  // allowed_ips is computed by the policy engine based on ACL rules.
+  repeated string allowed_ips = 14;
+}
+
+message RegisterRequest {
+  // Either bearer token (from interactive login) or pre_auth_key_secret.
+  oneof credential {
+    string bearer_token = 1;
+    string pre_auth_key_secret = 2;
+  }
+  string hostname = 3;
+  string wireguard_public_key = 4;
+  string os = 5;
+  string client_version = 6;
+}
+
+message RegisterResponse {
+  Peer self = 1;
+  repeated Peer peers = 2;
+  // policy_revision is monotonically increasing and used for cache invalidation.
+  int64 policy_revision = 3;
+  // relay_servers are DERP-style relays the client may use as fallback.
+  repeated RelayServer relay_servers = 4;
+}
+
+message RelayServer {
+  string id = 1;
+  string region = 2;
+  string hostname = 3;
+  int32 port = 4;
+  string public_key = 5;
+}
+
+message UnregisterRequest {
+  string peer_id = 1;
+}
+
+message UnregisterResponse {}
+
+message HeartbeatRequest {
+  string peer_id = 1;
+  int64 known_policy_revision = 2;
+  // current endpoints observed by the client (NAT type, public ip:port).
+  repeated string endpoints = 3;
+}
+
+message HeartbeatResponse {
+  // tells the client whether to refresh its peer set / ACL.
+  bool peers_changed = 1;
+  bool policy_changed = 2;
+  int64 current_policy_revision = 3;
+}
+
+message WatchPeersRequest {
+  string peer_id = 1;
+  int64 known_policy_revision = 2;
+}
+
+// WatchPeersEvent delivers incremental updates over the long-poll stream.
+message WatchPeersEvent {
+  oneof event {
+    PeerAdded peer_added = 1;
+    PeerUpdated peer_updated = 2;
+    PeerRemoved peer_removed = 3;
+    PolicyChanged policy_changed = 4;
+    RelaysChanged relays_changed = 5;
+  }
+}
+
+message PeerAdded {
+  Peer peer = 1;
+}
+
+message PeerUpdated {
+  Peer peer = 1;
+}
+
+message PeerRemoved {
+  string peer_id = 1;
+}
+
+message PolicyChanged {
+  int64 policy_revision = 1;
+}
+
+message RelaysChanged {
+  repeated RelayServer relay_servers = 1;
+}
+
+message GetPeerRequest {
+  string peer_id = 1;
+}
+
+message GetPeerResponse {
+  Peer peer = 1;
+}
+
+message ListPeersRequest {
+  int32 page_size = 1;
+  string page_token = 2;
+  // optional filter expression — see AIP-160.
+  string filter = 3;
+}
+
+message ListPeersResponse {
+  repeated Peer peers = 1;
+  string next_page_token = 2;
+}

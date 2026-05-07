@@ -1,0 +1,192 @@
+syntax = "proto3";
+
+package bamboo.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/hanfour/bamboo/proto/gen/go/bamboo/v1;bamboov1";
+
+// PolicyService manages ACL definitions, evaluation, and AI-driven
+// recommendations.
+service PolicyService {
+  // GetPolicy returns the current ACL document for the calling tenant.
+  rpc GetPolicy(GetPolicyRequest) returns (GetPolicyResponse);
+
+  // PutPolicy replaces the ACL document atomically. Increments the
+  // policy_revision counter. Used by Terraform / GitOps integrations.
+  rpc PutPolicy(PutPolicyRequest) returns (PutPolicyResponse);
+
+  // ValidatePolicy parses and lints a candidate policy without applying it.
+  rpc ValidatePolicy(ValidatePolicyRequest) returns (ValidatePolicyResponse);
+
+  // EvaluateAccess answers "can src reach dst:port?" for debugging and
+  // dry-run flows.
+  rpc EvaluateAccess(EvaluateAccessRequest) returns (EvaluateAccessResponse);
+
+  // ListEvaluationTraces returns recent ACL decisions (allow/deny) for
+  // observability.
+  rpc ListEvaluationTraces(ListEvaluationTracesRequest) returns (ListEvaluationTracesResponse);
+
+  // ListRecommendations returns AI-generated suggestions (e.g. unused
+  // rules to remove, over-privileged rules to tighten). Each recommendation
+  // is a proposed diff; clients open a PR for human review.
+  rpc ListRecommendations(ListRecommendationsRequest) returns (ListRecommendationsResponse);
+}
+
+// Action is the outcome of a matched rule.
+enum Action {
+  ACTION_UNSPECIFIED = 0;
+  ACTION_ALLOW = 1;
+  ACTION_DENY = 2;
+}
+
+// Policy is the full ACL document, expressed in our HCL DSL.
+// We store the canonical text and a parsed form.
+message Policy {
+  string tenant_id = 1;
+  int64 revision = 2;
+  // hcl_source is the canonical text the user wrote.
+  string hcl_source = 3;
+  // groups, tags, rules are parsed from hcl_source and cached for fast eval.
+  repeated Group groups = 4;
+  repeated Tag tags = 5;
+  repeated ACLRule rules = 6;
+  google.protobuf.Timestamp updated_at = 7;
+  string updated_by = 8;
+}
+
+// Group is a named set of users.
+message Group {
+  string name = 1;
+  repeated string user_ids = 2;
+}
+
+// Tag is a label attached to peers; used as the destination matcher in rules.
+message Tag {
+  string name = 1;
+  // owners are users or groups allowed to assign this tag to peers.
+  repeated string owners = 2;
+}
+
+// ACLRule is a single allow/deny statement.
+message ACLRule {
+  string id = 1;
+  Action action = 2;
+  // Source matchers — at least one must match.
+  // Examples: "group:eng", "tag:dev-laptop", "user:alice@example.com"
+  repeated string sources = 3;
+  // Destination matchers in the form "<matcher>:<port-spec>".
+  // Examples: "tag:prod-db:5432", "tag:web:80,443", "0.0.0.0/0:*"
+  repeated string destinations = 4;
+  // Optional time window. Format: "Mon-Fri 09:00-18:00 Asia/Taipei"
+  string time_window = 5;
+  string description = 6;
+}
+
+message GetPolicyRequest {}
+
+message GetPolicyResponse {
+  Policy policy = 1;
+}
+
+message PutPolicyRequest {
+  string hcl_source = 1;
+  // expected_revision is used for optimistic concurrency. If non-zero and
+  // doesn't match the current revision, the request fails.
+  int64 expected_revision = 2;
+}
+
+message PutPolicyResponse {
+  Policy policy = 1;
+}
+
+message ValidatePolicyRequest {
+  string hcl_source = 1;
+}
+
+message ValidatePolicyResponse {
+  bool valid = 1;
+  repeated PolicyDiagnostic diagnostics = 2;
+}
+
+message PolicyDiagnostic {
+  enum Severity {
+    SEVERITY_UNSPECIFIED = 0;
+    SEVERITY_INFO = 1;
+    SEVERITY_WARNING = 2;
+    SEVERITY_ERROR = 3;
+  }
+  Severity severity = 1;
+  string message = 2;
+  int32 line = 3;
+  int32 column = 4;
+}
+
+message EvaluateAccessRequest {
+  string source = 1;       // e.g. "user:alice@example.com" or "peer:abc123"
+  string destination = 2;  // e.g. "tag:prod-db" or "100.64.0.7"
+  int32 port = 3;
+  string protocol = 4;     // tcp, udp
+}
+
+message EvaluateAccessResponse {
+  Action action = 1;
+  // matched_rule is the first rule that matched, if any.
+  ACLRule matched_rule = 2;
+  // trace explains the evaluation step by step.
+  repeated string trace = 3;
+}
+
+message EvaluationTrace {
+  string id = 1;
+  google.protobuf.Timestamp evaluated_at = 2;
+  string source = 3;
+  string destination = 4;
+  int32 port = 5;
+  string protocol = 6;
+  Action action = 7;
+  string matched_rule_id = 8;
+}
+
+message ListEvaluationTracesRequest {
+  int32 page_size = 1;
+  string page_token = 2;
+  string filter = 3;
+  google.protobuf.Timestamp since = 4;
+}
+
+message ListEvaluationTracesResponse {
+  repeated EvaluationTrace traces = 1;
+  string next_page_token = 2;
+}
+
+// Recommendation is a proposed diff from the AI layer.
+message Recommendation {
+  enum Kind {
+    KIND_UNSPECIFIED = 0;
+    KIND_REMOVE_UNUSED_RULE = 1;
+    KIND_TIGHTEN_OVERPRIVILEGED = 2;
+    KIND_BROADEN_NEEDED = 3;
+    KIND_ADD_TIME_WINDOW = 4;
+  }
+  string id = 1;
+  Kind kind = 2;
+  string summary = 3;
+  // diff is the proposed change to hcl_source, in unified diff format.
+  string diff = 4;
+  // evidence references audit/telemetry observations supporting the
+  // recommendation (e.g. "rule X had 0 hits in 90 days").
+  repeated string evidence = 5;
+  float confidence = 6;
+  google.protobuf.Timestamp generated_at = 7;
+}
+
+message ListRecommendationsRequest {
+  int32 page_size = 1;
+  string page_token = 2;
+}
+
+message ListRecommendationsResponse {
+  repeated Recommendation recommendations = 1;
+  string next_page_token = 2;
+}
