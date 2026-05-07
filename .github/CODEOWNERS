@@ -1,0 +1,30 @@
+# See https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+#
+# Replace @founder with the GitHub handle of the maintainer.
+
+# Global fallback
+*                       @founder
+
+# Server-side
+/apps/controller/       @founder
+/apps/relay/            @founder
+/apps/web/              @founder
+/apps/ai/               @founder
+
+# Clients
+/clients/               @founder
+
+# SDKs
+/sdks/                  @founder
+
+# Infrastructure
+/infra/                 @founder
+
+# Docs and ADRs
+/docs/                  @founder
+
+# Licensing and governance
+/LICENSE-*              @founder
+/LICENSING.md           @founder
+/CODE_OF_CONDUCT.md     @founder
+/CONTRIBUTING.md        @founder

@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  go:
+    name: Go
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+          cache: true
+      - name: Verify modules
+        run: |
+          echo "==> go mod verify (placeholder)"
+      - name: Lint
+        run: |
+          echo "==> golangci-lint (placeholder)"
+      - name: Test
+        run: |
+          echo "==> go test ./... (placeholder)"
+
+  web:
+    name: Web
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install
+        run: echo "==> npm install (placeholder)"
+      - name: Lint
+        run: echo "==> eslint / prettier (placeholder)"
+      - name: Test
+        run: echo "==> vitest / jest (placeholder)"
+
+  python:
+    name: Python (AI)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Lint
+        run: echo "==> ruff (placeholder)"
+      - name: Test
+        run: echo "==> pytest (placeholder)"
+
+  license-check:
+    name: License headers
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify LICENSE files exist
+        run: |
+          test -f LICENSE-APACHE
+          test -f LICENSE-AGPL
+          test -f LICENSING.md

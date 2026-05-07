@@ -1,0 +1,46 @@
+# Local development stack.
+# Usage: from repo root, run `make dev`.
+#
+# This file is a placeholder. Real services will be wired up as components
+# come online during Sprint 1.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: bamboo
+      POSTGRES_PASSWORD: dev
+      POSTGRES_DB: bamboo
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  # controller:
+  #   build: ../apps/controller
+  #   depends_on: [postgres, redis]
+  #   ports:
+  #     - "8080:8080"
+  #   environment:
+  #     DATABASE_URL: postgres://bamboo:dev@postgres:5432/bamboo
+  #     REDIS_URL: redis://redis:6379
+
+  # relay:
+  #   build: ../apps/relay
+  #   ports:
+  #     - "443:443"
+  #     - "3478:3478/udp"
+
+  # web:
+  #   build: ../apps/web
+  #   depends_on: [controller]
+  #   ports:
+  #     - "3000:3000"
+
+volumes:
+  postgres-data:
