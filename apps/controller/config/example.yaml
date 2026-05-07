@@ -1,0 +1,26 @@
+# Example controller configuration.
+# Copy to config.yaml and adjust. Secrets should come from env vars
+# (DATABASE_URL, OIDC_*_CLIENT_SECRET, ...) — do not commit them here.
+
+server:
+  grpc_addr: 0.0.0.0:8080
+  http_addr: 0.0.0.0:8081
+
+database:
+  # Override at runtime via DATABASE_URL.
+  url: postgres://bamboo:dev@localhost:5432/bamboo?sslmode=disable
+
+redis:
+  # Override at runtime via REDIS_URL.
+  url: redis://localhost:6379
+
+auth:
+  oidc:
+    google:
+      client_id: ""
+      # Override via OIDC_GOOGLE_CLIENT_SECRET.
+      client_secret: ""
+    github:
+      client_id: ""
+      # Override via OIDC_GITHUB_CLIENT_SECRET.
+      client_secret: ""
