@@ -6,6 +6,12 @@ We record significant architecture decisions here using the format from
 ## Index
 
 - [0001 — License Strategy](./0001-license-strategy.md)
+- [0009 — Cloud Provider Strategy](./0009-cloud-provider-strategy.md)
+- [0010 — LLM Multi-Provider Strategy](./0010-llm-multi-provider-strategy.md)
+
+> ADR numbers 0002–0008 and 0011+ are reserved for future decisions
+> (monorepo tooling, Go version, database, gRPC, multi-tenancy, region
+> strategy, CI platform, frontend framework, observability, etc.).
 
 ## Process
 
