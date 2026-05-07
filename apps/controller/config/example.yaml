@@ -7,12 +7,14 @@ server:
   http_addr: 0.0.0.0:8081
 
 database:
+  # Local dev maps Postgres to host port 15432 (avoids conflicts).
+  # In Docker / production use the cluster-internal hostname and standard 5432.
   # Override at runtime via DATABASE_URL.
-  url: postgres://bamboo:dev@localhost:5432/bamboo?sslmode=disable
+  url: postgres://bamboo:dev@localhost:15432/bamboo?sslmode=disable
 
 redis:
-  # Override at runtime via REDIS_URL.
-  url: redis://localhost:6379
+  # Local dev maps Redis to host port 16379. Override via REDIS_URL.
+  url: redis://localhost:16379
 
 auth:
   oidc:

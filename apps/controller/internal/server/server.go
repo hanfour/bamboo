@@ -11,7 +11,10 @@ import (
 	"net"
 
 	"github.com/hanfour/bamboo/apps/controller/internal/config"
+	"github.com/hanfour/bamboo/apps/controller/internal/handlers"
+	bamboov1 "github.com/hanfour/bamboo/proto/gen/go/bamboo/v1"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/reflection"
 )
 
 // Server holds the gRPC server and dependencies.
@@ -20,15 +23,32 @@ type Server struct {
 	grpc *grpc.Server
 }
 
-// New constructs a Server. It does not start any listeners; call Run.
+// New constructs a Server with all gRPC services registered.
+// It does not start any listeners; call Run.
 func New(cfg *config.Config) (*Server, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("nil config")
 	}
+
+	grpcServer := grpc.NewServer()
+	registerHandlers(grpcServer)
+
+	// gRPC reflection lets tools like grpcurl introspect the server.
+	// Useful in dev; consider gating on an env flag for production.
+	reflection.Register(grpcServer)
+
 	return &Server{
 		cfg:  cfg,
-		grpc: grpc.NewServer(),
+		grpc: grpcServer,
 	}, nil
+}
+
+// registerHandlers wires every gRPC service. New services should be added here.
+func registerHandlers(s *grpc.Server) {
+	bamboov1.RegisterAuthServiceServer(s, handlers.NewAuthHandler())
+	bamboov1.RegisterCoordinatorServiceServer(s, handlers.NewCoordinatorHandler())
+	bamboov1.RegisterPolicyServiceServer(s, handlers.NewPolicyHandler())
+	bamboov1.RegisterTelemetryServiceServer(s, handlers.NewTelemetryHandler())
 }
 
 // Run blocks until ctx is canceled or the listener errors. On shutdown

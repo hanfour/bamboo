@@ -1,0 +1,17 @@
+This module is licensed under AGPL-3.0-or-later.
+
+For the full license text, see ../../LICENSE-AGPL at the repository root.
+
+----
+
+INTERIM LICENSE NOTE
+====================
+
+This module is in transition. Per ADR 0011 (Client Core Re-licensing Path,
+docs/adr/0011-client-core-relicensing-path.md), code written by this
+project's contributors will be re-licensed to Apache 2.0 once the
+NetBird-derived sources are fully replaced via clean-room rewrite.
+
+Until that exit criterion is met, the entire `clients/core` module
+remains AGPL-3.0-or-later. Embedders must comply with AGPL terms
+(including network-use disclosure obligations).
