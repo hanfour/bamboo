@@ -21,12 +21,21 @@ Our license choices must:
 
 Adopt a **dual-license** model:
 
-| Component                                  | License        |
-| ------------------------------------------ | -------------- |
-| `clients/**`, `sdks/**`, `proto/**`        | Apache 2.0     |
-| `apps/**` (controller, relay, web, ai)     | AGPLv3         |
-| `infra/terraform/**`, `infra/helm/**`      | Apache 2.0     |
-| `docs/**`                                  | CC-BY-4.0      |
+| Component                                  | License (target) | License (interim, see note) |
+| ------------------------------------------ | ---------------- | --------------------------- |
+| `clients/core/**`                          | Apache 2.0       | **AGPLv3** (NetBird-derived) |
+| `clients/cli/**`, `clients/macos/**`, `clients/windows/**`, `clients/linux/**` | Apache 2.0 | Apache 2.0 (clean room) |
+| `sdks/**`, `proto/**`                      | Apache 2.0       | Apache 2.0                  |
+| `apps/**` (controller, relay, web, ai)     | AGPLv3           | AGPLv3                      |
+| `infra/terraform/**`, `infra/helm/**`      | Apache 2.0       | Apache 2.0                  |
+| `docs/**`                                  | CC-BY-4.0        | CC-BY-4.0                   |
+
+> **Interim constraint**: `clients/core` will inherit AGPLv3 from NetBird
+> during the bootstrap phase (see [NetBird Fork SOP](../development/netbird-fork-sop.md)).
+> The transition path to Apache 2.0 is tracked in
+> [ADR 0011 — Client Core Re-licensing Path](./0011-client-core-relicensing-path.md).
+> Until that ADR's exit criteria are met, anything embedding `clients/core`
+> must comply with AGPLv3.
 
 All contributors sign a CLA based on Harmony 1.0 with **Outbound Option 5**,
 allowing the project to relicense contributions under any terms.
