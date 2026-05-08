@@ -1,0 +1,69 @@
+{
+  "app": {
+    "name": "bamboo",
+    "tagline": "AI-native zero-trust mesh networking",
+    "description": "Manage your private mesh network from one console."
+  },
+  "nav": {
+    "dashboard": "Dashboard",
+    "peers": "Peers",
+    "acl": "Access Policy",
+    "settings": "Settings",
+    "signOut": "Sign out"
+  },
+  "landing": {
+    "title": "bamboo",
+    "subtitle": "Sign in to manage your mesh.",
+    "signInWithGoogle": "Continue with Google",
+    "signInWithGitHub": "Continue with GitHub",
+    "selfHosted": "Running self-hosted? Use a pre-auth key in the CLI."
+  },
+  "dashboard": {
+    "title": "Overview",
+    "totalPeers": "Total peers",
+    "online": "Online",
+    "offline": "Offline",
+    "policyRevision": "Policy revision",
+    "recentActivity": "Recent activity",
+    "noActivity": "No activity yet."
+  },
+  "peers": {
+    "title": "Peers",
+    "addPeer": "Add peer",
+    "search": "Search hostname or tag",
+    "columns": {
+      "hostname": "Hostname",
+      "ip": "IP",
+      "tags": "Tags",
+      "os": "OS",
+      "status": "Status",
+      "lastSeen": "Last seen"
+    },
+    "status": {
+      "online": "Online",
+      "offline": "Offline",
+      "disabled": "Disabled"
+    },
+    "empty": "No peers yet. Run bamboo up on a machine to register the first peer."
+  },
+  "acl": {
+    "title": "Access Policy",
+    "revision": "Revision",
+    "lastUpdated": "Last updated",
+    "viewSource": "View source",
+    "edit": "Edit",
+    "rules": "Rules",
+    "rule": {
+      "action": "Action",
+      "sources": "Sources",
+      "destinations": "Destinations",
+      "timeWindow": "Time window"
+    },
+    "empty": "No access policy is configured. New tenants start with allow-all; tighten before going to production."
+  },
+  "common": {
+    "ago": "{value} ago",
+    "never": "Never",
+    "loading": "Loading…"
+  }
+}

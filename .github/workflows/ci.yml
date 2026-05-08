@@ -10,6 +10,7 @@ permissions:
 
 env:
   GO_VERSION: "1.25"
+  NODE_VERSION: "20"
   GOLANGCI_LINT_VERSION: "v2.0.2"
   BUF_VERSION: "v1.45.0"
   PROTOC_GEN_GO_VERSION: "v1.36.11"
@@ -110,3 +111,21 @@ jobs:
         run: make build
       - name: Smoke test
         run: ./bin/controller version
+
+  web:
+    name: Web (lint + build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run build
