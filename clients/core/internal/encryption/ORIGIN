@@ -1,0 +1,26 @@
+Imported from netbirdio/netbird at commit 7da94a4956af76f7187733aa488e9d20a0f62202
+Upstream path: encryption/
+Date imported:  2026-05-08
+Imported by:    feat/wg-bringup-encryption (Sprint 2 #2)
+
+Procedure: scripts/netbird-prep.sh + scripts/netbird-audit.sh.
+Inventory entry: docs/development/netbird-import-inventory.md
+                 (KEEP -> clients/core/internal/encryption/, AGPLv3 interim)
+
+Files imported:
+  encryption.go      verbatim except SPDX header + package doc
+  message.go         logrus -> log/slog; legacy proto -> google.golang.org/protobuf/proto
+  encryption_test.go rewritten from Ginkgo+Gomega to stdlib testing;
+                     test proto is google.golang.org/protobuf/types/known/wrapperspb.StringValue
+                     instead of NetBird's testprotos/testproto
+
+Files NOT imported:
+  cert.go, letsencrypt.go, route53.go, route53_test.go
+                     - TLS provisioning helpers; bamboo terminates TLS at the
+                       cloud LB / Cloudflare edge per ADR 0009
+  encryption_suite_test.go
+                     - Ginkgo entry; not needed for stdlib testing
+  testprotos/        - NetBird-specific test fixtures replaced by wrapperspb
+
+Brand audit: zero NetBird identifiers in source files (excluding ORIGIN
+comment headers which intentionally cite the upstream commit).
