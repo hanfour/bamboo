@@ -12,6 +12,31 @@ import (
 	"github.com/hanfour/bamboo/apps/controller/internal/auth"
 )
 
+// Loop the tamper case 200× to make sure the fix above is deterministic
+// against random sig material, not just lucky.
+func TestSessionToken_TamperedSignature_Stress(t *testing.T) {
+	secret := []byte("test-secret-for-hmac")
+	for i := 0; i < 200; i++ {
+		tok, err := auth.IssueSessionToken(secret, auth.SessionClaims{
+			UserID:   uuid.New(),
+			TenantID: uuid.New(),
+		}, time.Hour)
+		if err != nil {
+			t.Fatalf("issue: %v", err)
+		}
+		dot := strings.IndexByte(tok, '.')
+		b := []byte(tok)
+		if b[dot+1] == 'A' {
+			b[dot+1] = 'B'
+		} else {
+			b[dot+1] = 'A'
+		}
+		if _, err := auth.VerifySessionToken(secret, string(b)); !errors.Is(err, auth.ErrInvalidToken) {
+			t.Fatalf("iter %d: got err %v, want ErrInvalidToken", i, err)
+		}
+	}
+}
+
 func TestSessionToken_RoundTrip(t *testing.T) {
 	secret := []byte("test-secret-for-hmac")
 	user := uuid.New()
@@ -45,7 +70,24 @@ func TestSessionToken_TamperedSignature(t *testing.T) {
 	if err != nil {
 		t.Fatalf("issue: %v", err)
 	}
-	tampered := tok[:len(tok)-1] + "X"
+
+	// Tamper the FIRST byte of the signature (after the '.'). Tampering
+	// the last byte was flaky: a 32-byte HMAC encodes to 43 base64 chars
+	// where the trailing char carries only 4 meaningful bits, so randomly
+	// landing on the same character (or a non-strict-decode equivalent)
+	// produced an unchanged sig.
+	dot := strings.IndexByte(tok, '.')
+	if dot < 0 || dot+1 >= len(tok) {
+		t.Fatalf("token has no signature segment: %q", tok)
+	}
+	b := []byte(tok)
+	if b[dot+1] == 'A' {
+		b[dot+1] = 'B'
+	} else {
+		b[dot+1] = 'A'
+	}
+	tampered := string(b)
+
 	if _, err := auth.VerifySessionToken(secret, tampered); !errors.Is(err, auth.ErrInvalidToken) {
 		t.Errorf("got err %v, want ErrInvalidToken", err)
 	}
