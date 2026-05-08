@@ -132,6 +132,11 @@ const (
 	Recommendation_KIND_TIGHTEN_OVERPRIVILEGED Recommendation_Kind = 2
 	Recommendation_KIND_BROADEN_NEEDED         Recommendation_Kind = 3
 	Recommendation_KIND_ADD_TIME_WINDOW        Recommendation_Kind = 4
+	// KIND_FLAG_ANOMALOUS surfaces an out-of-distribution connection
+	// event flagged by the Tier-2 model (per ADR 0010). Unlike the
+	// Tier-1 kinds, the diff is empty: anomalies are observations,
+	// not config proposals.
+	Recommendation_KIND_FLAG_ANOMALOUS Recommendation_Kind = 5
 )
 
 // Enum value maps for Recommendation_Kind.
@@ -142,6 +147,7 @@ var (
 		2: "KIND_TIGHTEN_OVERPRIVILEGED",
 		3: "KIND_BROADEN_NEEDED",
 		4: "KIND_ADD_TIME_WINDOW",
+		5: "KIND_FLAG_ANOMALOUS",
 	}
 	Recommendation_Kind_value = map[string]int32{
 		"KIND_UNSPECIFIED":            0,
@@ -149,6 +155,7 @@ var (
 		"KIND_TIGHTEN_OVERPRIVILEGED": 2,
 		"KIND_BROADEN_NEEDED":         3,
 		"KIND_ADD_TIME_WINDOW":        4,
+		"KIND_FLAG_ANOMALOUS":         5,
 	}
 )
 
@@ -1454,7 +1461,7 @@ const file_bamboo_v1_policy_proto_rawDesc = "" +
 	"\x05since\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\x05since\"z\n" +
 	"\x1cListEvaluationTracesResponse\x122\n" +
 	"\x06traces\x18\x01 \x03(\v2\x1a.bamboo.v1.EvaluationTraceR\x06traces\x12&\n" +
-	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\"\x8d\x03\n" +
+	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\"\xa6\x03\n" +
 	"\x0eRecommendation\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x122\n" +
 	"\x04kind\x18\x02 \x01(\x0e2\x1e.bamboo.v1.Recommendation.KindR\x04kind\x12\x18\n" +
@@ -1464,13 +1471,14 @@ const file_bamboo_v1_policy_proto_rawDesc = "" +
 	"\n" +
 	"confidence\x18\x06 \x01(\x02R\n" +
 	"confidence\x12=\n" +
-	"\fgenerated_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\vgeneratedAt\"\x8d\x01\n" +
+	"\fgenerated_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\vgeneratedAt\"\xa6\x01\n" +
 	"\x04Kind\x12\x14\n" +
 	"\x10KIND_UNSPECIFIED\x10\x00\x12\x1b\n" +
 	"\x17KIND_REMOVE_UNUSED_RULE\x10\x01\x12\x1f\n" +
 	"\x1bKIND_TIGHTEN_OVERPRIVILEGED\x10\x02\x12\x17\n" +
 	"\x13KIND_BROADEN_NEEDED\x10\x03\x12\x18\n" +
-	"\x14KIND_ADD_TIME_WINDOW\x10\x04\"X\n" +
+	"\x14KIND_ADD_TIME_WINDOW\x10\x04\x12\x17\n" +
+	"\x13KIND_FLAG_ANOMALOUS\x10\x05\"X\n" +
 	"\x1aListRecommendationsRequest\x12\x1b\n" +
 	"\tpage_size\x18\x01 \x01(\x05R\bpageSize\x12\x1d\n" +
 	"\n" +

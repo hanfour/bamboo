@@ -192,10 +192,23 @@ func (h *HTTPServer) apiRecommendations(w http.ResponseWriter, r *http.Request, 
 			Hits:        f.Hits,
 		}
 	}
+	chFindings, _ := h.anomalies.RecentByTenant(r.Context(), tenant.ID, time.Now().Add(-24*time.Hour), 20)
+	findings := make([]recommend.AnomalyFinding, len(chFindings))
+	for i, f := range chFindings {
+		findings[i] = recommend.AnomalyFinding{
+			ID:           f.ID,
+			OccurredAt:   f.OccurredAt,
+			GeneratedAt:  f.GeneratedAt,
+			Score:        f.Score,
+			ModelVersion: f.ModelVersion,
+			EventSummary: f.EventSummary,
+		}
+	}
 
 	recs := recommend.UnusedRules(parsed, hits, since)
 	recs = append(recs, recommend.OverPrivilegedRules(parsed, obs, since)...)
 	recs = append(recs, recommend.BroadenNeeded(parsed, flows, since)...)
+	recs = append(recs, recommend.Anomalies(findings, 0.6)...)
 
 	out := make([]apiRecommendationJSON, 0, len(recs))
 	for _, x := range recs {
@@ -279,9 +292,22 @@ func countRecommendations(ctx context.Context, h *HTTPServer, tenant *repo.Tenan
 			Source: f.Source, Destination: f.Destination, Port: f.Port, Hits: f.Hits,
 		}
 	}
+	chFindings, _ := h.anomalies.RecentByTenant(ctx, tenant.ID, time.Now().Add(-24*time.Hour), 20)
+	findings := make([]recommend.AnomalyFinding, len(chFindings))
+	for i, f := range chFindings {
+		findings[i] = recommend.AnomalyFinding{
+			ID:           f.ID,
+			OccurredAt:   f.OccurredAt,
+			GeneratedAt:  f.GeneratedAt,
+			Score:        f.Score,
+			ModelVersion: f.ModelVersion,
+			EventSummary: f.EventSummary,
+		}
+	}
 	return len(recommend.UnusedRules(parsed, hits, since)) +
 		len(recommend.OverPrivilegedRules(parsed, obs, since)) +
-		len(recommend.BroadenNeeded(parsed, flows, since))
+		len(recommend.BroadenNeeded(parsed, flows, since)) +
+		len(recommend.Anomalies(findings, 0.6))
 }
 
 func writeJSON(w http.ResponseWriter, status int, body any) {
@@ -338,6 +364,8 @@ func kindString(k recommend.Kind) string {
 		return "TIGHTEN_OVERPRIVILEGED"
 	case recommend.KindBroadenNeeded:
 		return "BROADEN_NEEDED"
+	case recommend.KindFlagAnomalous:
+		return "FLAG_ANOMALOUS"
 	default:
 		return "UNKNOWN"
 	}

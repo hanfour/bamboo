@@ -27,20 +27,22 @@ import (
 type PolicyHandler struct {
 	bamboov1.UnimplementedPolicyServiceServer
 
-	tenants  *repo.Tenants
-	policies *repo.Policies
-	audits   *repo.AuditLogs
-	traces   *clickhouse.Traces
+	tenants   *repo.Tenants
+	policies  *repo.Policies
+	audits    *repo.AuditLogs
+	traces    *clickhouse.Traces
+	anomalies *clickhouse.Anomalies
 }
 
 // NewPolicyHandler constructs a PolicyHandler with required repositories.
 // ch may be nil; the handler degrades to no-op telemetry writes.
 func NewPolicyHandler(pool *db.Pool, ch *clickhouse.Conn) *PolicyHandler {
 	return &PolicyHandler{
-		tenants:  repo.NewTenants(pool),
-		policies: repo.NewPolicies(pool),
-		audits:   repo.NewAuditLogs(pool),
-		traces:   clickhouse.NewTraces(ch),
+		tenants:   repo.NewTenants(pool),
+		policies:  repo.NewPolicies(pool),
+		audits:    repo.NewAuditLogs(pool),
+		traces:    clickhouse.NewTraces(ch),
+		anomalies: clickhouse.NewAnomalies(ch),
 	}
 }
 
@@ -208,9 +210,19 @@ func (h *PolicyHandler) ListRecommendations(ctx context.Context, _ *bamboov1.Lis
 	}
 	flows := translateDeniedFlows(chFlows)
 
+	// Tier-2 anomalies: surface ML-flagged events from the last 24h
+	// at score >= 0.6 (conservative threshold; tune per-tenant later).
+	chFindings, err := h.anomalies.RecentByTenant(ctx, tenant.ID, time.Now().Add(-24*time.Hour), 20)
+	if err != nil {
+		slog.Warn("clickhouse anomaly query failed", "err", err)
+		chFindings = nil
+	}
+	findings := translateFindings(chFindings)
+
 	combined := recommend.UnusedRules(parsedPol, hits, since)
 	combined = append(combined, recommend.OverPrivilegedRules(parsedPol, obs, since)...)
 	combined = append(combined, recommend.BroadenNeeded(parsedPol, flows, since)...)
+	combined = append(combined, recommend.Anomalies(findings, 0.6)...)
 
 	resp := &bamboov1.ListRecommendationsResponse{
 		Recommendations: make([]*bamboov1.Recommendation, 0, len(combined)),
@@ -227,6 +239,23 @@ func (h *PolicyHandler) ListRecommendations(ctx context.Context, _ *bamboov1.Lis
 		})
 	}
 	return resp, nil
+}
+
+// translateFindings maps clickhouse.AnomalyFinding into the
+// recommend-package equivalent.
+func translateFindings(in []clickhouse.AnomalyFinding) []recommend.AnomalyFinding {
+	out := make([]recommend.AnomalyFinding, len(in))
+	for i, f := range in {
+		out[i] = recommend.AnomalyFinding{
+			ID:           f.ID,
+			OccurredAt:   f.OccurredAt,
+			GeneratedAt:  f.GeneratedAt,
+			Score:        f.Score,
+			ModelVersion: f.ModelVersion,
+			EventSummary: f.EventSummary,
+		}
+	}
+	return out
 }
 
 // translateDeniedFlows maps the ClickHouse-side struct into the
@@ -269,6 +298,8 @@ func recommendKindToProto(k recommend.Kind) bamboov1.Recommendation_Kind {
 		return bamboov1.Recommendation_KIND_TIGHTEN_OVERPRIVILEGED
 	case recommend.KindBroadenNeeded:
 		return bamboov1.Recommendation_KIND_BROADEN_NEEDED
+	case recommend.KindFlagAnomalous:
+		return bamboov1.Recommendation_KIND_FLAG_ANOMALOUS
 	default:
 		return bamboov1.Recommendation_KIND_UNSPECIFIED
 	}

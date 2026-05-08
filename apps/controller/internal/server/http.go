@@ -29,6 +29,7 @@ type HTTPServer struct {
 	peers     *repo.Peers
 	policies  *repo.Policies
 	traces    *clickhouse.Traces
+	anomalies *clickhouse.Anomalies
 	secret    []byte
 	baseURL   string
 	ttl       time.Duration
@@ -46,6 +47,7 @@ func NewHTTPServer(addr string, pool *db.Pool, providers map[string]auth.OIDCPro
 		peers:     repo.NewPeers(pool),
 		policies:  repo.NewPolicies(pool),
 		traces:    clickhouse.NewTraces(ch),
+		anomalies: clickhouse.NewAnomalies(ch),
 		secret:    secret,
 		baseURL:   baseURL,
 		ttl:       ttl,
