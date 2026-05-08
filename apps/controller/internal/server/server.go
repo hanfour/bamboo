@@ -50,7 +50,7 @@ func New(cfg *config.Config, pool *db.Pool, ch *clickhouse.Conn) (*Server, error
 	grpcSrv, authHandler := buildGRPCWithAuth(pool, ch)
 	authHandler.SetOIDCConfig(cfg.Auth.OIDC.BaseURL, secret, ttl)
 
-	httpSrv := NewHTTPServer(cfg.Server.HTTPAddr, pool, providers, secret, cfg.Auth.OIDC.BaseURL, ttl)
+	httpSrv := NewHTTPServer(cfg.Server.HTTPAddr, pool, providers, ch, secret, cfg.Auth.OIDC.BaseURL, ttl)
 
 	return &Server{
 		cfg:  cfg,
@@ -71,7 +71,7 @@ func buildGRPCWithAuth(pool *db.Pool, ch *clickhouse.Conn) (*grpc.Server, *handl
 	bamboov1.RegisterAuthServiceServer(s, authHandler)
 	bamboov1.RegisterCoordinatorServiceServer(s, handlers.NewCoordinatorHandler(pool, authHandler, bus))
 	bamboov1.RegisterPolicyServiceServer(s, handlers.NewPolicyHandler(pool, ch))
-	bamboov1.RegisterTelemetryServiceServer(s, handlers.NewTelemetryHandler())
+	bamboov1.RegisterTelemetryServiceServer(s, handlers.NewTelemetryHandler(pool, ch))
 	reflection.Register(s)
 
 	return s, authHandler
@@ -88,7 +88,7 @@ func BuildGRPCServer(pool *db.Pool) *grpc.Server {
 	bamboov1.RegisterAuthServiceServer(s, authHandler)
 	bamboov1.RegisterCoordinatorServiceServer(s, handlers.NewCoordinatorHandler(pool, authHandler, bus))
 	bamboov1.RegisterPolicyServiceServer(s, handlers.NewPolicyHandler(pool, nil))
-	bamboov1.RegisterTelemetryServiceServer(s, handlers.NewTelemetryHandler())
+	bamboov1.RegisterTelemetryServiceServer(s, handlers.NewTelemetryHandler(pool, nil))
 
 	reflection.Register(s)
 	return s
