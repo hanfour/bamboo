@@ -1,0 +1,16 @@
+Imported from netbirdio/netbird at commit 7da94a4956af76f7187733aa488e9d20a0f62202
+Upstream path: base62/
+Date imported:  2026-05-08
+Imported by:    feat/wg-keys-config (Sprint 2 #2)
+
+Procedure: scripts/netbird-prep.sh + scripts/netbird-audit.sh.
+Inventory entry: docs/development/netbird-import-inventory.md (KEEP).
+
+Local changes vs upstream:
+  - Added SPDX-License-Identifier: AGPL-3.0-or-later headers
+  - Split package doc onto a comment so godoc renders it
+  - Added pkg/base62/go.mod (separate Go module within the bamboo monorepo)
+  - This ORIGIN file
+  - LICENSE file (notice referencing repo-root LICENSE-AGPL)
+
+Brand audit: zero NetBird identifiers in source.

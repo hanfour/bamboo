@@ -1,0 +1,16 @@
+This module is licensed under AGPL-3.0-or-later.
+
+For the full license text, see ../../LICENSE-AGPL at the repository root.
+
+----
+
+ORIGIN
+======
+
+This module was imported from netbirdio/netbird and remains AGPL.
+See ./ORIGIN for the upstream commit and audit notes.
+
+The repository's overall license strategy lives in
+docs/adr/0001-license-strategy.md. The roadmap for replacing or
+re-licensing AGPL-derived code lives in
+docs/adr/0011-client-core-relicensing-path.md (where applicable).
