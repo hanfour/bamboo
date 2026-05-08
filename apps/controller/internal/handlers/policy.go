@@ -8,12 +8,14 @@ import (
 	"fmt"
 	"log/slog"
 	"net/netip"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/hanfour/bamboo/apps/controller/internal/clickhouse"
 	"github.com/hanfour/bamboo/apps/controller/internal/db"
 	"github.com/hanfour/bamboo/apps/controller/internal/db/repo"
 	"github.com/hanfour/bamboo/apps/controller/internal/policy"
+	"github.com/hanfour/bamboo/apps/controller/internal/policy/recommend"
 	bamboov1 "github.com/hanfour/bamboo/proto/gen/go/bamboo/v1"
 	"github.com/hashicorp/hcl/v2"
 	"google.golang.org/grpc/codes"
@@ -164,6 +166,54 @@ func (h *PolicyHandler) EvaluateAccess(ctx context.Context, req *bamboov1.Evalua
 	}
 
 	return resp, nil
+}
+
+// ListRecommendations returns Tier-1 (rule-based) suggestions for the
+// calling tenant. Currently emits unused-rule removals based on the
+// last 30 days of evaluation traces.
+func (h *PolicyHandler) ListRecommendations(ctx context.Context, _ *bamboov1.ListRecommendationsRequest) (*bamboov1.ListRecommendationsResponse, error) {
+	tenant, err := h.resolveTenant(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	parsedPol, perr := h.loadParsedPolicy(ctx, tenant.ID)
+	if perr != nil {
+		return nil, perr
+	}
+
+	since := time.Now().Add(-30 * 24 * time.Hour)
+	hits, err := h.traces.RuleHitCounts(ctx, tenant.ID, since)
+	if err != nil {
+		slog.Warn("clickhouse rule hit query failed; running with empty hits", "err", err)
+		hits = map[string]uint64{}
+	}
+
+	recs := recommend.UnusedRules(parsedPol, hits, since)
+	resp := &bamboov1.ListRecommendationsResponse{
+		Recommendations: make([]*bamboov1.Recommendation, 0, len(recs)),
+	}
+	for _, r := range recs {
+		resp.Recommendations = append(resp.Recommendations, &bamboov1.Recommendation{
+			Id:          r.ID.String(),
+			Kind:        recommendKindToProto(r.Kind),
+			Summary:     r.Summary,
+			Diff:        r.Diff,
+			Evidence:    r.Evidence,
+			Confidence:  r.Confidence,
+			GeneratedAt: timestamppb.New(r.GeneratedAt),
+		})
+	}
+	return resp, nil
+}
+
+func recommendKindToProto(k recommend.Kind) bamboov1.Recommendation_Kind {
+	switch k {
+	case recommend.KindRemoveUnusedRule:
+		return bamboov1.Recommendation_KIND_REMOVE_UNUSED_RULE
+	default:
+		return bamboov1.Recommendation_KIND_UNSPECIFIED
+	}
 }
 
 // loadParsedPolicy fetches and parses the current policy. Returns an
