@@ -24,26 +24,33 @@ type CoordinatorHandler struct {
 	tenants *repo.Tenants
 	users   *repo.Users
 	peers   *repo.Peers
+	auth    *AuthHandler
 	pool    *db.Pool
 }
 
-// NewCoordinatorHandler constructs the coordinator handler with the
-// repositories it needs.
-func NewCoordinatorHandler(pool *db.Pool) *CoordinatorHandler {
+// NewCoordinatorHandler constructs the coordinator handler.
+// The auth handler is shared so we can re-use its pre-auth-key redemption
+// logic on the Register path.
+func NewCoordinatorHandler(pool *db.Pool, auth *AuthHandler) *CoordinatorHandler {
 	return &CoordinatorHandler{
 		tenants: repo.NewTenants(pool),
 		users:   repo.NewUsers(pool),
 		peers:   repo.NewPeers(pool),
+		auth:    auth,
 		pool:    pool,
 	}
 }
 
 // Register handles peer registration.
 //
-// Auth (Phase 1 simplification): tenant slug is read from gRPC metadata
-// "x-tenant-slug" with a "default" fallback for local development. The
-// tenant is auto-created on first use. PreAuthKey / OIDC enforcement is
-// tracked in Sprint 2 issues #11 and #12.
+// Two credential paths:
+//   - pre_auth_key_secret: redeemed against pre_auth_keys; tenant comes from
+//     the key. This is the recommended path for headless / CI agents.
+//   - bearer_token: not yet implemented (Sprint 2 issue #11).
+//
+// If neither credential is supplied, the handler falls back to a dev-only
+// "default" tenant resolved via the x-tenant-slug metadata header. The
+// fallback exists so local smoke tests can run without provisioning a key.
 func (h *CoordinatorHandler) Register(ctx context.Context, req *bamboov1.RegisterRequest) (*bamboov1.RegisterResponse, error) {
 	if req.GetWireguardPublicKey() == "" {
 		return nil, status.Error(codes.InvalidArgument, "wireguard_public_key is required")
@@ -52,11 +59,9 @@ func (h *CoordinatorHandler) Register(ctx context.Context, req *bamboov1.Registe
 		return nil, status.Error(codes.InvalidArgument, "hostname is required")
 	}
 
-	tenantSlug := tenantSlugFromMetadata(ctx)
-
-	tenant, err := h.tenants.GetOrCreate(ctx, tenantSlug, "Default Tenant", "100.64.0.0/24")
+	tenant, err := h.resolveTenant(ctx, req)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "tenant resolve: %v", err)
+		return nil, err
 	}
 
 	// Idempotency: same public key registers again -> return existing peer.
@@ -113,6 +118,36 @@ func (h *CoordinatorHandler) Register(ctx context.Context, req *bamboov1.Registe
 		resp.Peers = append(resp.Peers, toProtoPeer(p))
 	}
 	return resp, nil
+}
+
+// resolveTenant chooses the tenant for a Register call by precedence:
+//  1. pre_auth_key_secret credential -> tenant from the key
+//  2. bearer_token credential -> not implemented yet
+//  3. x-tenant-slug metadata fallback (dev convenience), auto-creates default
+func (h *CoordinatorHandler) resolveTenant(ctx context.Context, req *bamboov1.RegisterRequest) (*repo.Tenant, error) {
+	if secret := req.GetPreAuthKeySecret(); secret != "" {
+		key, err := h.auth.redeemAndReturnKey(ctx, secret)
+		if err != nil {
+			return nil, err
+		}
+		t, err := h.tenants.GetByID(ctx, key.TenantID)
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "tenant by id: %v", err)
+		}
+		return t, nil
+	}
+
+	if req.GetBearerToken() != "" {
+		return nil, status.Error(codes.Unimplemented, "bearer_token credential not yet supported")
+	}
+
+	// Dev fallback: x-tenant-slug metadata, auto-create default.
+	slug := tenantSlugFromMetadata(ctx)
+	t, err := h.tenants.GetOrCreate(ctx, slug, "Default Tenant", "100.64.0.0/24")
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "tenant resolve: %v", err)
+	}
+	return t, nil
 }
 
 // tenantSlugFromMetadata extracts the tenant slug from gRPC metadata.

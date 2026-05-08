@@ -51,8 +51,9 @@ func New(cfg *config.Config, pool *db.Pool) (*Server, error) {
 
 // registerHandlers wires every gRPC service. New services should be added here.
 func registerHandlers(s *grpc.Server, pool *db.Pool) {
-	bamboov1.RegisterAuthServiceServer(s, handlers.NewAuthHandler())
-	bamboov1.RegisterCoordinatorServiceServer(s, handlers.NewCoordinatorHandler(pool))
+	authHandler := handlers.NewAuthHandler(pool)
+	bamboov1.RegisterAuthServiceServer(s, authHandler)
+	bamboov1.RegisterCoordinatorServiceServer(s, handlers.NewCoordinatorHandler(pool, authHandler))
 	bamboov1.RegisterPolicyServiceServer(s, handlers.NewPolicyHandler())
 	bamboov1.RegisterTelemetryServiceServer(s, handlers.NewTelemetryHandler())
 }
