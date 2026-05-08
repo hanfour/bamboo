@@ -1,0 +1,132 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+// Package clickhouse holds the controller's ClickHouse connection and
+// the columnar telemetry tables it writes.
+//
+// All writes are best-effort: a missing ClickHouse never fails the
+// user-facing operation. Operators who do not need analytics can run
+// the controller with no clickhouse.url and the writers degrade to
+// no-ops with a warning.
+package clickhouse
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"time"
+
+	chgo "github.com/ClickHouse/clickhouse-go/v2"
+	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+)
+
+// Conn is a thin wrapper around the underlying driver. Nil is a valid
+// value: every method on a nil receiver becomes a no-op.
+type Conn struct {
+	conn driver.Conn
+}
+
+// ErrNotConfigured is returned by Open when dsn is empty.
+var ErrNotConfigured = errors.New("clickhouse not configured")
+
+// Open dials ClickHouse and ensures the schema. Returns ErrNotConfigured
+// if dsn is empty so callers can choose to soft-fail.
+func Open(ctx context.Context, dsn string) (*Conn, error) {
+	if dsn == "" {
+		return nil, ErrNotConfigured
+	}
+
+	opts, err := chgo.ParseDSN(dsn)
+	if err != nil {
+		return nil, fmt.Errorf("parse dsn: %w", err)
+	}
+	opts.DialTimeout = 5 * time.Second
+	opts.ConnMaxLifetime = time.Hour
+	opts.MaxOpenConns = 10
+	opts.MaxIdleConns = 5
+
+	c, err := chgo.Open(opts)
+	if err != nil {
+		return nil, fmt.Errorf("open clickhouse: %w", err)
+	}
+
+	pingCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if err := c.Ping(pingCtx); err != nil {
+		_ = c.Close()
+		return nil, fmt.Errorf("ping clickhouse: %w", err)
+	}
+
+	conn := &Conn{conn: c}
+	if err := conn.applySchema(ctx); err != nil {
+		_ = c.Close()
+		return nil, err
+	}
+	return conn, nil
+}
+
+// Close releases the underlying connection. Nil-safe.
+func (c *Conn) Close() error {
+	if c == nil || c.conn == nil {
+		return nil
+	}
+	return c.conn.Close()
+}
+
+// driver returns the underlying driver.Conn. Nil-safe via callers.
+func (c *Conn) driver() driver.Conn { return c.conn }
+
+// applySchema creates the telemetry tables idempotently.
+func (c *Conn) applySchema(ctx context.Context) error {
+	stmts := []string{
+		`CREATE TABLE IF NOT EXISTS evaluation_traces (
+		    id              UUID,
+		    tenant_id       UUID,
+		    occurred_at     DateTime64(3),
+		    source          String,
+		    destination     String,
+		    port            UInt16,
+		    protocol        LowCardinality(String),
+		    action          LowCardinality(String),
+		    matched_rule_id String
+		) ENGINE = MergeTree
+		ORDER BY (tenant_id, occurred_at)
+		TTL toDate(occurred_at) + INTERVAL 90 DAY`,
+
+		`CREATE TABLE IF NOT EXISTS connection_events (
+		    id                   UUID,
+		    tenant_id            UUID,
+		    occurred_at          DateTime64(3),
+		    source_peer_id       UUID,
+		    destination_peer_id  UUID,
+		    event_type           LowCardinality(String),
+		    path                 LowCardinality(String),
+		    bytes_sent           UInt64,
+		    bytes_received       UInt64,
+		    rtt_ms               UInt32,
+		    reason               String,
+		    matched_rule_id      String
+		) ENGINE = MergeTree
+		ORDER BY (tenant_id, occurred_at)
+		TTL toDate(occurred_at) + INTERVAL 90 DAY`,
+	}
+	for _, s := range stmts {
+		if err := c.conn.Exec(ctx, s); err != nil {
+			return fmt.Errorf("apply clickhouse schema: %w", err)
+		}
+	}
+	return nil
+}
+
+// IsConfigured reports whether c writes through to a real connection.
+func (c *Conn) IsConfigured() bool { return c != nil && c.conn != nil }
+
+// warnOnce keeps degraded-mode logs from drowning the rest.
+type once struct{ done bool }
+
+func (o *once) do(action string) {
+	if !o.done {
+		slog.Warn("clickhouse not configured; skipping write", "action", action)
+		o.done = true
+	}
+}

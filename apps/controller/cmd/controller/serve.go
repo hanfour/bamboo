@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/hanfour/bamboo/apps/controller/internal/clickhouse"
 	"github.com/hanfour/bamboo/apps/controller/internal/config"
 	"github.com/hanfour/bamboo/apps/controller/internal/db"
 	"github.com/hanfour/bamboo/apps/controller/internal/server"
@@ -49,7 +50,22 @@ func runServe(_ *cobra.Command, _ []string) error {
 	defer pool.Close()
 	slog.Info("postgres connected")
 
-	srv, err := server.New(cfg, pool)
+	// ClickHouse is best-effort. Connect failures log and proceed in
+	// degraded mode (telemetry writes drop with a single warning).
+	var ch *clickhouse.Conn
+	if cfg.ClickHouse.URL != "" {
+		var chErr error
+		ch, chErr = clickhouse.Open(ctx, cfg.ClickHouse.URL)
+		if chErr != nil {
+			slog.Warn("clickhouse open failed; running in degraded mode", "err", chErr)
+			ch = nil
+		} else {
+			defer func() { _ = ch.Close() }()
+			slog.Info("clickhouse connected")
+		}
+	}
+
+	srv, err := server.New(cfg, pool, ch)
 	if err != nil {
 		return err
 	}

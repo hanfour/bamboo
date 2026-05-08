@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/hanfour/bamboo/apps/controller/internal/auth"
+	"github.com/hanfour/bamboo/apps/controller/internal/clickhouse"
 	"github.com/hanfour/bamboo/apps/controller/internal/config"
 	"github.com/hanfour/bamboo/apps/controller/internal/db"
 	"github.com/hanfour/bamboo/apps/controller/internal/events"
@@ -31,7 +32,10 @@ type Server struct {
 
 // New constructs a Server with all gRPC services registered.
 // It does not start any listeners; call Run.
-func New(cfg *config.Config, pool *db.Pool) (*Server, error) {
+//
+// ch may be nil; when nil, telemetry writes silently drop after a single
+// warning (degraded mode). See clickhouse.Open.
+func New(cfg *config.Config, pool *db.Pool, ch *clickhouse.Conn) (*Server, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("nil config")
 	}
@@ -43,7 +47,7 @@ func New(cfg *config.Config, pool *db.Pool) (*Server, error) {
 	ttl := parseTTL(cfg.Auth.SessionTTL, 24*time.Hour)
 	secret := []byte(cfg.Auth.SessionSecret)
 
-	grpcSrv, authHandler := buildGRPCWithAuth(pool)
+	grpcSrv, authHandler := buildGRPCWithAuth(pool, ch)
 	authHandler.SetOIDCConfig(cfg.Auth.OIDC.BaseURL, secret, ttl)
 
 	httpSrv := NewHTTPServer(cfg.Server.HTTPAddr, pool, providers, secret, cfg.Auth.OIDC.BaseURL, ttl)
@@ -59,14 +63,14 @@ func New(cfg *config.Config, pool *db.Pool) (*Server, error) {
 // buildGRPCWithAuth is the production wiring used by Server.New. It returns
 // the underlying AuthHandler so the caller can apply OIDC configuration.
 // Tests use BuildGRPCServer instead, which takes the simpler path.
-func buildGRPCWithAuth(pool *db.Pool) (*grpc.Server, *handlers.AuthHandler) {
+func buildGRPCWithAuth(pool *db.Pool, ch *clickhouse.Conn) (*grpc.Server, *handlers.AuthHandler) {
 	bus := events.NewBus()
 	s := grpc.NewServer()
 
 	authHandler := handlers.NewAuthHandler(pool)
 	bamboov1.RegisterAuthServiceServer(s, authHandler)
 	bamboov1.RegisterCoordinatorServiceServer(s, handlers.NewCoordinatorHandler(pool, authHandler, bus))
-	bamboov1.RegisterPolicyServiceServer(s, handlers.NewPolicyHandler(pool))
+	bamboov1.RegisterPolicyServiceServer(s, handlers.NewPolicyHandler(pool, ch))
 	bamboov1.RegisterTelemetryServiceServer(s, handlers.NewTelemetryHandler())
 	reflection.Register(s)
 
@@ -75,6 +79,7 @@ func buildGRPCWithAuth(pool *db.Pool) (*grpc.Server, *handlers.AuthHandler) {
 
 // BuildGRPCServer constructs and returns a fully wired *grpc.Server with
 // every bamboo service registered against pool. Reflection is enabled.
+// Used by tests; they typically pass ch=nil for degraded telemetry.
 func BuildGRPCServer(pool *db.Pool) *grpc.Server {
 	bus := events.NewBus()
 	s := grpc.NewServer()
@@ -82,7 +87,7 @@ func BuildGRPCServer(pool *db.Pool) *grpc.Server {
 	authHandler := handlers.NewAuthHandler(pool)
 	bamboov1.RegisterAuthServiceServer(s, authHandler)
 	bamboov1.RegisterCoordinatorServiceServer(s, handlers.NewCoordinatorHandler(pool, authHandler, bus))
-	bamboov1.RegisterPolicyServiceServer(s, handlers.NewPolicyHandler(pool))
+	bamboov1.RegisterPolicyServiceServer(s, handlers.NewPolicyHandler(pool, nil))
 	bamboov1.RegisterTelemetryServiceServer(s, handlers.NewTelemetryHandler())
 
 	reflection.Register(s)

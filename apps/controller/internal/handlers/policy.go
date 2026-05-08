@@ -6,9 +6,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/netip"
 
 	"github.com/google/uuid"
+	"github.com/hanfour/bamboo/apps/controller/internal/clickhouse"
 	"github.com/hanfour/bamboo/apps/controller/internal/db"
 	"github.com/hanfour/bamboo/apps/controller/internal/db/repo"
 	"github.com/hanfour/bamboo/apps/controller/internal/policy"
@@ -25,13 +27,18 @@ type PolicyHandler struct {
 
 	tenants  *repo.Tenants
 	policies *repo.Policies
+	audits   *repo.AuditLogs
+	traces   *clickhouse.Traces
 }
 
 // NewPolicyHandler constructs a PolicyHandler with required repositories.
-func NewPolicyHandler(pool *db.Pool) *PolicyHandler {
+// ch may be nil; the handler degrades to no-op telemetry writes.
+func NewPolicyHandler(pool *db.Pool, ch *clickhouse.Conn) *PolicyHandler {
 	return &PolicyHandler{
 		tenants:  repo.NewTenants(pool),
 		policies: repo.NewPolicies(pool),
+		audits:   repo.NewAuditLogs(pool),
+		traces:   clickhouse.NewTraces(ch),
 	}
 }
 
@@ -78,6 +85,18 @@ func (h *PolicyHandler) PutPolicy(ctx context.Context, req *bamboov1.PutPolicyRe
 		return nil, status.Errorf(codes.Internal, "put policy: %v", err)
 	}
 
+	auditLog(ctx, h.audits, &repo.AuditEvent{
+		TenantID:     &tenant.ID,
+		ActorType:    "system",
+		Action:       "policy.update",
+		ResourceType: "policy",
+		Diff: marshalDiff(map[string]any{
+			"revision":  rec.Revision,
+			"rules":     len(parsed.Rules),
+			"hcl_bytes": len(rec.HCLSource),
+		}),
+	})
+
 	return &bamboov1.PutPolicyResponse{Policy: toProtoPolicy(rec, parsed)}, nil
 }
 
@@ -115,7 +134,9 @@ func (h *PolicyHandler) EvaluateAccess(ctx context.Context, req *bamboov1.Evalua
 	resp := &bamboov1.EvaluateAccessResponse{
 		Action: protoAction(action),
 	}
+	matchedRuleID := ""
 	if rule != nil {
+		matchedRuleID = rule.ID
 		resp.MatchedRule = &bamboov1.ACLRule{
 			Id:           rule.ID,
 			Action:       protoAction(rule.Action),
@@ -129,6 +150,19 @@ func (h *PolicyHandler) EvaluateAccess(ctx context.Context, req *bamboov1.Evalua
 	} else {
 		resp.Trace = []string{"no rule matched; default deny"}
 	}
+
+	if err := h.traces.Insert(ctx, &clickhouse.EvaluationTrace{
+		TenantID:      tenant.ID,
+		Source:        req.GetSource(),
+		Destination:   req.GetDestination(),
+		Port:          uint16(req.GetPort()),
+		Protocol:      req.GetProtocol(),
+		Action:        action.String(),
+		MatchedRuleID: matchedRuleID,
+	}); err != nil {
+		slog.Warn("clickhouse evaluation trace insert failed", "err", err)
+	}
+
 	return resp, nil
 }
 

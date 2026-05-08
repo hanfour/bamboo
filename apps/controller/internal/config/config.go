@@ -12,10 +12,11 @@ import (
 
 // Config is the top-level controller configuration.
 type Config struct {
-	Server   ServerConfig   `yaml:"server"`
-	Database DatabaseConfig `yaml:"database"`
-	Redis    RedisConfig    `yaml:"redis"`
-	Auth     AuthConfig     `yaml:"auth"`
+	Server     ServerConfig     `yaml:"server"`
+	Database   DatabaseConfig   `yaml:"database"`
+	Redis      RedisConfig      `yaml:"redis"`
+	ClickHouse ClickHouseConfig `yaml:"clickhouse"`
+	Auth       AuthConfig       `yaml:"auth"`
 }
 
 // ServerConfig holds gRPC and HTTP listener addresses.
@@ -31,6 +32,13 @@ type DatabaseConfig struct {
 
 // RedisConfig holds the Redis URL used for sessions and rate limiting.
 type RedisConfig struct {
+	URL string `yaml:"url"`
+}
+
+// ClickHouseConfig holds the optional ClickHouse DSN used for analytics.
+// Empty URL puts the controller in degraded mode where telemetry writes
+// drop after a single warning.
+type ClickHouseConfig struct {
 	URL string `yaml:"url"`
 }
 
@@ -97,6 +105,9 @@ func (c *Config) applyEnvOverrides() {
 	}
 	if v := os.Getenv("REDIS_URL"); v != "" {
 		c.Redis.URL = v
+	}
+	if v := os.Getenv("CLICKHOUSE_URL"); v != "" {
+		c.ClickHouse.URL = v
 	}
 	if v := os.Getenv("OIDC_GOOGLE_CLIENT_ID"); v != "" {
 		c.Auth.OIDC.Google.ClientID = v
