@@ -1,0 +1,96 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+package clickhouse
+
+import (
+	"context"
+	"fmt"
+	"sync"
+	"time"
+
+	"github.com/google/uuid"
+)
+
+// EvaluationTrace is one row in evaluation_traces.
+type EvaluationTrace struct {
+	ID            uuid.UUID
+	TenantID      uuid.UUID
+	OccurredAt    time.Time
+	Source        string
+	Destination   string
+	Port          uint16
+	Protocol      string
+	Action        string
+	MatchedRuleID string
+}
+
+// Traces is the writer / reader for evaluation_traces.
+type Traces struct {
+	c    *Conn
+	skip sync.Once
+	logs once
+}
+
+// NewTraces wraps a Conn (which may be nil) for the table.
+func NewTraces(c *Conn) *Traces {
+	return &Traces{c: c}
+}
+
+// Insert writes one trace. If the connection is not configured, the
+// write is dropped after a single warning per process.
+func (t *Traces) Insert(ctx context.Context, e *EvaluationTrace) error {
+	if !t.c.IsConfigured() {
+		t.skip.Do(func() { t.logs.do("evaluation_traces.insert") })
+		return nil
+	}
+	if e.OccurredAt.IsZero() {
+		e.OccurredAt = time.Now().UTC()
+	}
+	if e.Protocol == "" {
+		e.Protocol = "tcp"
+	}
+	if e.ID == uuid.Nil {
+		e.ID = uuid.New()
+	}
+	return t.c.driver().Exec(ctx, `
+		INSERT INTO evaluation_traces (
+		    id, tenant_id, occurred_at, source, destination,
+		    port, protocol, action, matched_rule_id
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`,
+		e.ID, e.TenantID, e.OccurredAt, e.Source, e.Destination,
+		e.Port, e.Protocol, e.Action, e.MatchedRuleID,
+	)
+}
+
+// RuleHitCounts returns the count of allow/deny hits per matched_rule_id
+// for tenant since `since`. Rules with zero hits do not appear in the
+// result; the caller cross-references with the policy to find unused
+// rules.
+func (t *Traces) RuleHitCounts(ctx context.Context, tenantID uuid.UUID, since time.Time) (map[string]uint64, error) {
+	out := make(map[string]uint64)
+	if !t.c.IsConfigured() {
+		return out, nil
+	}
+	rows, err := t.c.driver().Query(ctx, `
+		SELECT matched_rule_id, count() AS hits
+		FROM evaluation_traces
+		WHERE tenant_id = ?
+		  AND occurred_at >= ?
+		  AND matched_rule_id != ''
+		GROUP BY matched_rule_id
+	`, tenantID, since)
+	if err != nil {
+		return nil, fmt.Errorf("query rule hits: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var id string
+		var hits uint64
+		if err := rows.Scan(&id, &hits); err != nil {
+			return nil, err
+		}
+		out[id] = hits
+	}
+	return out, rows.Err()
+}

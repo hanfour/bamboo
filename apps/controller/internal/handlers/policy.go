@@ -6,12 +6,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/netip"
+	"time"
 
 	"github.com/google/uuid"
+	"github.com/hanfour/bamboo/apps/controller/internal/clickhouse"
 	"github.com/hanfour/bamboo/apps/controller/internal/db"
 	"github.com/hanfour/bamboo/apps/controller/internal/db/repo"
 	"github.com/hanfour/bamboo/apps/controller/internal/policy"
+	"github.com/hanfour/bamboo/apps/controller/internal/policy/recommend"
 	bamboov1 "github.com/hanfour/bamboo/proto/gen/go/bamboo/v1"
 	"github.com/hashicorp/hcl/v2"
 	"google.golang.org/grpc/codes"
@@ -25,13 +29,18 @@ type PolicyHandler struct {
 
 	tenants  *repo.Tenants
 	policies *repo.Policies
+	audits   *repo.AuditLogs
+	traces   *clickhouse.Traces
 }
 
 // NewPolicyHandler constructs a PolicyHandler with required repositories.
-func NewPolicyHandler(pool *db.Pool) *PolicyHandler {
+// ch may be nil; the handler degrades to no-op telemetry writes.
+func NewPolicyHandler(pool *db.Pool, ch *clickhouse.Conn) *PolicyHandler {
 	return &PolicyHandler{
 		tenants:  repo.NewTenants(pool),
 		policies: repo.NewPolicies(pool),
+		audits:   repo.NewAuditLogs(pool),
+		traces:   clickhouse.NewTraces(ch),
 	}
 }
 
@@ -78,6 +87,18 @@ func (h *PolicyHandler) PutPolicy(ctx context.Context, req *bamboov1.PutPolicyRe
 		return nil, status.Errorf(codes.Internal, "put policy: %v", err)
 	}
 
+	auditLog(ctx, h.audits, &repo.AuditEvent{
+		TenantID:     &tenant.ID,
+		ActorType:    "system",
+		Action:       "policy.update",
+		ResourceType: "policy",
+		Diff: marshalDiff(map[string]any{
+			"revision":  rec.Revision,
+			"rules":     len(parsed.Rules),
+			"hcl_bytes": len(rec.HCLSource),
+		}),
+	})
+
 	return &bamboov1.PutPolicyResponse{Policy: toProtoPolicy(rec, parsed)}, nil
 }
 
@@ -115,7 +136,9 @@ func (h *PolicyHandler) EvaluateAccess(ctx context.Context, req *bamboov1.Evalua
 	resp := &bamboov1.EvaluateAccessResponse{
 		Action: protoAction(action),
 	}
+	matchedRuleID := ""
 	if rule != nil {
+		matchedRuleID = rule.ID
 		resp.MatchedRule = &bamboov1.ACLRule{
 			Id:           rule.ID,
 			Action:       protoAction(rule.Action),
@@ -129,7 +152,68 @@ func (h *PolicyHandler) EvaluateAccess(ctx context.Context, req *bamboov1.Evalua
 	} else {
 		resp.Trace = []string{"no rule matched; default deny"}
 	}
+
+	if err := h.traces.Insert(ctx, &clickhouse.EvaluationTrace{
+		TenantID:      tenant.ID,
+		Source:        req.GetSource(),
+		Destination:   req.GetDestination(),
+		Port:          uint16(req.GetPort()),
+		Protocol:      req.GetProtocol(),
+		Action:        action.String(),
+		MatchedRuleID: matchedRuleID,
+	}); err != nil {
+		slog.Warn("clickhouse evaluation trace insert failed", "err", err)
+	}
+
 	return resp, nil
+}
+
+// ListRecommendations returns Tier-1 (rule-based) suggestions for the
+// calling tenant. Currently emits unused-rule removals based on the
+// last 30 days of evaluation traces.
+func (h *PolicyHandler) ListRecommendations(ctx context.Context, _ *bamboov1.ListRecommendationsRequest) (*bamboov1.ListRecommendationsResponse, error) {
+	tenant, err := h.resolveTenant(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	parsedPol, perr := h.loadParsedPolicy(ctx, tenant.ID)
+	if perr != nil {
+		return nil, perr
+	}
+
+	since := time.Now().Add(-30 * 24 * time.Hour)
+	hits, err := h.traces.RuleHitCounts(ctx, tenant.ID, since)
+	if err != nil {
+		slog.Warn("clickhouse rule hit query failed; running with empty hits", "err", err)
+		hits = map[string]uint64{}
+	}
+
+	recs := recommend.UnusedRules(parsedPol, hits, since)
+	resp := &bamboov1.ListRecommendationsResponse{
+		Recommendations: make([]*bamboov1.Recommendation, 0, len(recs)),
+	}
+	for _, r := range recs {
+		resp.Recommendations = append(resp.Recommendations, &bamboov1.Recommendation{
+			Id:          r.ID.String(),
+			Kind:        recommendKindToProto(r.Kind),
+			Summary:     r.Summary,
+			Diff:        r.Diff,
+			Evidence:    r.Evidence,
+			Confidence:  r.Confidence,
+			GeneratedAt: timestamppb.New(r.GeneratedAt),
+		})
+	}
+	return resp, nil
+}
+
+func recommendKindToProto(k recommend.Kind) bamboov1.Recommendation_Kind {
+	switch k {
+	case recommend.KindRemoveUnusedRule:
+		return bamboov1.Recommendation_KIND_REMOVE_UNUSED_RULE
+	default:
+		return bamboov1.Recommendation_KIND_UNSPECIFIED
+	}
 }
 
 // loadParsedPolicy fetches and parses the current policy. Returns an
