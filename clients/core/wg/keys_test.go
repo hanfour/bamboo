@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hanfour/bamboo/clients/core/internal/wg"
+	"github.com/hanfour/bamboo/clients/core/wg"
 )
 
 func TestGeneratePrivateKey_ProducesNonZero(t *testing.T) {

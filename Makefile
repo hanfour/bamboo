@@ -103,6 +103,10 @@ build: ## Build all binaries into ./bin
 	  echo "==> build dev-agent"; \
 	  (cd clients/core && go build -o ../../bin/dev-agent ./cmd/dev-agent); \
 	fi
+	@if [ -d clients/cli/cmd/bamboo ]; then \
+	  echo "==> build bamboo"; \
+	  (cd clients/cli && go build -o ../../bin/bamboo ./cmd/bamboo); \
+	fi
 	@echo "==> done. binaries in ./bin"
 
 # ----- Protos ----------------------------------------------------------------

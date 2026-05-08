@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hanfour/bamboo/clients/core/internal/wg"
+	"github.com/hanfour/bamboo/clients/core/wg"
 	bamboov1 "github.com/hanfour/bamboo/proto/gen/go/bamboo/v1"
 )
 

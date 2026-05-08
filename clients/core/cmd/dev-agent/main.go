@@ -18,9 +18,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/hanfour/bamboo/clients/core/internal/client"
-	"github.com/hanfour/bamboo/clients/core/internal/device"
-	"github.com/hanfour/bamboo/clients/core/internal/wg"
+	"github.com/hanfour/bamboo/clients/core/client"
+	"github.com/hanfour/bamboo/clients/core/device"
+	"github.com/hanfour/bamboo/clients/core/wg"
 	bamboov1 "github.com/hanfour/bamboo/proto/gen/go/bamboo/v1"
 	"google.golang.org/grpc/metadata"
 )
