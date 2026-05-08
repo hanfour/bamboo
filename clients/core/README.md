@@ -18,18 +18,49 @@ Pre-alpha skeleton. Currently provides:
 
 ```bash
 # from repo root
-go build -o ./bin/dev-agent ./clients/core/cmd/dev-agent
+make build
 
-# in one terminal: start the controller
+# in one terminal: bring up Postgres + Redis, run migrations, start controller
+make dev
+./bin/controller migrate up --config=apps/controller/config/example.yaml
 ./bin/controller serve --config=apps/controller/config/example.yaml
+```
 
-# in another terminal: connect from the dev agent
-./bin/dev-agent --addr=localhost:8080
+### Path A — tenant-slug fallback (zero-config)
+
+Quickest path for local smoke tests. The default `default` tenant is
+auto-created on first registration.
+
+```bash
+./bin/dev-agent --hostname=alpha
+./bin/dev-agent --hostname=beta
 # expected output:
 #   level=INFO msg="connected to controller" addr=localhost:8080
-#   level=INFO msg="register returned error (expected while handlers are stubs)"
-#                                                        err="rpc error: code = Unimplemented..."
+#   level=INFO msg="authenticating via tenant-slug fallback" tenant=default
+#   registered: peer_id=... ip=100.64.0.1 tenant=... peers_in_set=0
 ```
+
+### Path B — pre-auth key (matches production behaviour)
+
+Mint a key via the Auth gRPC service, then present it on register.
+
+```bash
+# 1. issue a key via grpcurl (a friendly CLI helper is on the roadmap)
+SECRET=$(grpcurl -plaintext \
+    -H "x-tenant-slug: my-team" \
+    -d '{"description":"dev","reusable":true}' \
+    localhost:8080 bamboo.v1.AuthService/CreatePreAuthKey \
+  | jq -r '.secret')
+
+# 2. register using the key — note no --tenant flag needed
+./bin/dev-agent --auth-key="$SECRET" --hostname=alpha
+# expected output:
+#   level=INFO msg="authenticating with pre-auth key"
+#   registered: peer_id=... ip=100.64.0.1 tenant=...
+```
+
+When `--auth-key` is set, `--tenant` is ignored; the tenant comes from
+the redeemed key.
 
 ## Stack
 
