@@ -57,6 +57,42 @@ func (r *Peers) Insert(ctx context.Context, p *Peer) (*Peer, error) {
 	return &out, nil
 }
 
+// GetByID returns a peer by primary key.
+func (r *Peers) GetByID(ctx context.Context, id uuid.UUID) (*Peer, error) {
+	var p Peer
+	err := r.pool.QueryRow(ctx, `
+		SELECT id, tenant_id, user_id, hostname, wireguard_public_key,
+		       host(ip), os, client_version, status,
+		       created_at, updated_at, last_seen_at
+		FROM peers
+		WHERE id = $1
+	`, id).Scan(
+		&p.ID, &p.TenantID, &p.UserID, &p.Hostname, &p.WireGuardPublicKey,
+		&p.IP, &p.OS, &p.ClientVersion, &p.Status,
+		&p.CreatedAt, &p.UpdatedAt, &p.LastSeenAt,
+	)
+	if err != nil {
+		return nil, asNotFound(err)
+	}
+	return &p, nil
+}
+
+// UpdateLastSeen sets last_seen_at = now() and status = 'online'.
+// Returns the number of rows affected (0 if the peer no longer exists).
+func (r *Peers) UpdateLastSeen(ctx context.Context, id uuid.UUID) (int64, error) {
+	tag, err := r.pool.Exec(ctx, `
+		UPDATE peers
+		   SET last_seen_at = now(),
+		       status       = 'online',
+		       updated_at   = now()
+		 WHERE id = $1
+	`, id)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
+}
+
 // FindByPubKey returns a peer matching the (tenant_id, wireguard_public_key)
 // pair. Used to make Register idempotent.
 func (r *Peers) FindByPubKey(ctx context.Context, tenantID uuid.UUID, pubKey string) (*Peer, error) {
