@@ -9,6 +9,7 @@ We record significant architecture decisions here using the format from
 - [0009 — Cloud Provider Strategy](./0009-cloud-provider-strategy.md)
 - [0010 — LLM Multi-Provider Strategy](./0010-llm-multi-provider-strategy.md)
 - [0011 — Client Core Re-licensing Path](./0011-client-core-relicensing-path.md)
+- [0012 — Phase 1 → Phase 2 Transition](./0012-phase-2-transition.md)
 
 > ADR numbers 0002–0008 are reserved for future decisions (monorepo tooling,
 > Go version, database, gRPC, multi-tenancy, region strategy, CI platform).
