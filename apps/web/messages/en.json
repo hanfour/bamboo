@@ -11,6 +11,11 @@
     "settings": "Settings",
     "signOut": "Sign out"
   },
+  "auth": {
+    "signIn": "Sign in",
+    "signOut": "Sign out",
+    "loggedInAs": "Signed in as {email}"
+  },
   "landing": {
     "title": "bamboo",
     "subtitle": "Sign in to manage your mesh.",

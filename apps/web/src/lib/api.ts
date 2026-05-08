@@ -3,14 +3,25 @@
 // Server-side fetch helpers for the controller's /api/v1/* endpoints.
 //
 // All functions are intended to run in React Server Components: they
-// hit the controller directly with the X-Tenant-Slug header and return
-// strongly-typed shapes. Errors are caught and rendered as empty
-// state so a single 500 from the controller does not break the page.
+// hit the controller directly and return strongly-typed shapes. Errors
+// are caught and rendered as empty state so a single 500 from the
+// controller does not break the page.
+//
+// Auth precedence mirrors the controller's middleware (server/api.go):
+//
+//   1. bamboo_session cookie from the incoming Next.js request, passed
+//      through to the controller. This is the production path once a
+//      Google / GitHub login has happened.
+//   2. X-Tenant-Slug header pinned to the BAMBOO_TENANT env var. This
+//      is the dev fallback when no session cookie is present yet.
+
+import { cookies } from 'next/headers';
 
 import type { AclPolicy, AclRule, Peer } from './types';
 
 const BASE = process.env.BAMBOO_API_URL ?? 'http://localhost:8081';
 const TENANT = process.env.BAMBOO_TENANT ?? 'default';
+const SESSION_COOKIE = 'bamboo_session';
 
 type ApiPeer = {
   id: string;
@@ -59,10 +70,36 @@ type ApiOverview = {
   recommendationCount: number;
 };
 
+type ApiMe = {
+  authenticated: boolean;
+  userId?: string;
+  email?: string;
+  displayName?: string;
+  oidcProvider?: string;
+  isAdmin?: boolean;
+  tenantId: string;
+  tenantSlug: string;
+  expiresAt?: string;
+};
+
+async function buildHeaders(): Promise<Record<string, string>> {
+  const headers: Record<string, string> = { 'X-Tenant-Slug': TENANT };
+  // Forward the session cookie from the incoming Next.js request to the
+  // controller so the controller's auth middleware sees the same JWT
+  // the browser holds. cookies() is async in Next 15+; await is safe
+  // in 14 too via the type cast.
+  const store = await cookies();
+  const session = store.get(SESSION_COOKIE);
+  if (session?.value) {
+    headers['Cookie'] = `${SESSION_COOKIE}=${session.value}`;
+  }
+  return headers;
+}
+
 async function get<T>(path: string, fallback: T): Promise<T> {
   try {
     const res = await fetch(`${BASE}${path}`, {
-      headers: { 'X-Tenant-Slug': TENANT },
+      headers: await buildHeaders(),
       cache: 'no-store',
     });
     if (!res.ok) return fallback;
@@ -80,6 +117,14 @@ export async function fetchOverview(): Promise<ApiOverview> {
     offlinePeers: 0,
     policyRevision: 0,
     recommendationCount: 0,
+  });
+}
+
+export async function fetchMe(): Promise<ApiMe> {
+  return get<ApiMe>('/api/v1/me', {
+    authenticated: false,
+    tenantId: '',
+    tenantSlug: TENANT,
   });
 }
 
@@ -128,4 +173,4 @@ export async function fetchRecommendations(): Promise<ApiRecommendation[]> {
   return body.recommendations;
 }
 
-export type { ApiOverview, ApiRecommendation };
+export type { ApiMe, ApiOverview, ApiRecommendation };
