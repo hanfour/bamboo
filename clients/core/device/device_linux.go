@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"net"
 
-	"github.com/hanfour/bamboo/clients/core/internal/wg"
+	"github.com/hanfour/bamboo/clients/core/wg"
 	"github.com/vishvananda/netlink"
 	"golang.zx2c4.com/wireguard/wgctrl"
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"

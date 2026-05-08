@@ -37,10 +37,10 @@ plan for [Issue #2 — NetBird fork: sandbox clone and inventory](https://github
 | `signal/cmd/`            | REPLACE    | merged into controller                        | AGPLv3           | We don't ship a separate signal binary in Phase 1. |
 | `relay/`                 | KEEP       | `apps/relay/internal/`                        | AGPLv3           | DERP-style relay implementation. |
 | `relay/cmd/`             | REPLACE    | `apps/relay/cmd/relay/`                       | AGPLv3           | New cobra-based entrypoint. |
-| `encryption/`            | KEEP       | `clients/core/internal/encryption/`           | AGPLv3 (interim) | Curve25519 helpers. Used by both client and controller. |
-| `route/`                 | KEEP       | `clients/core/internal/route/`                | AGPLv3 (interim) | Route table management. |
-| `dns/`                   | KEEP       | `clients/core/internal/dns/`                  | AGPLv3 (interim) | MagicDNS-equivalent. |
-| `iface/`                 | KEEP       | `clients/core/internal/iface/`                | AGPLv3 (interim) | WireGuard interface mgmt. Critical, hard to rewrite. |
+| `encryption/`            | KEEP       | `clients/core/encryption/`           | AGPLv3 (interim) | Curve25519 helpers. Used by both client and controller. |
+| `route/`                 | KEEP       | `clients/core/route/`                | AGPLv3 (interim) | Route table management. |
+| `dns/`                   | KEEP       | `clients/core/dns/`                  | AGPLv3 (interim) | MagicDNS-equivalent. |
+| `iface/`                 | KEEP       | `clients/core/iface/`                | AGPLv3 (interim) | WireGuard interface mgmt. Critical, hard to rewrite. |
 | `formatter/`             | KEEP       | `pkg/log/formatter/`                          | AGPLv3 (interim) | Log formatter. Tiny. |
 | `version/`               | REPLACE    | `pkg/version/`                                | Apache 2.0       | Trivial. Clean-room rewrite. |
 | `monotime/`              | KEEP       | `pkg/monotime/`                               | AGPLv3 (interim) | Monotonic time helpers. |
@@ -66,7 +66,7 @@ plan for [Issue #2 — NetBird fork: sandbox clone and inventory](https://github
 | `stun/`                  | KEEP       | `apps/relay/internal/stun/`                   | AGPLv3           | STUN server, paired with relay. |
 | `proxy/`                 | STRIP      | —                                             | —                | TCP/HTTP proxy feature; not in Phase 1 scope. |
 | `base62/`                | KEEP       | `pkg/base62/`                                 | AGPLv3 (interim) | Tiny encoding helper. |
-| `sharedsock/`            | KEEP       | `clients/core/internal/sharedsock/`           | AGPLv3 (interim) | Shared raw-socket abstraction (NAT traversal helper). |
+| `sharedsock/`            | KEEP       | `clients/core/sharedsock/`           | AGPLv3 (interim) | Shared raw-socket abstraction (NAT traversal helper). |
 | `upload-server/`         | STRIP      | —                                             | —                | Log / file upload server; not in Phase 1 scope. |
 | `combined/`              | STRIP      | —                                             | —                | Combined-binary build target. We package per-app. |
 | `flow/`                  | DEFER      | `apps/ai/flow/` (Phase 2)                     | AGPLv3 (when adopted) | Flow-log collection; lines up with our AI/anomaly story but Phase 2. |
@@ -104,8 +104,8 @@ Follow this order so dependencies resolve cleanly:
 
 1. `pkg/shared/`, `pkg/util/`, `pkg/monotime/`, `pkg/log/formatter/` (no deps)
 2. `pkg/version/` (REPLACE — clean-room)
-3. `clients/core/internal/encryption/` (used by everyone)
-4. `clients/core/internal/iface/`, `clients/core/internal/dns/`, `clients/core/internal/route/`
+3. `clients/core/encryption/` (used by everyone)
+4. `clients/core/iface/`, `clients/core/dns/`, `clients/core/route/`
 5. `clients/core/internal/...` (the rest of the agent)
 6. `apps/controller/internal/server/` (depends on shared types)
 7. `apps/controller/internal/signal/`

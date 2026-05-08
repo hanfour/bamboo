@@ -5,7 +5,7 @@ Imported by:    feat/wg-bringup-encryption (Sprint 2 #2)
 
 Procedure: scripts/netbird-prep.sh + scripts/netbird-audit.sh.
 Inventory entry: docs/development/netbird-import-inventory.md
-                 (KEEP -> clients/core/internal/encryption/, AGPLv3 interim)
+                 (KEEP -> clients/core/encryption/, AGPLv3 interim)
 
 Files imported:
   encryption.go      verbatim except SPDX header + package doc

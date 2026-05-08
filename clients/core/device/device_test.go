@@ -8,7 +8,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/hanfour/bamboo/clients/core/internal/device"
+	"github.com/hanfour/bamboo/clients/core/device"
 )
 
 // On non-Linux hosts, the only assertion we can make is that New refuses

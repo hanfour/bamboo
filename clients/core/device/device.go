@@ -13,7 +13,7 @@ import (
 	"context"
 	"errors"
 
-	"github.com/hanfour/bamboo/clients/core/internal/wg"
+	"github.com/hanfour/bamboo/clients/core/wg"
 )
 
 // ErrUnsupported is returned by New on platforms that do not have a

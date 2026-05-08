@@ -14,7 +14,7 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/hanfour/bamboo/clients/core/internal/encryption"
+	"github.com/hanfour/bamboo/clients/core/encryption"
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )
