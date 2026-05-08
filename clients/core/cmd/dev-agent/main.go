@@ -25,7 +25,8 @@ import (
 func main() {
 	addr := flag.String("addr", "localhost:8080", "controller gRPC address")
 	hostname := flag.String("hostname", defaultHostname(), "peer hostname to register")
-	tenantSlug := flag.String("tenant", "default", "tenant slug (sent as x-tenant-slug metadata)")
+	tenantSlug := flag.String("tenant", "default", "tenant slug (sent as x-tenant-slug metadata; ignored if --auth-key is set)")
+	authKey := flag.String("auth-key", "", "pre-auth key secret (bka_..._...); when set, --tenant is ignored")
 	flag.Parse()
 
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, nil)))
@@ -42,14 +43,26 @@ func main() {
 
 	pubKey := randomPubKey()
 
-	ctx = metadata.AppendToOutgoingContext(ctx, "x-tenant-slug", *tenantSlug)
-
-	resp, err := cli.Coordinator.Register(ctx, &bamboov1.RegisterRequest{
+	req := &bamboov1.RegisterRequest{
 		Hostname:           *hostname,
 		WireguardPublicKey: pubKey,
 		Os:                 runtime.GOOS,
 		ClientVersion:      "dev",
-	})
+	}
+
+	if *authKey != "" {
+		// Tenant comes from the redeemed pre-auth key; do not send the slug
+		// metadata so the server's tenant resolution uses the credential path.
+		req.Credential = &bamboov1.RegisterRequest_PreAuthKeySecret{
+			PreAuthKeySecret: *authKey,
+		}
+		slog.Info("authenticating with pre-auth key")
+	} else {
+		ctx = metadata.AppendToOutgoingContext(ctx, "x-tenant-slug", *tenantSlug)
+		slog.Info("authenticating via tenant-slug fallback", "tenant", *tenantSlug)
+	}
+
+	resp, err := cli.Coordinator.Register(ctx, req)
 	if err != nil {
 		fail("register: %v", err)
 	}

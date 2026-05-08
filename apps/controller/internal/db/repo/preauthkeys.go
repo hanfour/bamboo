@@ -39,6 +39,13 @@ type PreAuthKey struct {
 // Create inserts a new key. The caller is responsible for hashing the
 // secret before calling.
 func (r *PreAuthKeys) Create(ctx context.Context, k *PreAuthKey) (*PreAuthKey, error) {
+	// Normalize: pgx maps a nil Go slice to SQL NULL, but the column is
+	// NOT NULL with default '{}'. Replace nil with an empty slice.
+	tags := k.Tags
+	if tags == nil {
+		tags = []string{}
+	}
+
 	var out PreAuthKey
 	err := r.pool.QueryRow(ctx, `
 		INSERT INTO pre_auth_keys (
@@ -47,7 +54,7 @@ func (r *PreAuthKeys) Create(ctx context.Context, k *PreAuthKey) (*PreAuthKey, e
 		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		RETURNING id, tenant_id, description, secret_hash, tags, reusable, ephemeral,
 		          created_by, created_at, expires_at, revoked_at, use_count
-	`, k.ID, k.TenantID, k.Description, k.SecretHash, k.Tags, k.Reusable, k.Ephemeral,
+	`, k.ID, k.TenantID, k.Description, k.SecretHash, tags, k.Reusable, k.Ephemeral,
 		k.CreatedBy, k.ExpiresAt).Scan(
 		&out.ID, &out.TenantID, &out.Description, &out.SecretHash, &out.Tags,
 		&out.Reusable, &out.Ephemeral,

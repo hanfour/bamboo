@@ -17,7 +17,14 @@ redis:
   url: redis://localhost:16379
 
 auth:
+  # 32+ bytes. Generate with `openssl rand -base64 48`.
+  # Override via BAMBOO_SESSION_SECRET (recommended; do not commit).
+  session_secret: "this-is-a-development-secret-do-not-use-in-production-pls"
+  session_ttl: "24h"
   oidc:
+    # Public URL of the HTTP listener; used to build OIDC redirect URIs.
+    # Override via BAMBOO_BASE_URL.
+    base_url: "http://localhost:8081"
     google:
       client_id: ""
       # Override via OIDC_GOOGLE_CLIENT_SECRET.
