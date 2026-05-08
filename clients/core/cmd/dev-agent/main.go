@@ -8,8 +8,6 @@ package main
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/base64"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -18,6 +16,7 @@ import (
 	"time"
 
 	"github.com/hanfour/bamboo/clients/core/internal/client"
+	"github.com/hanfour/bamboo/clients/core/internal/wg"
 	bamboov1 "github.com/hanfour/bamboo/proto/gen/go/bamboo/v1"
 	"google.golang.org/grpc/metadata"
 )
@@ -27,6 +26,7 @@ func main() {
 	hostname := flag.String("hostname", defaultHostname(), "peer hostname to register")
 	tenantSlug := flag.String("tenant", "default", "tenant slug (sent as x-tenant-slug metadata; ignored if --auth-key is set)")
 	authKey := flag.String("auth-key", "", "pre-auth key secret (bka_..._...); when set, --tenant is ignored")
+	showConfig := flag.Bool("show-config", false, "print the wg-quick config that would be applied and exit")
 	flag.Parse()
 
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, nil)))
@@ -41,11 +41,14 @@ func main() {
 	defer func() { _ = cli.Close() }()
 	slog.Info("connected to controller", "addr", *addr)
 
-	pubKey := randomPubKey()
+	priv, err := wg.GeneratePrivateKey()
+	if err != nil {
+		fail("generate key: %v", err)
+	}
 
 	req := &bamboov1.RegisterRequest{
 		Hostname:           *hostname,
-		WireguardPublicKey: pubKey,
+		WireguardPublicKey: priv.PublicKey().Base64(),
 		Os:                 runtime.GOOS,
 		ClientVersion:      "dev",
 	}
@@ -73,14 +76,15 @@ func main() {
 	for _, p := range resp.GetPeers() {
 		fmt.Printf("  peer: %s @ %s (%s)\n", p.GetHostname(), p.GetIp(), p.GetId())
 	}
-}
 
-func randomPubKey() string {
-	b := make([]byte, 32)
-	if _, err := rand.Read(b); err != nil {
-		fail("random: %v", err)
+	if *showConfig {
+		cfg, err := wg.BuildDeviceConfig(priv, resp)
+		if err != nil {
+			fail("build wireguard config: %v", err)
+		}
+		fmt.Println("\n# --- wg-quick config (would be applied as root) ---")
+		fmt.Println(cfg.WGQuick())
 	}
-	return base64.StdEncoding.EncodeToString(b)
 }
 
 func defaultHostname() string {

@@ -3,5 +3,6 @@ go 1.25.7
 use (
 	./apps/controller
 	./clients/core
+	./pkg/base62
 	./proto
 )
