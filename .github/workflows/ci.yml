@@ -88,15 +88,19 @@ jobs:
           CLICKHOUSE_DB: bamboo
           CLICKHOUSE_USER: bamboo
           CLICKHOUSE_PASSWORD: dev
-          CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
         ports:
           - 9000:9000
           - 8123:8123
+        # clickhouse-client ships in the image, so the healthcheck does
+        # not depend on busybox-wget's flag set. RBAC management is
+        # left off here (we only need CRUD on a single DB) so first-
+        # boot init stays fast on slower GitHub-hosted runners.
         options: >-
-          --health-cmd "wget --no-verbose --tries=1 --spider http://localhost:8123/ping"
+          --health-cmd "clickhouse-client --user bamboo --password dev --query 'SELECT 1'"
           --health-interval 5s
-          --health-timeout 3s
-          --health-retries 20
+          --health-timeout 5s
+          --health-retries 30
+          --health-start-period 30s
     env:
       DATABASE_URL_TEST: postgres://bamboo:dev@localhost:5432/bamboo?sslmode=disable
       CLICKHOUSE_URL_TEST: clickhouse://bamboo:dev@localhost:9000/bamboo
