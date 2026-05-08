@@ -95,6 +95,55 @@ func (t *Traces) RuleHitCounts(ctx context.Context, tenantID uuid.UUID, since ti
 	return out, rows.Err()
 }
 
+// DeniedFlow captures one (source, destination, port) triple that was
+// repeatedly default-denied (matched_rule_id = ”). The recommender
+// uses these to surface "broaden-needed" suggestions: traffic the
+// operator may have intended to allow.
+type DeniedFlow struct {
+	Source      string
+	Destination string
+	Port        uint16
+	Hits        uint64
+}
+
+// TopDeniedFlows returns the highest-frequency default-deny triples
+// for a tenant since `since`. minHits filters one-off attempts; limit
+// caps the result count so a noisy day cannot drown the operator.
+func (t *Traces) TopDeniedFlows(ctx context.Context, tenantID uuid.UUID, since time.Time, minHits uint64, limit int) ([]DeniedFlow, error) {
+	if !t.c.IsConfigured() {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = 5
+	}
+	rows, err := t.c.driver().Query(ctx, `
+		SELECT source, destination, port, count() AS hits
+		FROM evaluation_traces
+		WHERE tenant_id = ?
+		  AND occurred_at >= ?
+		  AND action = 'deny'
+		  AND matched_rule_id = ''
+		GROUP BY source, destination, port
+		HAVING hits >= ?
+		ORDER BY hits DESC
+		LIMIT ?
+	`, tenantID, since, minHits, uint64(limit))
+	if err != nil {
+		return nil, fmt.Errorf("query denied flows: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []DeniedFlow
+	for rows.Next() {
+		var f DeniedFlow
+		if err := rows.Scan(&f.Source, &f.Destination, &f.Port, &f.Hits); err != nil {
+			return nil, err
+		}
+		out = append(out, f)
+	}
+	return out, rows.Err()
+}
+
 // RuleObservation captures, per matched_rule_id, the histogram of
 // destination ports observed in the action="allow" path. Used by the
 // over-privileged-rule recommender to suggest tightening wildcard

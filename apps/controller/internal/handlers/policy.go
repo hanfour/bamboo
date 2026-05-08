@@ -169,10 +169,12 @@ func (h *PolicyHandler) EvaluateAccess(ctx context.Context, req *bamboov1.Evalua
 }
 
 // ListRecommendations returns Tier-1 (rule-based) suggestions for the
-// calling tenant. Phase 1 covers two kinds:
-//   - KIND_REMOVE_UNUSED_RULE     rules with zero hits in the window
-//   - KIND_TIGHTEN_OVERPRIVILEGED rules whose wildcard ports hit only
+// calling tenant. Phase 1 covers three kinds:
+//   - KIND_REMOVE_UNUSED_RULE      rules with zero hits in the window
+//   - KIND_TIGHTEN_OVERPRIVILEGED  rules whose wildcard ports hit only
 //     a small distinct set of ports
+//   - KIND_BROADEN_NEEDED          (source, dest, port) triples being
+//     default-denied above the noise floor
 func (h *PolicyHandler) ListRecommendations(ctx context.Context, _ *bamboov1.ListRecommendationsRequest) (*bamboov1.ListRecommendationsResponse, error) {
 	tenant, err := h.resolveTenant(ctx)
 	if err != nil {
@@ -185,11 +187,13 @@ func (h *PolicyHandler) ListRecommendations(ctx context.Context, _ *bamboov1.Lis
 	}
 
 	since := time.Now().Add(-30 * 24 * time.Hour)
+
 	hits, err := h.traces.RuleHitCounts(ctx, tenant.ID, since)
 	if err != nil {
 		slog.Warn("clickhouse rule hit query failed; running with empty hits", "err", err)
 		hits = map[string]uint64{}
 	}
+
 	chObs, err := h.traces.RuleObservations(ctx, tenant.ID, since)
 	if err != nil {
 		slog.Warn("clickhouse rule observation query failed", "err", err)
@@ -197,10 +201,16 @@ func (h *PolicyHandler) ListRecommendations(ctx context.Context, _ *bamboov1.Lis
 	}
 	obs := translateObservations(chObs)
 
-	combined := append(
-		recommend.UnusedRules(parsedPol, hits, since),
-		recommend.OverPrivilegedRules(parsedPol, obs, since)...,
-	)
+	chFlows, err := h.traces.TopDeniedFlows(ctx, tenant.ID, since, 10, 5)
+	if err != nil {
+		slog.Warn("clickhouse denied-flow query failed", "err", err)
+		chFlows = nil
+	}
+	flows := translateDeniedFlows(chFlows)
+
+	combined := recommend.UnusedRules(parsedPol, hits, since)
+	combined = append(combined, recommend.OverPrivilegedRules(parsedPol, obs, since)...)
+	combined = append(combined, recommend.BroadenNeeded(parsedPol, flows, since)...)
 
 	resp := &bamboov1.ListRecommendationsResponse{
 		Recommendations: make([]*bamboov1.Recommendation, 0, len(combined)),
@@ -217,6 +227,21 @@ func (h *PolicyHandler) ListRecommendations(ctx context.Context, _ *bamboov1.Lis
 		})
 	}
 	return resp, nil
+}
+
+// translateDeniedFlows maps the ClickHouse-side struct into the
+// recommend-package equivalent.
+func translateDeniedFlows(in []clickhouse.DeniedFlow) []recommend.DeniedFlow {
+	out := make([]recommend.DeniedFlow, len(in))
+	for i, f := range in {
+		out[i] = recommend.DeniedFlow{
+			Source:      f.Source,
+			Destination: f.Destination,
+			Port:        f.Port,
+			Hits:        f.Hits,
+		}
+	}
+	return out
 }
 
 // translateObservations maps the ClickHouse-side aggregation into the
@@ -242,6 +267,8 @@ func recommendKindToProto(k recommend.Kind) bamboov1.Recommendation_Kind {
 		return bamboov1.Recommendation_KIND_REMOVE_UNUSED_RULE
 	case recommend.KindTightenOverPrivileged:
 		return bamboov1.Recommendation_KIND_TIGHTEN_OVERPRIVILEGED
+	case recommend.KindBroadenNeeded:
+		return bamboov1.Recommendation_KIND_BROADEN_NEEDED
 	default:
 		return bamboov1.Recommendation_KIND_UNSPECIFIED
 	}
