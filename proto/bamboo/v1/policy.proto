@@ -168,6 +168,11 @@ message Recommendation {
     KIND_TIGHTEN_OVERPRIVILEGED = 2;
     KIND_BROADEN_NEEDED = 3;
     KIND_ADD_TIME_WINDOW = 4;
+    // KIND_FLAG_ANOMALOUS surfaces an out-of-distribution connection
+    // event flagged by the Tier-2 model (per ADR 0010). Unlike the
+    // Tier-1 kinds, the diff is empty: anomalies are observations,
+    // not config proposals.
+    KIND_FLAG_ANOMALOUS = 5;
   }
   string id = 1;
   Kind kind = 2;

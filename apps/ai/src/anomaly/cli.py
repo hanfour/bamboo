@@ -44,6 +44,21 @@ def main(argv: list[str] | None = None) -> int:
     score_p.add_argument("--limit", type=int, default=10, help="top-K most anomalous to print")
     score_p.set_defaults(func=cmd_score)
 
+    write_p = sub.add_parser(
+        "score-and-write",
+        help="score recent events and write findings above threshold to ClickHouse",
+    )
+    _add_common(write_p)
+    write_p.add_argument("--model", type=Path, required=True)
+    write_p.add_argument("--threshold", type=float, default=0.6, help="min score to record")
+    write_p.add_argument("--limit", type=int, default=20, help="cap on findings per run")
+    write_p.add_argument(
+        "--model-version",
+        default="isolation-forest-v1",
+        help="label stored alongside each finding so the controller can show provenance",
+    )
+    write_p.set_defaults(func=cmd_score_and_write)
+
     args = parser.parse_args(argv)
     return args.func(args)
 
@@ -94,6 +109,53 @@ def cmd_score(args: argparse.Namespace) -> int:
     ]
     json.dump(out, sys.stdout, default=str, indent=2)
     print()
+    return 0
+
+
+def cmd_score_and_write(args: argparse.Namespace) -> int:
+    """Score recent events and persist findings >= threshold to CH."""
+    from clickhouse_connect import get_client  # noqa: PLC0415 - intentional lazy import
+
+    from anomaly.writer import write_findings
+
+    events = _load_events(args)
+    if not events:
+        print(f"no events for tenant {args.tenant} in window {args.since}", file=sys.stderr)
+        return 1
+    features = extract_features(events)
+    model = load_model(args.model)
+    scores = score(model, features)
+
+    findings: list[dict] = []
+    for s, ev in zip(scores, events, strict=True):
+        if s < args.threshold:
+            continue
+        findings.append(
+            {
+                "occurred_at": ev.get("occurred_at"),
+                "score": float(s),
+                "event": ev,
+            }
+        )
+    findings.sort(key=lambda f: -f["score"])
+    findings = findings[: args.limit]
+
+    if not findings:
+        print(
+            f"no findings >= {args.threshold} in window {args.since}; nothing written",
+            file=sys.stderr,
+        )
+        return 0
+
+    parsed = _parse_url(args.clickhouse_url)
+    client = get_client(**parsed)
+    try:
+        written = write_findings(
+            client, args.tenant, findings, model_version=args.model_version
+        )
+    finally:
+        client.close()
+    print(f"wrote {written} finding(s) to anomaly_findings")
     return 0
 
 

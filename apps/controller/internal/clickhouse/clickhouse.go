@@ -109,6 +109,22 @@ func (c *Conn) applySchema(ctx context.Context) error {
 		) ENGINE = MergeTree
 		ORDER BY (tenant_id, occurred_at)
 		TTL toDate(occurred_at) + INTERVAL 90 DAY`,
+
+		// anomaly_findings is the Tier-2 ML pipeline's output. The Go
+		// controller never writes here; the bamboo-ai Python module
+		// produces rows after each scheduled training pass.
+		`CREATE TABLE IF NOT EXISTS anomaly_findings (
+		    id              UUID,
+		    tenant_id       UUID,
+		    occurred_at     DateTime64(3),
+		    generated_at    DateTime64(3),
+		    score           Float32,
+		    model_version   LowCardinality(String),
+		    event_id        UUID,
+		    event_summary   String
+		) ENGINE = MergeTree
+		ORDER BY (tenant_id, generated_at)
+		TTL toDate(generated_at) + INTERVAL 30 DAY`,
 	}
 	for _, s := range stmts {
 		if err := c.conn.Exec(ctx, s); err != nil {
