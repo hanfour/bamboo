@@ -182,11 +182,21 @@ func (h *HTTPServer) apiRecommendations(w http.ResponseWriter, r *http.Request, 
 			TotalHits: o.TotalHits,
 		}
 	}
+	chFlows, _ := h.traces.TopDeniedFlows(r.Context(), tenant.ID, since, 10, 5)
+	flows := make([]recommend.DeniedFlow, len(chFlows))
+	for i, f := range chFlows {
+		flows[i] = recommend.DeniedFlow{
+			Source:      f.Source,
+			Destination: f.Destination,
+			Port:        f.Port,
+			Hits:        f.Hits,
+		}
+	}
 
-	recs := append(
-		recommend.UnusedRules(parsed, hits, since),
-		recommend.OverPrivilegedRules(parsed, obs, since)...,
-	)
+	recs := recommend.UnusedRules(parsed, hits, since)
+	recs = append(recs, recommend.OverPrivilegedRules(parsed, obs, since)...)
+	recs = append(recs, recommend.BroadenNeeded(parsed, flows, since)...)
+
 	out := make([]apiRecommendationJSON, 0, len(recs))
 	for _, x := range recs {
 		out = append(out, apiRecommendationJSON{
@@ -262,8 +272,16 @@ func countRecommendations(ctx context.Context, h *HTTPServer, tenant *repo.Tenan
 			TotalHits: o.TotalHits,
 		}
 	}
+	chFlows, _ := h.traces.TopDeniedFlows(ctx, tenant.ID, since, 10, 5)
+	flows := make([]recommend.DeniedFlow, len(chFlows))
+	for i, f := range chFlows {
+		flows[i] = recommend.DeniedFlow{
+			Source: f.Source, Destination: f.Destination, Port: f.Port, Hits: f.Hits,
+		}
+	}
 	return len(recommend.UnusedRules(parsed, hits, since)) +
-		len(recommend.OverPrivilegedRules(parsed, obs, since))
+		len(recommend.OverPrivilegedRules(parsed, obs, since)) +
+		len(recommend.BroadenNeeded(parsed, flows, since))
 }
 
 func writeJSON(w http.ResponseWriter, status int, body any) {
@@ -318,6 +336,8 @@ func kindString(k recommend.Kind) string {
 		return "REMOVE_UNUSED_RULE"
 	case recommend.KindTightenOverPrivileged:
 		return "TIGHTEN_OVERPRIVILEGED"
+	case recommend.KindBroadenNeeded:
+		return "BROADEN_NEEDED"
 	default:
 		return "UNKNOWN"
 	}
