@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/hanfour/bamboo/clients/cli/internal/state"
+	clientsync "github.com/hanfour/bamboo/clients/cli/internal/sync"
 	"github.com/hanfour/bamboo/clients/core/client"
 	"github.com/hanfour/bamboo/clients/core/device"
 	"github.com/hanfour/bamboo/clients/core/wg"
@@ -80,6 +81,18 @@ func runUp(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("apply: %w", err)
 	}
 	slog.Info("tunnel up", "iface", flagIface, "address", cfg.Address.String())
+
+	// Daemon mode: keep the cache in sync with the controller while the
+	// process runs. WatchPeers reconnects with backoff if the stream
+	// breaks; Heartbeat keeps the controller's "online" status fresh
+	// and is the canonical liveness signal for our own peer row.
+	cache := clientsync.New(resp.GetSelf(), resp.GetPeers())
+	adapter := clientsync.AdaptClient(cli.Coordinator)
+
+	daemonCtx, daemonCancel := context.WithCancel(cmd.Context())
+	defer daemonCancel()
+	go clientsync.RunHeartbeat(daemonCtx, adapter, resp.GetSelf().GetId())
+	go clientsync.RunWatchPeers(daemonCtx, adapter, dev, priv, cache, resp.GetSelf().GetId())
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
