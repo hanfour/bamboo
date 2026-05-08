@@ -34,15 +34,25 @@ type RedisConfig struct {
 	URL string `yaml:"url"`
 }
 
-// AuthConfig holds OIDC provider credentials.
+// AuthConfig holds session signing material and OIDC provider credentials.
 type AuthConfig struct {
-	OIDC OIDCProviders `yaml:"oidc"`
+	// SessionSecret is the HMAC key used to sign session JWTs and OIDC
+	// state tokens. Must be at least 32 bytes; rotate by re-issuing all
+	// tokens.
+	SessionSecret string `yaml:"session_secret"`
+	// SessionTTL controls how long an issued session remains valid.
+	// Defaults to 24h if empty.
+	SessionTTL string        `yaml:"session_ttl"`
+	OIDC       OIDCProviders `yaml:"oidc"`
 }
 
 // OIDCProviders bundles per-provider credentials.
 type OIDCProviders struct {
-	Google ClientCredentials `yaml:"google"`
-	GitHub ClientCredentials `yaml:"github"`
+	// BaseURL is the public-facing URL of the controller HTTP listener.
+	// Used to build redirect URIs (e.g. https://controller.example.com).
+	BaseURL string            `yaml:"base_url"`
+	Google  ClientCredentials `yaml:"google"`
+	GitHub  ClientCredentials `yaml:"github"`
 }
 
 // ClientCredentials is a generic OAuth client_id / client_secret pair.
@@ -100,6 +110,12 @@ func (c *Config) applyEnvOverrides() {
 	if v := os.Getenv("OIDC_GITHUB_CLIENT_SECRET"); v != "" {
 		c.Auth.OIDC.GitHub.ClientSecret = v
 	}
+	if v := os.Getenv("BAMBOO_SESSION_SECRET"); v != "" {
+		c.Auth.SessionSecret = v
+	}
+	if v := os.Getenv("BAMBOO_BASE_URL"); v != "" {
+		c.Auth.OIDC.BaseURL = v
+	}
 }
 
 // validate enforces minimum required fields.
@@ -109,6 +125,12 @@ func (c *Config) validate() error {
 	}
 	if c.Database.URL == "" {
 		return fmt.Errorf("database.url is required (or set DATABASE_URL)")
+	}
+	if c.Auth.SessionSecret == "" {
+		return fmt.Errorf("auth.session_secret is required (or set BAMBOO_SESSION_SECRET)")
+	}
+	if len(c.Auth.SessionSecret) < 32 {
+		return fmt.Errorf("auth.session_secret must be at least 32 bytes")
 	}
 	return nil
 }

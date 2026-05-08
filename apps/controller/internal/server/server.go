@@ -9,7 +9,9 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"time"
 
+	"github.com/hanfour/bamboo/apps/controller/internal/auth"
 	"github.com/hanfour/bamboo/apps/controller/internal/config"
 	"github.com/hanfour/bamboo/apps/controller/internal/db"
 	"github.com/hanfour/bamboo/apps/controller/internal/events"
@@ -19,11 +21,12 @@ import (
 	"google.golang.org/grpc/reflection"
 )
 
-// Server holds the gRPC server and dependencies.
+// Server holds the gRPC + HTTP servers and dependencies.
 type Server struct {
 	cfg  *config.Config
 	pool *db.Pool
 	grpc *grpc.Server
+	http *HTTPServer
 }
 
 // New constructs a Server with all gRPC services registered.
@@ -36,18 +39,42 @@ func New(cfg *config.Config, pool *db.Pool) (*Server, error) {
 		return nil, fmt.Errorf("nil pool")
 	}
 
+	providers := buildOIDCProviders(cfg)
+	ttl := parseTTL(cfg.Auth.SessionTTL, 24*time.Hour)
+	secret := []byte(cfg.Auth.SessionSecret)
+
+	grpcSrv, authHandler := buildGRPCWithAuth(pool)
+	authHandler.SetOIDCConfig(cfg.Auth.OIDC.BaseURL, secret, ttl)
+
+	httpSrv := NewHTTPServer(cfg.Server.HTTPAddr, pool, providers, secret, cfg.Auth.OIDC.BaseURL, ttl)
+
 	return &Server{
 		cfg:  cfg,
 		pool: pool,
-		grpc: BuildGRPCServer(pool),
+		grpc: grpcSrv,
+		http: httpSrv,
 	}, nil
+}
+
+// buildGRPCWithAuth is the production wiring used by Server.New. It returns
+// the underlying AuthHandler so the caller can apply OIDC configuration.
+// Tests use BuildGRPCServer instead, which takes the simpler path.
+func buildGRPCWithAuth(pool *db.Pool) (*grpc.Server, *handlers.AuthHandler) {
+	bus := events.NewBus()
+	s := grpc.NewServer()
+
+	authHandler := handlers.NewAuthHandler(pool)
+	bamboov1.RegisterAuthServiceServer(s, authHandler)
+	bamboov1.RegisterCoordinatorServiceServer(s, handlers.NewCoordinatorHandler(pool, authHandler, bus))
+	bamboov1.RegisterPolicyServiceServer(s, handlers.NewPolicyHandler())
+	bamboov1.RegisterTelemetryServiceServer(s, handlers.NewTelemetryHandler())
+	reflection.Register(s)
+
+	return s, authHandler
 }
 
 // BuildGRPCServer constructs and returns a fully wired *grpc.Server with
 // every bamboo service registered against pool. Reflection is enabled.
-//
-// Exported so end-to-end tests can mount the same handler graph on an
-// ephemeral listener without duplicating wiring.
 func BuildGRPCServer(pool *db.Pool) *grpc.Server {
 	bus := events.NewBus()
 	s := grpc.NewServer()
@@ -62,26 +89,59 @@ func BuildGRPCServer(pool *db.Pool) *grpc.Server {
 	return s
 }
 
-// Run blocks until ctx is canceled or the listener errors. On shutdown
-// signal it performs a graceful gRPC stop.
+// buildOIDCProviders returns the configured OIDC providers; entries with
+// empty client_id are skipped so an unconfigured provider never appears.
+func buildOIDCProviders(cfg *config.Config) map[string]auth.OIDCProvider {
+	out := make(map[string]auth.OIDCProvider)
+	if id := cfg.Auth.OIDC.Google.ClientID; id != "" {
+		out["google"] = auth.NewGoogleProvider(id, cfg.Auth.OIDC.Google.ClientSecret)
+	}
+	if id := cfg.Auth.OIDC.GitHub.ClientID; id != "" {
+		out["github"] = auth.NewGitHubProvider(id, cfg.Auth.OIDC.GitHub.ClientSecret)
+	}
+	return out
+}
+
+func parseTTL(raw string, fallback time.Duration) time.Duration {
+	if raw == "" {
+		return fallback
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil {
+		return fallback
+	}
+	return d
+}
+
+// Run blocks until ctx is canceled or either listener errors. On shutdown
+// signal it performs a graceful gRPC stop and HTTP shutdown.
 func (s *Server) Run(ctx context.Context) error {
 	listener, err := net.Listen("tcp", s.cfg.Server.GRPCAddr)
 	if err != nil {
 		return fmt.Errorf("listen %s: %w", s.cfg.Server.GRPCAddr, err)
 	}
 
-	errCh := make(chan error, 1)
+	grpcErr := make(chan error, 1)
+	httpErr := make(chan error, 1)
+
 	go func() {
 		slog.Info("gRPC server listening", "addr", s.cfg.Server.GRPCAddr)
-		errCh <- s.grpc.Serve(listener)
+		grpcErr <- s.grpc.Serve(listener)
+	}()
+	go func() {
+		httpErr <- s.http.Run(ctx)
 	}()
 
 	select {
 	case <-ctx.Done():
 		slog.Info("controller shutting down", "reason", ctx.Err())
 		s.grpc.GracefulStop()
+		<-httpErr
 		return nil
-	case err := <-errCh:
+	case err := <-grpcErr:
 		return fmt.Errorf("gRPC serve: %w", err)
+	case err := <-httpErr:
+		s.grpc.GracefulStop()
+		return fmt.Errorf("HTTP serve: %w", err)
 	}
 }

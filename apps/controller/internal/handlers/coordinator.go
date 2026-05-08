@@ -216,8 +216,8 @@ func (h *CoordinatorHandler) resolveTenant(ctx context.Context, req *bamboov1.Re
 		return t, nil
 	}
 
-	if req.GetBearerToken() != "" {
-		return nil, status.Error(codes.Unimplemented, "bearer_token credential not yet supported")
+	if token := req.GetBearerToken(); token != "" {
+		return h.auth.resolveBearerToken(ctx, token)
 	}
 
 	slug := tenantSlugFromMetadata(ctx)

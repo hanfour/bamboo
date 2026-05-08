@@ -5,6 +5,7 @@ package handlers
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -22,24 +23,82 @@ type AuthHandler struct {
 	bamboov1.UnimplementedAuthServiceServer
 
 	tenants *repo.Tenants
+	users   *repo.Users
 	keys    *repo.PreAuthKeys
 	pool    *db.Pool
+
+	// OIDC + session config (set by NewAuthHandlerWithOIDC; nil for tests
+	// that exercise only pre-auth-key paths).
+	oidcBaseURL string
+	sessionSec  []byte
+	sessionTTL  time.Duration
 }
 
 // NewAuthHandler constructs an AuthHandler with required repositories.
+// OIDC fields default to zero values; the pre-auth-key path works without
+// them. Use SetOIDCConfig (or the NewAuthHandlerWithOIDC helper) to wire
+// OIDC.
 func NewAuthHandler(pool *db.Pool) *AuthHandler {
 	return &AuthHandler{
-		tenants: repo.NewTenants(pool),
-		keys:    repo.NewPreAuthKeys(pool),
-		pool:    pool,
+		tenants:    repo.NewTenants(pool),
+		users:      repo.NewUsers(pool),
+		keys:       repo.NewPreAuthKeys(pool),
+		pool:       pool,
+		sessionTTL: 24 * time.Hour,
 	}
 }
 
-// CreatePreAuthKey issues a new pre-auth key for the calling tenant.
+// SetOIDCConfig wires the OIDC base URL, session signing secret, and TTL.
+// Callers should invoke this before serving traffic if OIDC is enabled.
+func (h *AuthHandler) SetOIDCConfig(baseURL string, secret []byte, ttl time.Duration) {
+	h.oidcBaseURL = baseURL
+	h.sessionSec = secret
+	if ttl > 0 {
+		h.sessionTTL = ttl
+	}
+}
+
+// StartOIDCFlow returns the URL the user should visit to begin login.
+// We host /auth/{provider}/login, which mints a state token and redirects
+// to the upstream provider.
+func (h *AuthHandler) StartOIDCFlow(ctx context.Context, req *bamboov1.StartOIDCFlowRequest) (*bamboov1.StartOIDCFlowResponse, error) {
+	if h.oidcBaseURL == "" {
+		return nil, status.Error(codes.FailedPrecondition, "OIDC not configured")
+	}
+	provider := oidcProviderName(req.GetProvider())
+	if provider == "" {
+		return nil, status.Error(codes.InvalidArgument, "unsupported provider")
+	}
+
+	// Tenant slug is taken from x-tenant-slug metadata for now; a future
+	// API might include it on the request itself.
+	tenantSlug := tenantSlugFromMetadata(ctx)
+	state, err := auth.IssueOIDCState(h.sessionSec, tenantSlug, 10*time.Minute)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "issue state: %v", err)
+	}
+
+	url := fmt.Sprintf("%s/auth/%s/login?tenant=%s&state=%s",
+		h.oidcBaseURL, provider, tenantSlug, state)
+
+	return &bamboov1.StartOIDCFlowResponse{
+		AuthorizationUrl: url,
+		State:            state,
+	}, nil
+}
+
+// CompleteOIDCFlow handles the case where a non-browser client intercepts
+// the provider redirect itself and submits the code over gRPC.
 //
-// Phase 1 simplification: the caller's tenant is read from x-tenant-slug
-// metadata (with the same default-tenant fallback as Coordinator.Register).
-// Real authorization (admin role check) is tracked in Sprint 2 issue #11.
+// The shared completion logic lives in the HTTP handler; for the gRPC
+// path we keep this Unimplemented in Phase 1 to avoid duplicating the
+// exchange code path. Future PRs can wire a shared helper.
+func (h *AuthHandler) CompleteOIDCFlow(_ context.Context, _ *bamboov1.CompleteOIDCFlowRequest) (*bamboov1.CompleteOIDCFlowResponse, error) {
+	return nil, status.Error(codes.Unimplemented,
+		"use the HTTP /auth/{provider}/callback endpoint; gRPC path lands in a follow-up")
+}
+
+// CreatePreAuthKey issues a new pre-auth key for the calling tenant.
 func (h *AuthHandler) CreatePreAuthKey(ctx context.Context, req *bamboov1.CreatePreAuthKeyRequest) (*bamboov1.CreatePreAuthKeyResponse, error) {
 	slug := tenantSlugFromMetadata(ctx)
 	tenant, err := h.tenants.GetOrCreate(ctx, slug, "Default Tenant", "100.64.0.0/24")
@@ -80,7 +139,6 @@ func (h *AuthHandler) CreatePreAuthKey(ctx context.Context, req *bamboov1.Create
 }
 
 // RedeemPreAuthKey validates a presented secret and returns a session.
-// The session payload is a placeholder until OIDC / JWT issuance lands.
 func (h *AuthHandler) RedeemPreAuthKey(ctx context.Context, req *bamboov1.RedeemPreAuthKeyRequest) (*bamboov1.RedeemPreAuthKeyResponse, error) {
 	if req.GetSecret() == "" {
 		return nil, status.Error(codes.InvalidArgument, "secret is required")
@@ -89,18 +147,36 @@ func (h *AuthHandler) RedeemPreAuthKey(ctx context.Context, req *bamboov1.Redeem
 	if err != nil {
 		return nil, err
 	}
-	// TODO(#11): mint a real JWT once OIDC scaffold lands. For now we return
-	// the secret echoed back so callers can integrate end-to-end.
+
+	// Mint a real session JWT now that we have the auth pipeline.
+	if h.sessionSec == nil {
+		return &bamboov1.RedeemPreAuthKeyResponse{
+			Session: &bamboov1.Session{
+				AccessToken: "dev-" + key.ID.String(),
+				TenantId:    key.TenantID.String(),
+			},
+		}, nil
+	}
+
+	// PreAuthKey redemption does not have a per-user identity; we mint a
+	// session bound to the tenant only. UserID is the all-zero UUID to
+	// signal "service / headless" caller.
+	tok, err := auth.IssueSessionToken(h.sessionSec, auth.SessionClaims{
+		TenantID: key.TenantID,
+	}, h.sessionTTL)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "issue session: %v", err)
+	}
 	return &bamboov1.RedeemPreAuthKeyResponse{
 		Session: &bamboov1.Session{
-			AccessToken: "dev-" + key.ID.String(),
+			AccessToken: tok,
 			TenantId:    key.TenantID.String(),
+			ExpiresAt:   timestamppb.New(time.Now().Add(h.sessionTTL)),
 		},
 	}, nil
 }
 
-// ListPreAuthKeys returns the calling tenant's keys. Pagination not yet
-// implemented; returns up to 1000.
+// ListPreAuthKeys returns the calling tenant's keys.
 func (h *AuthHandler) ListPreAuthKeys(ctx context.Context, _ *bamboov1.ListPreAuthKeysRequest) (*bamboov1.ListPreAuthKeysResponse, error) {
 	slug := tenantSlugFromMetadata(ctx)
 	tenant, err := h.tenants.GetBySlug(ctx, slug)
@@ -170,8 +246,35 @@ func (h *AuthHandler) redeemAndReturnKey(ctx context.Context, presentedSecret st
 	return key, nil
 }
 
+// resolveBearerToken validates a session JWT and returns the bound tenant.
+func (h *AuthHandler) resolveBearerToken(ctx context.Context, token string) (*repo.Tenant, error) {
+	if h.sessionSec == nil {
+		return nil, status.Error(codes.Unauthenticated, "session signing not configured")
+	}
+	claims, err := auth.VerifySessionToken(h.sessionSec, token)
+	if err != nil {
+		return nil, status.Error(codes.Unauthenticated, "invalid bearer token")
+	}
+	t, err := h.tenants.GetByID(ctx, claims.TenantID)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "tenant by id: %v", err)
+	}
+	return t, nil
+}
+
+// oidcProviderName maps the proto enum to our internal slug.
+func oidcProviderName(p bamboov1.OIDCProvider) string {
+	switch p {
+	case bamboov1.OIDCProvider_OIDC_PROVIDER_GOOGLE:
+		return "google"
+	case bamboov1.OIDCProvider_OIDC_PROVIDER_GITHUB:
+		return "github"
+	default:
+		return ""
+	}
+}
+
 // toProtoPreAuthKey converts a repo.PreAuthKey to its proto form.
-// The plaintext secret is never included; only the hash-derived metadata.
 func toProtoPreAuthKey(k *repo.PreAuthKey) *bamboov1.PreAuthKey {
 	out := &bamboov1.PreAuthKey{
 		Id:          k.ID.String(),
