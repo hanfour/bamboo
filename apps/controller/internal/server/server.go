@@ -36,28 +36,30 @@ func New(cfg *config.Config, pool *db.Pool) (*Server, error) {
 		return nil, fmt.Errorf("nil pool")
 	}
 
-	bus := events.NewBus()
-	grpcServer := grpc.NewServer()
-	registerHandlers(grpcServer, pool, bus)
-
-	// gRPC reflection lets tools like grpcurl introspect the server.
-	// Useful in dev; consider gating on an env flag for production.
-	reflection.Register(grpcServer)
-
 	return &Server{
 		cfg:  cfg,
 		pool: pool,
-		grpc: grpcServer,
+		grpc: BuildGRPCServer(pool),
 	}, nil
 }
 
-// registerHandlers wires every gRPC service. New services should be added here.
-func registerHandlers(s *grpc.Server, pool *db.Pool, bus *events.Bus) {
+// BuildGRPCServer constructs and returns a fully wired *grpc.Server with
+// every bamboo service registered against pool. Reflection is enabled.
+//
+// Exported so end-to-end tests can mount the same handler graph on an
+// ephemeral listener without duplicating wiring.
+func BuildGRPCServer(pool *db.Pool) *grpc.Server {
+	bus := events.NewBus()
+	s := grpc.NewServer()
+
 	authHandler := handlers.NewAuthHandler(pool)
 	bamboov1.RegisterAuthServiceServer(s, authHandler)
 	bamboov1.RegisterCoordinatorServiceServer(s, handlers.NewCoordinatorHandler(pool, authHandler, bus))
 	bamboov1.RegisterPolicyServiceServer(s, handlers.NewPolicyHandler())
 	bamboov1.RegisterTelemetryServiceServer(s, handlers.NewTelemetryHandler())
+
+	reflection.Register(s)
+	return s
 }
 
 // Run blocks until ctx is canceled or the listener errors. On shutdown
