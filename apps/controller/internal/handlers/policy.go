@@ -169,8 +169,10 @@ func (h *PolicyHandler) EvaluateAccess(ctx context.Context, req *bamboov1.Evalua
 }
 
 // ListRecommendations returns Tier-1 (rule-based) suggestions for the
-// calling tenant. Currently emits unused-rule removals based on the
-// last 30 days of evaluation traces.
+// calling tenant. Phase 1 covers two kinds:
+//   - KIND_REMOVE_UNUSED_RULE     rules with zero hits in the window
+//   - KIND_TIGHTEN_OVERPRIVILEGED rules whose wildcard ports hit only
+//     a small distinct set of ports
 func (h *PolicyHandler) ListRecommendations(ctx context.Context, _ *bamboov1.ListRecommendationsRequest) (*bamboov1.ListRecommendationsResponse, error) {
 	tenant, err := h.resolveTenant(ctx)
 	if err != nil {
@@ -188,12 +190,22 @@ func (h *PolicyHandler) ListRecommendations(ctx context.Context, _ *bamboov1.Lis
 		slog.Warn("clickhouse rule hit query failed; running with empty hits", "err", err)
 		hits = map[string]uint64{}
 	}
-
-	recs := recommend.UnusedRules(parsedPol, hits, since)
-	resp := &bamboov1.ListRecommendationsResponse{
-		Recommendations: make([]*bamboov1.Recommendation, 0, len(recs)),
+	chObs, err := h.traces.RuleObservations(ctx, tenant.ID, since)
+	if err != nil {
+		slog.Warn("clickhouse rule observation query failed", "err", err)
+		chObs = nil
 	}
-	for _, r := range recs {
+	obs := translateObservations(chObs)
+
+	combined := append(
+		recommend.UnusedRules(parsedPol, hits, since),
+		recommend.OverPrivilegedRules(parsedPol, obs, since)...,
+	)
+
+	resp := &bamboov1.ListRecommendationsResponse{
+		Recommendations: make([]*bamboov1.Recommendation, 0, len(combined)),
+	}
+	for _, r := range combined {
 		resp.Recommendations = append(resp.Recommendations, &bamboov1.Recommendation{
 			Id:          r.ID.String(),
 			Kind:        recommendKindToProto(r.Kind),
@@ -207,10 +219,29 @@ func (h *PolicyHandler) ListRecommendations(ctx context.Context, _ *bamboov1.Lis
 	return resp, nil
 }
 
+// translateObservations maps the ClickHouse-side aggregation into the
+// recommend-package shape so the recommender stays driver-agnostic.
+func translateObservations(chObs map[string]*clickhouse.RuleObservation) map[string]*recommend.RuleObservation {
+	if chObs == nil {
+		return nil
+	}
+	out := make(map[string]*recommend.RuleObservation, len(chObs))
+	for id, o := range chObs {
+		out[id] = &recommend.RuleObservation{
+			RuleID:    o.RuleID,
+			Ports:     o.Ports,
+			TotalHits: o.TotalHits,
+		}
+	}
+	return out
+}
+
 func recommendKindToProto(k recommend.Kind) bamboov1.Recommendation_Kind {
 	switch k {
 	case recommend.KindRemoveUnusedRule:
 		return bamboov1.Recommendation_KIND_REMOVE_UNUSED_RULE
+	case recommend.KindTightenOverPrivileged:
+		return bamboov1.Recommendation_KIND_TIGHTEN_OVERPRIVILEGED
 	default:
 		return bamboov1.Recommendation_KIND_UNSPECIFIED
 	}

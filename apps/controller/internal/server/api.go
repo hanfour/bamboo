@@ -173,8 +173,20 @@ func (h *HTTPServer) apiRecommendations(w http.ResponseWriter, r *http.Request, 
 
 	since := time.Now().Add(-30 * 24 * time.Hour)
 	hits, _ := h.traces.RuleHitCounts(r.Context(), tenant.ID, since)
+	chObs, _ := h.traces.RuleObservations(r.Context(), tenant.ID, since)
+	obs := make(map[string]*recommend.RuleObservation, len(chObs))
+	for id, o := range chObs {
+		obs[id] = &recommend.RuleObservation{
+			RuleID:    o.RuleID,
+			Ports:     o.Ports,
+			TotalHits: o.TotalHits,
+		}
+	}
 
-	recs := recommend.UnusedRules(parsed, hits, since)
+	recs := append(
+		recommend.UnusedRules(parsed, hits, since),
+		recommend.OverPrivilegedRules(parsed, obs, since)...,
+	)
 	out := make([]apiRecommendationJSON, 0, len(recs))
 	for _, x := range recs {
 		out = append(out, apiRecommendationJSON{
@@ -241,7 +253,17 @@ func countRecommendations(ctx context.Context, h *HTTPServer, tenant *repo.Tenan
 	}
 	since := time.Now().Add(-30 * 24 * time.Hour)
 	hits, _ := h.traces.RuleHitCounts(ctx, tenant.ID, since)
-	return len(recommend.UnusedRules(parsed, hits, since))
+	chObs, _ := h.traces.RuleObservations(ctx, tenant.ID, since)
+	obs := make(map[string]*recommend.RuleObservation, len(chObs))
+	for id, o := range chObs {
+		obs[id] = &recommend.RuleObservation{
+			RuleID:    o.RuleID,
+			Ports:     o.Ports,
+			TotalHits: o.TotalHits,
+		}
+	}
+	return len(recommend.UnusedRules(parsed, hits, since)) +
+		len(recommend.OverPrivilegedRules(parsed, obs, since))
 }
 
 func writeJSON(w http.ResponseWriter, status int, body any) {
@@ -294,6 +316,8 @@ func kindString(k recommend.Kind) string {
 	switch k {
 	case recommend.KindRemoveUnusedRule:
 		return "REMOVE_UNUSED_RULE"
+	case recommend.KindTightenOverPrivileged:
+		return "TIGHTEN_OVERPRIVILEGED"
 	default:
 		return "UNKNOWN"
 	}

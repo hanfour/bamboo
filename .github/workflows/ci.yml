@@ -82,8 +82,28 @@ jobs:
           --health-interval 5s
           --health-timeout 3s
           --health-retries 10
+      clickhouse:
+        image: clickhouse/clickhouse-server:24.8-alpine
+        env:
+          CLICKHOUSE_DB: bamboo
+          CLICKHOUSE_USER: bamboo
+          CLICKHOUSE_PASSWORD: dev
+        ports:
+          - 9000:9000
+          - 8123:8123
+        # clickhouse-client ships in the image, so the healthcheck does
+        # not depend on busybox-wget's flag set. RBAC management is
+        # left off here (we only need CRUD on a single DB) so first-
+        # boot init stays fast on slower GitHub-hosted runners.
+        options: >-
+          --health-cmd "clickhouse-client --user bamboo --password dev --query 'SELECT 1'"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 30
+          --health-start-period 30s
     env:
       DATABASE_URL_TEST: postgres://bamboo:dev@localhost:5432/bamboo?sslmode=disable
+      CLICKHOUSE_URL_TEST: clickhouse://bamboo:dev@localhost:9000/bamboo
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
