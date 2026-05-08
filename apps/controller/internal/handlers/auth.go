@@ -25,6 +25,7 @@ type AuthHandler struct {
 	tenants *repo.Tenants
 	users   *repo.Users
 	keys    *repo.PreAuthKeys
+	audits  *repo.AuditLogs
 	pool    *db.Pool
 
 	// OIDC + session config (set by NewAuthHandlerWithOIDC; nil for tests
@@ -43,6 +44,7 @@ func NewAuthHandler(pool *db.Pool) *AuthHandler {
 		tenants:    repo.NewTenants(pool),
 		users:      repo.NewUsers(pool),
 		keys:       repo.NewPreAuthKeys(pool),
+		audits:     repo.NewAuditLogs(pool),
 		pool:       pool,
 		sessionTTL: 24 * time.Hour,
 	}
@@ -132,6 +134,20 @@ func (h *AuthHandler) CreatePreAuthKey(ctx context.Context, req *bamboov1.Create
 		return nil, status.Errorf(codes.Internal, "insert key: %v", err)
 	}
 
+	auditLog(ctx, h.audits, &repo.AuditEvent{
+		TenantID:     &tenant.ID,
+		ActorType:    "system",
+		Action:       "preauthkey.create",
+		ResourceType: "pre_auth_key",
+		ResourceID:   &created.ID,
+		Diff: marshalDiff(map[string]any{
+			"description": created.Description,
+			"tags":        created.Tags,
+			"reusable":    created.Reusable,
+			"ephemeral":   created.Ephemeral,
+		}),
+	})
+
 	return &bamboov1.CreatePreAuthKeyResponse{
 		Key:    toProtoPreAuthKey(created),
 		Secret: plaintext,
@@ -207,6 +223,13 @@ func (h *AuthHandler) RevokePreAuthKey(ctx context.Context, req *bamboov1.Revoke
 	if err := h.keys.Revoke(ctx, id); err != nil {
 		return nil, status.Errorf(codes.Internal, "revoke: %v", err)
 	}
+
+	auditLog(ctx, h.audits, &repo.AuditEvent{
+		ActorType:    "system",
+		Action:       "preauthkey.revoke",
+		ResourceType: "pre_auth_key",
+		ResourceID:   &id,
+	})
 	return &bamboov1.RevokePreAuthKeyResponse{}, nil
 }
 
@@ -243,6 +266,14 @@ func (h *AuthHandler) redeemAndReturnKey(ctx context.Context, presentedSecret st
 	if err := h.keys.MarkRedeemed(ctx, key.ID); err != nil {
 		return nil, status.Errorf(codes.Internal, "mark redeemed: %v", err)
 	}
+
+	auditLog(ctx, h.audits, &repo.AuditEvent{
+		TenantID:     &key.TenantID,
+		ActorType:    "system",
+		Action:       "preauthkey.redeem",
+		ResourceType: "pre_auth_key",
+		ResourceID:   &key.ID,
+	})
 	return key, nil
 }
 

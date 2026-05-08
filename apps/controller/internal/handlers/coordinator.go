@@ -26,6 +26,7 @@ type CoordinatorHandler struct {
 	tenants *repo.Tenants
 	users   *repo.Users
 	peers   *repo.Peers
+	audits  *repo.AuditLogs
 	auth    *AuthHandler
 	bus     *events.Bus
 	pool    *db.Pool
@@ -40,6 +41,7 @@ func NewCoordinatorHandler(pool *db.Pool, auth *AuthHandler, bus *events.Bus) *C
 		tenants: repo.NewTenants(pool),
 		users:   repo.NewUsers(pool),
 		peers:   repo.NewPeers(pool),
+		audits:  repo.NewAuditLogs(pool),
 		auth:    auth,
 		bus:     bus,
 		pool:    pool,
@@ -98,6 +100,14 @@ func (h *CoordinatorHandler) Register(ctx context.Context, req *bamboov1.Registe
 		}
 		slog.Info("new peer registered", "peer_id", self.ID, "ip", self.IP, "tenant", tenant.Slug)
 		isNewPeer = true
+		auditLog(ctx, h.audits, &repo.AuditEvent{
+			TenantID:     &tenant.ID,
+			ActorType:    "system",
+			Action:       "peer.register",
+			ResourceType: "peer",
+			ResourceID:   &self.ID,
+			Diff:         marshalDiff(map[string]any{"hostname": self.Hostname, "ip": self.IP, "os": self.OS}),
+		})
 	}
 
 	// Compose response.
