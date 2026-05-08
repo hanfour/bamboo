@@ -53,41 +53,39 @@ netbird/                           bamboo/
 
 ## Step-by-step
 
-### 1. Sandbox clone (read-only, for inspection)
+### 1–2. Sandbox clones (automated)
+
+Run the helper:
 
 ```bash
-mkdir -p ~/scratch/bamboo-fork
-cd ~/scratch/bamboo-fork
-
-git clone https://github.com/netbirdio/netbird.git netbird-upstream
-cd netbird-upstream
-git rev-parse HEAD > ../UPSTREAM_SHA
+./scripts/netbird-prep.sh
 ```
 
-Do not modify this clone. It serves as the reference baseline.
+It creates `~/scratch/bamboo-fork/{netbird-upstream,netbird-working}` and
+records the upstream SHA in `~/scratch/bamboo-fork/UPSTREAM_SHA`. Re-runs
+fetch the latest upstream without destroying state.
 
-### 2. Create a working clone
-
-```bash
-cd ~/scratch/bamboo-fork
-git clone https://github.com/netbirdio/netbird.git netbird-working
-cd netbird-working
-git remote rename origin upstream
-```
+Override the location with `SANDBOX_ROOT=/some/path ./scripts/netbird-prep.sh`.
 
 ### 3. Inventory what to keep / strip
 
-Before copying anything into our monorepo, run this checklist against each
-top-level directory in `netbird/`:
+Run the audit script:
 
-- [ ] **Keep & adapt**: `management/`, `signal/`, `relay/`, `encryption/`,
-      `route/`, `dns/`, `iface/`, `client/internal/`
-- [ ] **Strip / rewrite**: `client/cmd/` (we'll author our own CLI),
-      `client/ui/` (we have our own UI plan), `release_files/`,
-      vendor-specific docs, NetBird-branded marketing assets
-- [ ] **Replace**: `Dockerfile`s (use our `infra/docker-compose.yml` and
-      Helm chart), GitHub Actions (we use our own), `.golangci.yml`
-      (align with our standards)
+```bash
+./scripts/netbird-audit.sh
+```
+
+It reports:
+
+1. The total count of files containing NetBird brand identifiers — useful
+   as a baseline before scrubbing.
+2. Top-level directories present upstream but missing from
+   [the inventory](./netbird-import-inventory.md). Any drift must be
+   resolved (add a row, then commit) before any import lands on `main`.
+
+The inventory document is the source of truth for what we KEEP, STRIP,
+REPLACE, REFERENCE, or DEFER. Update it whenever upstream adds a new
+top-level directory.
 
 ### 4. Bring code into the bamboo monorepo
 

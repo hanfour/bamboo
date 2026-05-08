@@ -5,9 +5,10 @@ to a decision: **KEEP & ADAPT**, **STRIP**, or **REPLACE**. It is the operating
 plan for [Issue #2 — NetBird fork: sandbox clone and inventory](https://github.com/hanfour/bamboo/issues/2).
 
 > **Source baseline**: NetBird default branch at the SHA recorded in
-> `~/scratch/bamboo-fork/UPSTREAM_SHA` after running step 1 of the Fork SOP.
-> This inventory should be re-validated against the actual SHA before
-> import begins; tree may have shifted.
+> `~/scratch/bamboo-fork/UPSTREAM_SHA` after running `scripts/netbird-prep.sh`.
+> This inventory was last reconciled against upstream SHA
+> [`7da94a4956af76f7187733aa488e9d20a0f62202`](https://github.com/netbirdio/netbird/commit/7da94a4956af76f7187733aa488e9d20a0f62202).
+> Re-run `scripts/netbird-audit.sh` before any import to detect drift.
 
 ## Legend
 
@@ -59,6 +60,18 @@ plan for [Issue #2 — NetBird fork: sandbox clone and inventory](https://github
 | `CONTRIBUTING.md`        | STRIP      | —                                             | —                | We have our own. |
 | `SECURITY.md`            | STRIP      | —                                             | —                | We have our own. |
 | `CODE_OF_CONDUCT.md`     | STRIP      | —                                             | —                | We have our own. |
+| `LICENSES/`              | STRIP      | —                                             | —                | We have our own LICENSE-* and LICENSING.md. |
+| `idp/`                   | KEEP       | `apps/controller/internal/idp/`               | AGPLv3           | OIDC provider integrations (dex etc.). Useful for Sprint 2 #11. |
+| `tools/`                 | REFERENCE  | adapt selectively into `tools/`               | Apache 2.0 (clean) | Dev tools; rewrite the bits we use. |
+| `stun/`                  | KEEP       | `apps/relay/internal/stun/`                   | AGPLv3           | STUN server, paired with relay. |
+| `proxy/`                 | STRIP      | —                                             | —                | TCP/HTTP proxy feature; not in Phase 1 scope. |
+| `base62/`                | KEEP       | `pkg/base62/`                                 | AGPLv3 (interim) | Tiny encoding helper. |
+| `sharedsock/`            | KEEP       | `clients/core/internal/sharedsock/`           | AGPLv3 (interim) | Shared raw-socket abstraction (NAT traversal helper). |
+| `upload-server/`         | STRIP      | —                                             | —                | Log / file upload server; not in Phase 1 scope. |
+| `combined/`              | STRIP      | —                                             | —                | Combined-binary build target. We package per-app. |
+| `flow/`                  | DEFER      | `apps/ai/flow/` (Phase 2)                     | AGPLv3 (when adopted) | Flow-log collection; lines up with our AI/anomaly story but Phase 2. |
+| `.githooks/`             | STRIP      | —                                             | —                | We use our own pre-commit / pre-push hooks. |
+| `.devcontainer/`         | STRIP      | —                                             | —                | VS Code devcontainer; we ship our own dev story via `make dev`. |
 
 ---
 
@@ -136,6 +149,10 @@ For every import PR, the description must include:
 - [ ] Which subpackages of `util/` we adopt vs reimplement
 - [ ] Whether to commit the AGPL relay code or rewrite (relay is small enough
       to clean-room — discuss in #4)
+- [ ] Whether `idp/` is worth adopting given we're already building our own
+      auth flow in `apps/controller/internal/auth/` (decide before Sprint 2 #11)
+- [ ] Whether `flow/` becomes the basis of our AI telemetry pipeline
+      ([ADR 0010](../adr/0010-llm-multi-provider-strategy.md)) or is replaced
 
 ## References
 
