@@ -11,48 +11,76 @@ import (
 	"time"
 
 	"github.com/hanfour/bamboo/apps/controller/internal/auth"
+	"github.com/hanfour/bamboo/apps/controller/internal/clickhouse"
 	"github.com/hanfour/bamboo/apps/controller/internal/db"
 	"github.com/hanfour/bamboo/apps/controller/internal/db/repo"
 )
 
-// HTTPServer hosts the OIDC redirect / callback routes that the gRPC
-// surface cannot host (browsers cannot speak gRPC).
+// HTTPServer hosts the OIDC redirect / callback routes plus a thin
+// JSON REST bridge under /api/v1/* that the Web UI consumes. The gRPC
+// surface remains the canonical API; REST is a SSR-friendly read-only
+// projection in Phase 1.
 type HTTPServer struct {
 	addr      string
 	srv       *http.Server
 	providers map[string]auth.OIDCProvider
 	tenants   *repo.Tenants
 	users     *repo.Users
+	peers     *repo.Peers
+	policies  *repo.Policies
+	traces    *clickhouse.Traces
 	secret    []byte
 	baseURL   string
 	ttl       time.Duration
 }
 
-// NewHTTPServer constructs the OIDC HTTP frontend.
-func NewHTTPServer(addr string, pool *db.Pool, providers map[string]auth.OIDCProvider, secret []byte, baseURL string, ttl time.Duration) *HTTPServer {
+// NewHTTPServer constructs the OIDC + REST HTTP frontend. ch may be nil
+// (REST recommendation endpoints degrade gracefully).
+func NewHTTPServer(addr string, pool *db.Pool, providers map[string]auth.OIDCProvider, ch *clickhouse.Conn, secret []byte, baseURL string, ttl time.Duration) *HTTPServer {
 	mux := http.NewServeMux()
 	h := &HTTPServer{
 		addr:      addr,
 		providers: providers,
 		tenants:   repo.NewTenants(pool),
 		users:     repo.NewUsers(pool),
+		peers:     repo.NewPeers(pool),
+		policies:  repo.NewPolicies(pool),
+		traces:    clickhouse.NewTraces(ch),
 		secret:    secret,
 		baseURL:   baseURL,
 		ttl:       ttl,
 	}
 	mux.HandleFunc("/auth/", h.routeAuth)
+	mux.HandleFunc("/api/v1/", h.routeAPI)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	})
 	h.srv = &http.Server{
 		Addr:              addr,
-		Handler:           mux,
+		Handler:           withCORS(mux),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      30 * time.Second,
 	}
 	return h
+}
+
+// withCORS adds permissive CORS for the dev environment so the Next.js
+// app can call the controller from the browser when running outside of
+// SSR. Production should narrow Origin via configuration.
+func withCORS(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Tenant-Slug")
+		w.Header().Set("Access-Control-Max-Age", "300")
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // Run blocks until ctx is canceled or the listener errors.

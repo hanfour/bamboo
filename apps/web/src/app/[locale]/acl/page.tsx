@@ -1,23 +1,54 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import { useTranslations } from 'next-intl';
-import { mockPolicy } from '@/lib/mockData';
+import { fetchPolicy, fetchRecommendations } from '@/lib/api';
 
-export default function AclPage() {
+export default async function AclPage() {
+  const [policy, recommendations] = await Promise.all([
+    fetchPolicy(),
+    fetchRecommendations(),
+  ]);
+  return <Acl policy={policy} recommendations={recommendations} />;
+}
+
+function Acl({
+  policy,
+  recommendations,
+}: {
+  policy: Awaited<ReturnType<typeof fetchPolicy>>;
+  recommendations: Awaited<ReturnType<typeof fetchRecommendations>>;
+}) {
   const t = useTranslations('acl');
+
+  if (!policy.hclSource) {
+    return (
+      <div className="space-y-6">
+        <header>
+          <h1 className="text-2xl font-semibold tracking-tight">{t('title')}</h1>
+        </header>
+        <p className="rounded-lg border border-dashed border-zinc-300 p-8 text-center text-sm text-zinc-500 dark:border-zinc-700 dark:text-zinc-400">
+          {t('empty')}
+        </p>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       <header className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">{t('title')}</h1>
           <p className="text-sm text-zinc-500 dark:text-zinc-400">
-            {t('revision')}:{' '}
-            <span className="font-mono">{mockPolicy.revision}</span>
-            {' · '}
-            {t('lastUpdated')}:{' '}
-            <time dateTime={mockPolicy.updatedAt}>
-              {new Date(mockPolicy.updatedAt).toLocaleString()}
-            </time>
+            {t('revision')}: <span className="font-mono">{policy.revision}</span>
+            {policy.updatedAt && (
+              <>
+                {' · '}
+                {t('lastUpdated')}:{' '}
+                <time dateTime={policy.updatedAt}>
+                  {new Date(policy.updatedAt).toLocaleString()}
+                </time>
+              </>
+            )}
           </p>
         </div>
         <button
@@ -33,7 +64,7 @@ export default function AclPage() {
           {t('viewSource')}
         </h2>
         <pre className="overflow-x-auto rounded-lg border border-zinc-200 bg-zinc-50 p-4 font-mono text-xs leading-relaxed text-zinc-800 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-200">
-          <code>{mockPolicy.hclSource}</code>
+          <code>{policy.hclSource}</code>
         </pre>
       </section>
 
@@ -42,7 +73,7 @@ export default function AclPage() {
           {t('rules')}
         </h2>
         <ul className="space-y-2">
-          {mockPolicy.rules.map((r) => (
+          {policy.rules.map((r) => (
             <li
               key={r.id}
               className="rounded-lg border border-zinc-200 p-4 dark:border-zinc-800"
@@ -84,6 +115,43 @@ export default function AclPage() {
           ))}
         </ul>
       </section>
+
+      {recommendations.length > 0 && (
+        <section className="space-y-3">
+          <h2 className="text-sm font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+            AI recommendations
+          </h2>
+          <ul className="space-y-3">
+            {recommendations.map((r) => (
+              <li
+                key={r.id}
+                className="rounded-lg border border-amber-200 bg-amber-50 p-4 dark:border-amber-900/60 dark:bg-amber-950/30"
+              >
+                <div className="flex flex-wrap items-baseline justify-between gap-2">
+                  <span className="font-medium text-amber-900 dark:text-amber-200">
+                    {r.summary}
+                  </span>
+                  <span className="text-xs font-mono text-amber-700 dark:text-amber-300">
+                    confidence {(r.confidence * 100).toFixed(0)}%
+                  </span>
+                </div>
+                {r.diff && (
+                  <pre className="mt-2 overflow-x-auto rounded bg-white p-2 font-mono text-xs leading-snug text-zinc-800 dark:bg-zinc-900 dark:text-zinc-100">
+                    <code>{r.diff}</code>
+                  </pre>
+                )}
+                {r.evidence?.length > 0 && (
+                  <ul className="mt-2 list-inside list-disc text-xs text-amber-800 dark:text-amber-200">
+                    {r.evidence.map((e, i) => (
+                      <li key={i}>{e}</li>
+                    ))}
+                  </ul>
+                )}
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
     </div>
   );
 }
