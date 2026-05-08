@@ -109,6 +109,19 @@ build: ## Build all binaries into ./bin
 	fi
 	@echo "==> done. binaries in ./bin"
 
+# ----- AI (Python) -----------------------------------------------------------
+
+ai-install: ## Set up apps/ai virtualenv + dev deps
+	@cd apps/ai && python3 -m venv .venv && \
+	  ./.venv/bin/pip install --upgrade pip --quiet && \
+	  ./.venv/bin/pip install -e '.[dev]' --quiet
+
+ai-lint: ## ruff check apps/ai
+	@cd apps/ai && ./.venv/bin/ruff check src tests
+
+ai-test: ## pytest apps/ai
+	@cd apps/ai && ./.venv/bin/pytest
+
 # ----- Web (Next.js) ---------------------------------------------------------
 
 web-install: ## Install Node dependencies for apps/web
