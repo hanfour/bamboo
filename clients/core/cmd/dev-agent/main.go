@@ -8,14 +8,18 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
 	"os"
+	"os/signal"
 	"runtime"
+	"syscall"
 	"time"
 
 	"github.com/hanfour/bamboo/clients/core/internal/client"
+	"github.com/hanfour/bamboo/clients/core/internal/device"
 	"github.com/hanfour/bamboo/clients/core/internal/wg"
 	bamboov1 "github.com/hanfour/bamboo/proto/gen/go/bamboo/v1"
 	"google.golang.org/grpc/metadata"
@@ -27,6 +31,8 @@ func main() {
 	tenantSlug := flag.String("tenant", "default", "tenant slug (sent as x-tenant-slug metadata; ignored if --auth-key is set)")
 	authKey := flag.String("auth-key", "", "pre-auth key secret (bka_..._...); when set, --tenant is ignored")
 	showConfig := flag.Bool("show-config", false, "print the wg-quick config that would be applied and exit")
+	bringUp := flag.Bool("up", false, "bring up a real WireGuard interface after register (Linux only; root required)")
+	iface := flag.String("iface", "bamboo0", "interface name to use with --up")
 	flag.Parse()
 
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, nil)))
@@ -54,8 +60,6 @@ func main() {
 	}
 
 	if *authKey != "" {
-		// Tenant comes from the redeemed pre-auth key; do not send the slug
-		// metadata so the server's tenant resolution uses the credential path.
 		req.Credential = &bamboov1.RegisterRequest_PreAuthKeySecret{
 			PreAuthKeySecret: *authKey,
 		}
@@ -77,14 +81,47 @@ func main() {
 		fmt.Printf("  peer: %s @ %s (%s)\n", p.GetHostname(), p.GetIp(), p.GetId())
 	}
 
+	cfg, err := wg.BuildDeviceConfig(priv, resp)
+	if err != nil {
+		fail("build wireguard config: %v", err)
+	}
+
 	if *showConfig {
-		cfg, err := wg.BuildDeviceConfig(priv, resp)
-		if err != nil {
-			fail("build wireguard config: %v", err)
-		}
 		fmt.Println("\n# --- wg-quick config (would be applied as root) ---")
 		fmt.Println(cfg.WGQuick())
 	}
+
+	if *bringUp {
+		runTunnel(*iface, cfg)
+	}
+}
+
+// runTunnel applies cfg to a real WireGuard interface and blocks until
+// SIGINT/SIGTERM, at which point it tears down. Linux + root only; on
+// other platforms it surfaces ErrUnsupported and exits.
+func runTunnel(iface string, cfg *wg.DeviceConfig) {
+	dev, err := device.New(device.Options{InterfaceName: iface})
+	if err != nil {
+		if errors.Is(err, device.ErrUnsupported) {
+			fail("--up requires Linux; use the platform app on macOS / Windows")
+		}
+		fail("device: %v", err)
+	}
+	defer func() {
+		if err := dev.Close(); err != nil {
+			slog.Warn("device close", "err", err)
+		}
+	}()
+
+	if err := dev.Apply(context.Background(), cfg); err != nil {
+		fail("apply: %v", err)
+	}
+	slog.Info("tunnel up", "iface", iface, "address", cfg.Address.String())
+
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
+	<-stop
+	slog.Info("tearing down tunnel")
 }
 
 func defaultHostname() string {
