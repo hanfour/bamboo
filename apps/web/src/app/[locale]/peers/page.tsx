@@ -2,9 +2,14 @@
 
 import { useTranslations } from 'next-intl';
 import { PeerTable } from '@/components/PeerTable';
-import { mockPeers } from '@/lib/mockData';
+import { fetchPeers } from '@/lib/api';
 
-export default function PeersPage() {
+export default async function PeersPage() {
+  const peers = await fetchPeers();
+  return <Peers peers={peers} />;
+}
+
+function Peers({ peers }: { peers: Awaited<ReturnType<typeof fetchPeers>> }) {
   const t = useTranslations('peers');
   return (
     <div className="space-y-6">
@@ -17,7 +22,7 @@ export default function PeersPage() {
           {t('addPeer')}
         </button>
       </header>
-      <PeerTable peers={mockPeers} />
+      <PeerTable peers={peers} />
     </div>
   );
 }
