@@ -109,6 +109,20 @@ build: ## Build all binaries into ./bin
 	fi
 	@echo "==> done. binaries in ./bin"
 
+# ----- Web (Next.js) ---------------------------------------------------------
+
+web-install: ## Install Node dependencies for apps/web
+	@cd apps/web && npm install --no-audit --no-fund
+
+web-lint: ## Lint apps/web (next lint + tsc --noEmit)
+	@cd apps/web && npm run lint && npm run typecheck
+
+web-build: ## Production build apps/web
+	@cd apps/web && npm run build
+
+web-dev: ## Run the apps/web dev server on http://localhost:3000
+	@cd apps/web && npm run dev
+
 # ----- Protos ----------------------------------------------------------------
 
 proto: ## Lint protos and regenerate code (buf)

@@ -1,0 +1,69 @@
+{
+  "app": {
+    "name": "bamboo",
+    "tagline": "AI 原生零信任網狀網路",
+    "description": "從單一主控台管理你的私有網狀網路。"
+  },
+  "nav": {
+    "dashboard": "總覽",
+    "peers": "節點",
+    "acl": "存取政策",
+    "settings": "設定",
+    "signOut": "登出"
+  },
+  "landing": {
+    "title": "bamboo",
+    "subtitle": "登入以管理你的網路。",
+    "signInWithGoogle": "使用 Google 登入",
+    "signInWithGitHub": "使用 GitHub 登入",
+    "selfHosted": "自架版本請於 CLI 使用 pre-auth key。"
+  },
+  "dashboard": {
+    "title": "總覽",
+    "totalPeers": "節點總數",
+    "online": "在線",
+    "offline": "離線",
+    "policyRevision": "政策版本",
+    "recentActivity": "最近活動",
+    "noActivity": "目前無活動。"
+  },
+  "peers": {
+    "title": "節點",
+    "addPeer": "新增節點",
+    "search": "搜尋主機名稱或標籤",
+    "columns": {
+      "hostname": "主機名稱",
+      "ip": "IP",
+      "tags": "標籤",
+      "os": "作業系統",
+      "status": "狀態",
+      "lastSeen": "最後上線"
+    },
+    "status": {
+      "online": "在線",
+      "offline": "離線",
+      "disabled": "已停用"
+    },
+    "empty": "尚無節點。在機器上執行 bamboo up 即可註冊第一個節點。"
+  },
+  "acl": {
+    "title": "存取政策",
+    "revision": "版本",
+    "lastUpdated": "最後更新",
+    "viewSource": "檢視原始碼",
+    "edit": "編輯",
+    "rules": "規則",
+    "rule": {
+      "action": "動作",
+      "sources": "來源",
+      "destinations": "目的地",
+      "timeWindow": "時段"
+    },
+    "empty": "尚未設定存取政策。新租戶預設允許全部，正式上線前請收緊。"
+  },
+  "common": {
+    "ago": "{value} 前",
+    "never": "從未",
+    "loading": "載入中…"
+  }
+}
