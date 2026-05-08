@@ -3,7 +3,7 @@
 # ----- Tool versions ---------------------------------------------------------
 
 BUF_VERSION             ?= v1.45.0
-GOLANGCI_LINT_VERSION   ?= v1.61.0
+GOLANGCI_LINT_VERSION   ?= v2.0.2
 GOOSE_VERSION           ?= v3.22.1
 PROTOC_GEN_GO_VERSION   ?= v1.34.2
 PROTOC_GEN_GO_GRPC_VERSION ?= v1.5.1
@@ -32,7 +32,7 @@ bootstrap: ## Install required dev toolchain (buf, golangci-lint, goose, protoc 
 	@echo "==> installing buf $(BUF_VERSION)"
 	@go install github.com/bufbuild/buf/cmd/buf@$(BUF_VERSION)
 	@echo "==> installing golangci-lint $(GOLANGCI_LINT_VERSION)"
-	@go install github.com/golangci/golangci-lint/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
+	@go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
 	@echo "==> installing goose $(GOOSE_VERSION)"
 	@go install github.com/pressly/goose/v3/cmd/goose@$(GOOSE_VERSION)
 	@echo "==> installing protoc-gen-go $(PROTOC_GEN_GO_VERSION)"
@@ -76,7 +76,20 @@ fmt: ## gofmt all Go code
 	  (cd $$m && gofmt -w .); \
 	done
 
-verify: lint test ## Combined lint + test (CI gate)
+license-check: ## Verify every hand-written .go file has an SPDX header
+	@bash scripts/check-license-headers.sh
+
+proto-check: ## Verify generated protobuf code is up to date with proto/
+	@command -v buf >/dev/null || { echo "buf not installed; run 'make bootstrap'"; exit 1; }
+	@cd proto && buf generate
+	@if ! git diff --quiet --exit-code -- proto/gen; then \
+	  echo "proto/gen is out of date. Run 'make proto' and commit the result." >&2; \
+	  git --no-pager diff --stat -- proto/gen; \
+	  exit 1; \
+	fi
+	@echo "OK: proto/gen matches proto/ sources."
+
+verify: lint test license-check proto-check ## Combined lint + test + license + proto-drift (CI gate)
 
 # ----- Build -----------------------------------------------------------------
 

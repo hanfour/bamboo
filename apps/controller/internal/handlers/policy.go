@@ -11,6 +11,7 @@ type PolicyHandler struct {
 	bamboov1.UnimplementedPolicyServiceServer
 }
 
+// NewPolicyHandler constructs a fresh PolicyHandler.
 func NewPolicyHandler() *PolicyHandler {
 	return &PolicyHandler{}
 }

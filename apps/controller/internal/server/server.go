@@ -11,6 +11,7 @@ import (
 	"net"
 
 	"github.com/hanfour/bamboo/apps/controller/internal/config"
+	"github.com/hanfour/bamboo/apps/controller/internal/db"
 	"github.com/hanfour/bamboo/apps/controller/internal/handlers"
 	bamboov1 "github.com/hanfour/bamboo/proto/gen/go/bamboo/v1"
 	"google.golang.org/grpc"
@@ -20,18 +21,22 @@ import (
 // Server holds the gRPC server and dependencies.
 type Server struct {
 	cfg  *config.Config
+	pool *db.Pool
 	grpc *grpc.Server
 }
 
 // New constructs a Server with all gRPC services registered.
 // It does not start any listeners; call Run.
-func New(cfg *config.Config) (*Server, error) {
+func New(cfg *config.Config, pool *db.Pool) (*Server, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("nil config")
 	}
+	if pool == nil {
+		return nil, fmt.Errorf("nil pool")
+	}
 
 	grpcServer := grpc.NewServer()
-	registerHandlers(grpcServer)
+	registerHandlers(grpcServer, pool)
 
 	// gRPC reflection lets tools like grpcurl introspect the server.
 	// Useful in dev; consider gating on an env flag for production.
@@ -39,14 +44,15 @@ func New(cfg *config.Config) (*Server, error) {
 
 	return &Server{
 		cfg:  cfg,
+		pool: pool,
 		grpc: grpcServer,
 	}, nil
 }
 
 // registerHandlers wires every gRPC service. New services should be added here.
-func registerHandlers(s *grpc.Server) {
+func registerHandlers(s *grpc.Server, pool *db.Pool) {
 	bamboov1.RegisterAuthServiceServer(s, handlers.NewAuthHandler())
-	bamboov1.RegisterCoordinatorServiceServer(s, handlers.NewCoordinatorHandler())
+	bamboov1.RegisterCoordinatorServiceServer(s, handlers.NewCoordinatorHandler(pool))
 	bamboov1.RegisterPolicyServiceServer(s, handlers.NewPolicyHandler())
 	bamboov1.RegisterTelemetryServiceServer(s, handlers.NewTelemetryHandler())
 }

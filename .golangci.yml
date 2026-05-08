@@ -1,0 +1,54 @@
+version: "2"
+
+run:
+  timeout: 5m
+  tests: true
+
+linters:
+  default: none
+  enable:
+    - errcheck       # detect unchecked errors
+    - gosec          # security audit
+    - govet          # vet checks
+    - ineffassign    # detect ineffective assignments
+    - misspell       # common misspellings
+    - revive         # golint successor
+    - staticcheck    # the famous staticcheck rules
+    - unconvert      # remove unnecessary type conversions
+    - unused         # unused identifiers (replaces deadcode + structcheck + varcheck)
+
+  settings:
+    revive:
+      rules:
+        - name: var-naming
+        - name: package-comments
+          disabled: true   # we'll enforce in PR review, not lint
+        - name: exported
+          arguments: ["disableStutteringCheck"]
+
+    gosec:
+      excludes:
+        - G115   # int conversions; many false positives in scaffold code
+
+  exclusions:
+    rules:
+      # Generated protobuf code — skip everything.
+      - path: "proto/gen/.*"
+        linters:
+          - errcheck
+          - gosec
+          - govet
+          - revive
+          - staticcheck
+          - unused
+
+      # Test files: relax some rules.
+      - path: "_test\\.go$"
+        linters:
+          - errcheck
+          - gosec
+
+formatters:
+  enable:
+    - gofmt
+    - goimports

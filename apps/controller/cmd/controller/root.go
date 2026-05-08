@@ -11,6 +11,7 @@ var rootCmd = &cobra.Command{
 ACL evaluation, and audit log.`,
 }
 
+// Execute runs the root cobra command, which dispatches to subcommands.
 func Execute() {
 	cobra.CheckErr(rootCmd.Execute())
 }
@@ -18,4 +19,5 @@ func Execute() {
 func init() {
 	rootCmd.AddCommand(serveCmd)
 	rootCmd.AddCommand(versionCmd)
+	rootCmd.AddCommand(migrateCmd)
 }

@@ -53,7 +53,8 @@ type ClientCredentials struct {
 
 // Load reads the YAML at path, applies environment overrides, and validates.
 func Load(path string) (*Config, error) {
-	raw, err := os.ReadFile(path)
+	// path is operator-supplied via --config flag; intentional file inclusion.
+	raw, err := os.ReadFile(path) //nolint:gosec // G304: trusted operator input
 	if err != nil {
 		return nil, fmt.Errorf("read config %q: %w", path, err)
 	}

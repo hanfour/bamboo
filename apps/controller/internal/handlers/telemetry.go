@@ -11,6 +11,7 @@ type TelemetryHandler struct {
 	bamboov1.UnimplementedTelemetryServiceServer
 }
 
+// NewTelemetryHandler constructs a fresh TelemetryHandler.
 func NewTelemetryHandler() *TelemetryHandler {
 	return &TelemetryHandler{}
 }

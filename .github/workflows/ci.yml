@@ -5,61 +5,108 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
+env:
+  GO_VERSION: "1.25"
+  GOLANGCI_LINT_VERSION: "v2.0.2"
+  BUF_VERSION: "v1.45.0"
+  PROTOC_GEN_GO_VERSION: "v1.36.11"
+  PROTOC_GEN_GO_GRPC_VERSION: "v1.5.1"
+  GOOSE_VERSION: "v3.27.1"
+
 jobs:
-  go:
-    name: Go
+  license-headers:
+    name: License headers
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash scripts/check-license-headers.sh
+
+  proto:
+    name: Proto lint + drift
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.23'
+          go-version: ${{ env.GO_VERSION }}
           cache: true
-      - name: Verify modules
+      - name: Install buf and protoc plugins
         run: |
-          echo "==> go mod verify (placeholder)"
-      - name: Lint
+          go install github.com/bufbuild/buf/cmd/buf@${{ env.BUF_VERSION }}
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@${{ env.PROTOC_GEN_GO_VERSION }}
+          go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@${{ env.PROTOC_GEN_GO_GRPC_VERSION }}
+      - name: Lint protos
+        working-directory: proto
+        run: buf lint
+      - name: Verify generated code is current
         run: |
-          echo "==> golangci-lint (placeholder)"
-      - name: Test
-        run: |
-          echo "==> go test ./... (placeholder)"
+          cd proto && buf generate
+          if ! git diff --quiet --exit-code -- gen; then
+            echo "::error::proto/gen is out of date. Run 'make proto' and commit." >&2
+            git --no-pager diff -- gen
+            exit 1
+          fi
 
-  web:
-    name: Web
+  lint:
+    name: golangci-lint
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-go@v5
         with:
-          node-version: '20'
-      - name: Install
-        run: echo "==> npm install (placeholder)"
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - name: Install golangci-lint
+        run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@${{ env.GOLANGCI_LINT_VERSION }}
       - name: Lint
-        run: echo "==> eslint / prettier (placeholder)"
-      - name: Test
-        run: echo "==> vitest / jest (placeholder)"
+        run: make lint
 
-  python:
-    name: Python (AI)
+  test:
+    name: Unit + integration tests
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: bamboo
+          POSTGRES_PASSWORD: dev
+          POSTGRES_DB: bamboo
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U bamboo -d bamboo"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      DATABASE_URL_TEST: postgres://bamboo:dev@localhost:5432/bamboo?sslmode=disable
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-go@v5
         with:
-          python-version: '3.12'
-      - name: Lint
-        run: echo "==> ruff (placeholder)"
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - name: Apply migrations
+        run: |
+          go install github.com/pressly/goose/v3/cmd/goose@${{ env.GOOSE_VERSION }}
+          $(go env GOPATH)/bin/goose -dir apps/controller/migrations postgres "$DATABASE_URL_TEST" up
       - name: Test
-        run: echo "==> pytest (placeholder)"
+        run: make test
 
-  license-check:
-    name: License headers
+  build:
+    name: Build binaries
     runs-on: ubuntu-latest
+    needs: [lint, license-headers]
     steps:
       - uses: actions/checkout@v4
-      - name: Verify LICENSE files exist
-        run: |
-          test -f LICENSE-APACHE
-          test -f LICENSE-AGPL
-          test -f LICENSING.md
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - name: Build
+        run: make build
+      - name: Smoke test
+        run: ./bin/controller version

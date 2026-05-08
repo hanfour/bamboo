@@ -10,6 +10,7 @@ import (
 	"syscall"
 
 	"github.com/hanfour/bamboo/apps/controller/internal/config"
+	"github.com/hanfour/bamboo/apps/controller/internal/db"
 	"github.com/hanfour/bamboo/apps/controller/internal/server"
 	"github.com/spf13/cobra"
 )
@@ -38,13 +39,20 @@ func runServe(_ *cobra.Command, _ []string) error {
 		return err
 	}
 
-	srv, err := server.New(cfg)
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+
+	pool, err := db.Open(ctx, cfg.Database.URL)
 	if err != nil {
 		return err
 	}
+	defer pool.Close()
+	slog.Info("postgres connected")
 
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer cancel()
+	srv, err := server.New(cfg, pool)
+	if err != nil {
+		return err
+	}
 
 	slog.Info("controller starting",
 		"version", Version,
