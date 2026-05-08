@@ -1,0 +1,124 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+package repo
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/hanfour/bamboo/apps/controller/internal/db"
+	"github.com/jackc/pgx/v5"
+)
+
+// Policies is the repository for the per-tenant ACL policy and its
+// append-only history.
+type Policies struct {
+	pool *db.Pool
+}
+
+// NewPolicies constructs a Policies repository.
+func NewPolicies(pool *db.Pool) *Policies {
+	return &Policies{pool: pool}
+}
+
+// PolicyRecord is the persisted form of a policy.
+type PolicyRecord struct {
+	TenantID  uuid.UUID
+	Revision  int64
+	HCLSource string
+	UpdatedAt time.Time
+	UpdatedBy *uuid.UUID
+}
+
+// ErrRevisionMismatch is returned by Put when expectedRevision is
+// non-zero and does not match the current revision (optimistic
+// concurrency control).
+var ErrRevisionMismatch = errors.New("policy revision mismatch")
+
+// Get returns the current policy for a tenant. Returns ErrNotFound when
+// no policy has been written yet.
+func (r *Policies) Get(ctx context.Context, tenantID uuid.UUID) (*PolicyRecord, error) {
+	var rec PolicyRecord
+	err := r.pool.QueryRow(ctx, `
+		SELECT tenant_id, revision, hcl_source, updated_at, updated_by
+		FROM acl_policies
+		WHERE tenant_id = $1
+	`, tenantID).Scan(
+		&rec.TenantID, &rec.Revision, &rec.HCLSource, &rec.UpdatedAt, &rec.UpdatedBy,
+	)
+	if err != nil {
+		return nil, asNotFound(err)
+	}
+	return &rec, nil
+}
+
+// Put writes a new policy revision.
+//
+// expectedRevision is optimistic concurrency control: if non-zero, Put
+// returns ErrRevisionMismatch unless it matches the current persisted
+// revision. Pass 0 to disable the check (used for first-write).
+//
+// The current row in acl_policies is upserted with revision incremented
+// by one; the previous revision is appended to acl_policy_history. Both
+// writes happen in the same transaction.
+func (r *Policies) Put(
+	ctx context.Context,
+	tenantID uuid.UUID,
+	hclSource string,
+	updatedBy *uuid.UUID,
+	expectedRevision int64,
+) (*PolicyRecord, error) {
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var currentRev int64
+	err = tx.QueryRow(ctx, `
+		SELECT revision FROM acl_policies WHERE tenant_id = $1 FOR UPDATE
+	`, tenantID).Scan(&currentRev)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		currentRev = 0
+	case err != nil:
+		return nil, fmt.Errorf("read current revision: %w", err)
+	}
+
+	if expectedRevision != 0 && expectedRevision != currentRev {
+		return nil, ErrRevisionMismatch
+	}
+
+	nextRev := currentRev + 1
+	var rec PolicyRecord
+	err = tx.QueryRow(ctx, `
+		INSERT INTO acl_policies (tenant_id, revision, hcl_source, updated_by)
+		VALUES ($1, $2, $3, $4)
+		ON CONFLICT (tenant_id) DO UPDATE SET
+		    revision   = EXCLUDED.revision,
+		    hcl_source = EXCLUDED.hcl_source,
+		    updated_by = EXCLUDED.updated_by,
+		    updated_at = now()
+		RETURNING tenant_id, revision, hcl_source, updated_at, updated_by
+	`, tenantID, nextRev, hclSource, updatedBy).Scan(
+		&rec.TenantID, &rec.Revision, &rec.HCLSource, &rec.UpdatedAt, &rec.UpdatedBy,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("upsert policy: %w", err)
+	}
+
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO acl_policy_history (tenant_id, revision, hcl_source, applied_by)
+		VALUES ($1, $2, $3, $4)
+	`, tenantID, nextRev, hclSource, updatedBy); err != nil {
+		return nil, fmt.Errorf("append history: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("commit: %w", err)
+	}
+	return &rec, nil
+}

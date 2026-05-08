@@ -66,7 +66,7 @@ func buildGRPCWithAuth(pool *db.Pool) (*grpc.Server, *handlers.AuthHandler) {
 	authHandler := handlers.NewAuthHandler(pool)
 	bamboov1.RegisterAuthServiceServer(s, authHandler)
 	bamboov1.RegisterCoordinatorServiceServer(s, handlers.NewCoordinatorHandler(pool, authHandler, bus))
-	bamboov1.RegisterPolicyServiceServer(s, handlers.NewPolicyHandler())
+	bamboov1.RegisterPolicyServiceServer(s, handlers.NewPolicyHandler(pool))
 	bamboov1.RegisterTelemetryServiceServer(s, handlers.NewTelemetryHandler())
 	reflection.Register(s)
 
@@ -82,7 +82,7 @@ func BuildGRPCServer(pool *db.Pool) *grpc.Server {
 	authHandler := handlers.NewAuthHandler(pool)
 	bamboov1.RegisterAuthServiceServer(s, authHandler)
 	bamboov1.RegisterCoordinatorServiceServer(s, handlers.NewCoordinatorHandler(pool, authHandler, bus))
-	bamboov1.RegisterPolicyServiceServer(s, handlers.NewPolicyHandler())
+	bamboov1.RegisterPolicyServiceServer(s, handlers.NewPolicyHandler(pool))
 	bamboov1.RegisterTelemetryServiceServer(s, handlers.NewTelemetryHandler())
 
 	reflection.Register(s)
