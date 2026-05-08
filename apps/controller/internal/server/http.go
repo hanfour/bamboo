@@ -200,6 +200,19 @@ func (h *HTTPServer) handleCallback(w http.ResponseWriter, r *http.Request, prov
 		return
 	}
 
+	// Set the session cookie so the Web UI (or any same-origin browser
+	// caller) sees the token without needing to copy/paste. The CLI
+	// flow continues to read the token from the rendered page below.
+	http.SetCookie(w, &http.Cookie{
+		Name:     SessionCookieName,
+		Value:    token,
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   r.TLS != nil,
+		SameSite: http.SameSiteLaxMode,
+		MaxAge:   int(h.ttl.Seconds()),
+	})
+
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	_, _ = fmt.Fprintf(w, `<!doctype html>
@@ -208,10 +221,15 @@ func (h *HTTPServer) handleCallback(w http.ResponseWriter, r *http.Request, prov
 <style>body{font-family:system-ui;max-width:40rem;margin:3rem auto;padding:1rem}code{background:#f4f4f6;padding:.5rem;display:block;word-break:break-all}</style>
 <h1>Logged in as %s</h1>
 <p>Tenant: <strong>%s</strong></p>
-<p>Bearer token (paste into your client):</p>
+<p>A session cookie has been set; the Web UI will pick it up automatically. The bearer token is also shown below for CLI use:</p>
 <code>%s</code>
 `, htmlEscape(identity.Email), htmlEscape(tenant.Slug), htmlEscape(token))
 }
+
+// SessionCookieName is the cookie name set by the OIDC callback. The
+// REST middleware reads it; the gRPC bearer-token path stays unchanged
+// because gRPC clients pass the token via the Authorization metadata.
+const SessionCookieName = "bamboo_session"
 
 // splitPath splits a URL path into segments without leading or trailing
 // empties. "/auth/google/login" → ["auth","google","login"].

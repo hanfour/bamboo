@@ -7,9 +7,11 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/hanfour/bamboo/apps/controller/internal/auth"
 	"github.com/hanfour/bamboo/apps/controller/internal/db/repo"
 	"github.com/hanfour/bamboo/apps/controller/internal/policy"
 	"github.com/hanfour/bamboo/apps/controller/internal/policy/recommend"
@@ -17,22 +19,32 @@ import (
 
 // routeAPI dispatches /api/v1/* to read-only JSON endpoints.
 //
-// Tenant resolution: header X-Tenant-Slug (default "default"). Phase 1
-// has no AuthN here; production will require a session JWT and the
-// tenant resolves from claims rather than a header.
+// Auth precedence (per ADR 0012, Phase 2 starting state):
+//  1. Authorization: Bearer <jwt>
+//  2. Cookie: bamboo_session=<jwt>
+//  3. X-Tenant-Slug header (dev fallback; tenant only, no user)
+//  4. "default" tenant (dev convenience)
 func (h *HTTPServer) routeAPI(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	tenant, err := h.resolveTenant(r)
+	authn, err := h.authenticate(r)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err)
+		return
+	}
+
+	tenant, err := h.resolveTenant(r, authn)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
 
 	switch r.URL.Path {
+	case "/api/v1/me":
+		h.apiMe(w, r, authn, tenant)
 	case "/api/v1/overview":
 		h.apiOverview(w, r, tenant)
 	case "/api/v1/peers":
@@ -46,14 +58,101 @@ func (h *HTTPServer) routeAPI(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// resolveTenant reads X-Tenant-Slug, defaulting to "default", and
-// auto-creates the tenant on first sight (mirrors the gRPC handlers).
-func (h *HTTPServer) resolveTenant(r *http.Request) (*repo.Tenant, error) {
+// authnContext is what authenticate produces. claims is non-nil when a
+// JWT was successfully validated; otherwise the request is in the
+// dev-fallback path and the caller resolves the tenant via header.
+type authnContext struct {
+	claims *auth.SessionClaims
+}
+
+// authenticate validates a session JWT from the Authorization header
+// (preferred) or the bamboo_session cookie. Returns (nil, nil) when no
+// credentials are present so the caller can fall back to header-based
+// dev mode. Returns an error only when a credential is *present but
+// invalid*.
+func (h *HTTPServer) authenticate(r *http.Request) (*authnContext, error) {
+	if tok := bearerToken(r); tok != "" {
+		claims, err := auth.VerifySessionToken(h.secret, tok)
+		if err != nil {
+			return nil, errors.New("invalid bearer token")
+		}
+		return &authnContext{claims: claims}, nil
+	}
+	if c, err := r.Cookie(SessionCookieName); err == nil && c.Value != "" {
+		claims, err := auth.VerifySessionToken(h.secret, c.Value)
+		if err != nil {
+			return nil, errors.New("invalid session cookie")
+		}
+		return &authnContext{claims: claims}, nil
+	}
+	// No credential — dev fallback path. The caller resolves tenant
+	// from X-Tenant-Slug or "default".
+	return &authnContext{}, nil
+}
+
+func bearerToken(r *http.Request) string {
+	v := r.Header.Get("Authorization")
+	if v == "" {
+		return ""
+	}
+	const prefix = "Bearer "
+	if !strings.HasPrefix(v, prefix) {
+		return ""
+	}
+	return strings.TrimSpace(v[len(prefix):])
+}
+
+// resolveTenant uses the JWT claims when present (production path) and
+// otherwise falls back to the X-Tenant-Slug header (dev path).
+func (h *HTTPServer) resolveTenant(r *http.Request, authn *authnContext) (*repo.Tenant, error) {
+	if authn != nil && authn.claims != nil {
+		return h.tenants.GetByID(r.Context(), authn.claims.TenantID)
+	}
 	slug := r.Header.Get("X-Tenant-Slug")
 	if slug == "" {
 		slug = "default"
 	}
 	return h.tenants.GetOrCreate(r.Context(), slug, "Default Tenant", "100.64.0.0/24")
+}
+
+// apiMeJSON is the wire shape for /api/v1/me.
+type apiMeJSON struct {
+	Authenticated bool       `json:"authenticated"`
+	UserID        string     `json:"userId,omitempty"`
+	Email         string     `json:"email,omitempty"`
+	DisplayName   string     `json:"displayName,omitempty"`
+	OIDCProvider  string     `json:"oidcProvider,omitempty"`
+	IsAdmin       bool       `json:"isAdmin,omitempty"`
+	TenantID      string     `json:"tenantId"`
+	TenantSlug    string     `json:"tenantSlug"`
+	ExpiresAt     *time.Time `json:"expiresAt,omitempty"`
+}
+
+func (h *HTTPServer) apiMe(w http.ResponseWriter, r *http.Request, authn *authnContext, tenant *repo.Tenant) {
+	out := apiMeJSON{
+		Authenticated: authn != nil && authn.claims != nil,
+		TenantID:      tenant.ID.String(),
+		TenantSlug:    tenant.Slug,
+	}
+	if !out.Authenticated {
+		writeJSON(w, http.StatusOK, out)
+		return
+	}
+	user, err := h.users.GetByID(r.Context(), authn.claims.UserID)
+	if err != nil && !errors.Is(err, repo.ErrNotFound) {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if user != nil {
+		out.UserID = user.ID.String()
+		out.Email = user.Email
+		out.DisplayName = user.DisplayName
+		out.OIDCProvider = user.OIDCProvider
+		out.IsAdmin = user.IsAdmin
+	}
+	exp := time.Unix(authn.claims.ExpiresAt, 0)
+	out.ExpiresAt = &exp
+	writeJSON(w, http.StatusOK, out)
 }
 
 // apiPeerJSON is the wire shape for the peers endpoint.
@@ -371,5 +470,6 @@ func kindString(k recommend.Kind) string {
 	}
 }
 
-// _ keeps uuid imported (used elsewhere if api.go grows).
+// _ keeps uuid imported (used elsewhere if api.go grows). Removed once
+// uuid is referenced directly in this file.
 var _ uuid.UUID

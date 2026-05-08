@@ -57,6 +57,25 @@ func (r *Users) UpsertOIDC(ctx context.Context, u *User) (*User, error) {
 	return &out, nil
 }
 
+// GetByID returns a user by primary key. Used by the auth middleware
+// when resolving a session JWT to a concrete user record.
+func (r *Users) GetByID(ctx context.Context, id uuid.UUID) (*User, error) {
+	var u User
+	err := r.pool.QueryRow(ctx, `
+		SELECT id, tenant_id, email, display_name, oidc_provider, oidc_subject, is_admin, created_at, updated_at
+		FROM users
+		WHERE id = $1 AND deleted_at IS NULL
+	`, id).Scan(
+		&u.ID, &u.TenantID, &u.Email, &u.DisplayName,
+		&u.OIDCProvider, &u.OIDCSubject, &u.IsAdmin,
+		&u.CreatedAt, &u.UpdatedAt,
+	)
+	if err != nil {
+		return nil, asNotFound(err)
+	}
+	return &u, nil
+}
+
 // GetByEmail returns a user within the given tenant by email.
 func (r *Users) GetByEmail(ctx context.Context, tenantID uuid.UUID, email string) (*User, error) {
 	var u User
