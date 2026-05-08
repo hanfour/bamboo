@@ -94,3 +94,54 @@ func (t *Traces) RuleHitCounts(ctx context.Context, tenantID uuid.UUID, since ti
 	}
 	return out, rows.Err()
 }
+
+// RuleObservation captures, per matched_rule_id, the histogram of
+// destination ports observed in the action="allow" path. Used by the
+// over-privileged-rule recommender to suggest tightening wildcard
+// destination port specs to the actually-used ports.
+type RuleObservation struct {
+	RuleID    string
+	Ports     map[uint16]uint64
+	TotalHits uint64
+}
+
+// RuleObservations groups allow-action evaluation traces by rule + port.
+// Returns nil-safe empty result when ClickHouse is not configured.
+func (t *Traces) RuleObservations(ctx context.Context, tenantID uuid.UUID, since time.Time) (map[string]*RuleObservation, error) {
+	out := make(map[string]*RuleObservation)
+	if !t.c.IsConfigured() {
+		return out, nil
+	}
+	rows, err := t.c.driver().Query(ctx, `
+		SELECT matched_rule_id, port, count() AS hits
+		FROM evaluation_traces
+		WHERE tenant_id = ?
+		  AND occurred_at >= ?
+		  AND matched_rule_id != ''
+		  AND action = 'allow'
+		GROUP BY matched_rule_id, port
+	`, tenantID, since)
+	if err != nil {
+		return nil, fmt.Errorf("query rule observations: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	for rows.Next() {
+		var (
+			ruleID string
+			port   uint16
+			hits   uint64
+		)
+		if err := rows.Scan(&ruleID, &port, &hits); err != nil {
+			return nil, err
+		}
+		o, ok := out[ruleID]
+		if !ok {
+			o = &RuleObservation{RuleID: ruleID, Ports: map[uint16]uint64{}}
+			out[ruleID] = o
+		}
+		o.Ports[port] = hits
+		o.TotalHits += hits
+	}
+	return out, rows.Err()
+}
