@@ -107,6 +107,10 @@ build: ## Build all binaries into ./bin
 	  echo "==> build bamboo"; \
 	  (cd clients/cli && go build -o ../../bin/bamboo ./cmd/bamboo); \
 	fi
+	@if [ -d apps/relay/cmd/relay ]; then \
+	  echo "==> build relay"; \
+	  (cd apps/relay && go build -o ../../bin/relay ./cmd/relay); \
+	fi
 	@echo "==> done. binaries in ./bin"
 
 # ----- AI (Python) -----------------------------------------------------------
