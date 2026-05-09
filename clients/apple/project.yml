@@ -32,6 +32,18 @@ settings:
     CODE_SIGN_STYLE: Automatic
     DEVELOPMENT_TEAM: "$(BAMBOO_DEVELOPMENT_TEAM)"
 
+# ----- Swift Package dependencies --------------------------------------------
+#
+# WireGuardKit is the Swift wrapper around wireguard-go. We pin to the
+# Mullvad fork because the canonical zx2c4 repository does not expose
+# tagged SPM releases at the time of writing; switch back to canonical
+# once it does. Both sources are MIT-licensed and ABI-compatible.
+
+packages:
+  WireGuardKit:
+    url: https://github.com/mullvad/wireguard-apple
+    from: 1.1.4
+
 # ----- macOS targets ---------------------------------------------------------
 
 targets:
@@ -57,6 +69,7 @@ targets:
     platform: macOS
     sources:
       - path: PacketTunnelProvider-macOS
+      - path: Shared
     info:
       path: PacketTunnelProvider-macOS/Info.plist
     entitlements:
@@ -65,6 +78,9 @@ targets:
       base:
         PRODUCT_NAME: bamboo-tunnel
         PRODUCT_BUNDLE_IDENTIFIER: ${BAMBOO_BUNDLE_ID_PREFIX:-dev.hanfour.bamboo}.app.tunnel
+    dependencies:
+      - package: WireGuardKit
+        product: WireGuardKit
 
 # ----- iOS targets -----------------------------------------------------------
 
@@ -91,6 +107,7 @@ targets:
     platform: iOS
     sources:
       - path: PacketTunnelProvider-iOS
+      - path: Shared
     info:
       path: PacketTunnelProvider-iOS/Info.plist
     entitlements:
@@ -99,3 +116,6 @@ targets:
       base:
         PRODUCT_NAME: bamboo-tunnel
         PRODUCT_BUNDLE_IDENTIFIER: ${BAMBOO_BUNDLE_ID_PREFIX:-dev.hanfour.bamboo}.app.tunnel
+    dependencies:
+      - package: WireGuardKit
+        product: WireGuardKit
