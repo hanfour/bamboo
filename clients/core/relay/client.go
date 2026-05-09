@@ -81,18 +81,18 @@ func Dial(ctx context.Context, relayURL string, selfPubKey [PubKeyLen]byte, toke
 	helloPayload = append(helloPayload, selfPubKey[:]...)
 	helloPayload = append(helloPayload, []byte(token)...)
 	if err := writeFrame(ctx, conn, typeClientHello, helloPayload); err != nil {
-		conn.Close(websocket.StatusInternalError, "")
+		_ = conn.Close(websocket.StatusInternalError, "")
 		return nil, fmt.Errorf("write client_hello: %w", err)
 	}
 
 	// SERVER_HELLO is the synchronous "you're registered" ack.
 	typ, _, err := readFrame(ctx, conn)
 	if err != nil {
-		conn.Close(websocket.StatusInternalError, "")
+		_ = conn.Close(websocket.StatusInternalError, "")
 		return nil, fmt.Errorf("read server_hello: %w", err)
 	}
 	if typ != typeServerHello {
-		conn.Close(websocket.StatusInternalError, "")
+		_ = conn.Close(websocket.StatusInternalError, "")
 		return nil, fmt.Errorf("expected server_hello, got 0x%02x", typ)
 	}
 
