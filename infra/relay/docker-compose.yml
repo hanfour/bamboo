@@ -1,0 +1,43 @@
+# Standalone docker-compose for deploying a single-instance bamboo
+# relay behind a Caddy reverse-proxy that handles TLS via
+# Let's Encrypt. Intended for a $5/mo VPS.
+#
+# Usage:
+#   1. Copy this directory to the VPS: scp -r infra/relay vps:/opt/bamboo-relay
+#   2. ssh into the VPS, cd /opt/bamboo-relay
+#   3. Set environment variables in .env (see .env.example)
+#   4. docker compose up -d
+#
+# Caddy will obtain a TLS certificate the first time it boots; allow
+# port 80 through the firewall during issuance.
+
+services:
+  relay:
+    image: ghcr.io/hanfour/bamboo-relay:latest
+    # build: ../..
+    # dockerfile: infra/relay/Dockerfile
+    restart: unless-stopped
+    environment:
+      BAMBOO_RELAY_SHARED_SECRET: ${BAMBOO_RELAY_SHARED_SECRET}
+    command: ["--addr=:8443", "--dev-plaintext"]
+    # Caddy terminates TLS and forwards to the relay over loopback,
+    # so the relay itself runs plaintext inside the compose network.
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    environment:
+      RELAY_HOSTNAME: ${RELAY_HOSTNAME}
+    depends_on:
+      - relay
+
+volumes:
+  caddy-data:
+  caddy-config:

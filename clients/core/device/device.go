@@ -30,6 +30,11 @@ type Device interface {
 	// installs the WireGuard private/peer set, brings the link up, and
 	// installs routes for each peer's AllowedIPs.
 	Apply(ctx context.Context, cfg *wg.DeviceConfig) error
+	// Stats returns the runtime state of every peer currently in the
+	// configuration. Used by the relay-fallback monitor to detect
+	// peers whose direct endpoint isn't reachable. Returns ErrUnsupported
+	// on platforms where the stats path isn't implemented yet.
+	Stats() ([]PeerStats, error)
 	// Close removes the interface. Subsequent Apply calls fail.
 	Close() error
 }

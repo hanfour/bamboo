@@ -2,15 +2,15 @@
 
 // Command relay is the bamboo DERP-style relay server.
 //
-// Skeleton implementation — see ADR 0013. v0 omits JWT auth (any
-// CLIENT_HELLO is accepted, single tenant) so the focus stays on the
-// frame protocol + routing. JWT auth + tenant isolation land in the
-// next PR alongside the client-side relay integration.
+// See ADR 0013 for the protocol. JWT-authenticated production mode is
+// the default; --dev-no-auth + --dev-plaintext are escape hatches for
+// local development.
 package main
 
 import (
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"errors"
 	"flag"
 	"log/slog"
@@ -22,6 +22,11 @@ import (
 
 	"github.com/hanfour/bamboo/apps/relay/server"
 )
+
+// Version is set at build time via -ldflags "-X main.Version=...".
+// It is reported by /version so deployment tooling can verify which
+// build is running on a given relay.
+var Version = "dev"
 
 func main() {
 	addr := flag.String("addr", ":8443", "TLS listen address")
@@ -50,6 +55,13 @@ func main() {
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
+	})
+	mux.HandleFunc("/version", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"version": Version,
+			"service": "bamboo-relay",
+		})
 	})
 
 	httpSrv := &http.Server{
