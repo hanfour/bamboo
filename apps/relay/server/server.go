@@ -53,6 +53,9 @@ type sessionKey struct {
 	pubkey [PubKeyLen]byte
 }
 
+// New constructs a relay Server. Pass AllowNoAuth=true only in dev;
+// production must supply SharedSecret matching the controller's
+// session_secret so JWTs verify.
 func New(opts Options) *Server {
 	log := opts.Log
 	if log == nil {

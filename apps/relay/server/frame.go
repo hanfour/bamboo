@@ -74,6 +74,9 @@ type PacketFrame struct {
 	Body   []byte
 }
 
+// ParsePacket decodes a TypePacket payload into its (DstKey, Body)
+// pair. Returns an error when the payload is shorter than 32 bytes
+// (no destination key).
 func ParsePacket(payload []byte) (PacketFrame, error) {
 	if len(payload) < PubKeyLen {
 		return PacketFrame{}, errors.New("packet payload missing destination key")
@@ -84,6 +87,8 @@ func ParsePacket(payload []byte) (PacketFrame, error) {
 	return p, nil
 }
 
+// EncodePacket builds a TypePacket Frame whose payload is the
+// destination key prefix followed by the body bytes.
 func EncodePacket(dst [PubKeyLen]byte, body []byte) Frame {
 	payload := make([]byte, PubKeyLen+len(body))
 	copy(payload[:PubKeyLen], dst[:])
@@ -91,18 +96,20 @@ func EncodePacket(dst [PubKeyLen]byte, body []byte) Frame {
 	return Frame{Type: TypePacket, Payload: payload}
 }
 
-// ParseClientHello extracts the source pubkey + auth token from a
-// CLIENT_HELLO payload. Layout:
+// ClientHello is the decoded form of a CLIENT_HELLO payload. Layout:
 //
 //	[32-byte src pubkey] [auth token bytes]
 //
-// The auth token is opaque to this skeleton — JWT verification lands
-// alongside the JJJJ-followup PR.
+// The auth token is verified by Server.verifyAuth as a JWT signed
+// with the controller's shared secret.
 type ClientHello struct {
 	SrcKey    [PubKeyLen]byte
 	AuthToken string
 }
 
+// ParseClientHello extracts the source pubkey + auth token from a
+// CLIENT_HELLO payload. Returns an error when the payload is shorter
+// than 32 bytes.
 func ParseClientHello(payload []byte) (ClientHello, error) {
 	if len(payload) < PubKeyLen {
 		return ClientHello{}, errors.New("client_hello missing source key")
