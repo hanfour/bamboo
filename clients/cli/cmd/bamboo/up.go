@@ -84,7 +84,7 @@ func runUp(cmd *cobra.Command, _ []string) error {
 		slog.Warn("relay setup failed; continuing without relay", "err", err)
 	}
 	if relayClient != nil {
-		defer relayClient.Close()
+		defer func() { _ = relayClient.Close() }()
 		for i := range cfg.Peers {
 			if cfg.Peers[i].Endpoint == "" {
 				if r, ok := relayProxies[cfg.Peers[i].PublicKey.Base64()]; ok {
@@ -254,7 +254,7 @@ func mintRelayToken(ctx context.Context, peerID, wgPubKey string) (string, error
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		raw, _ := io.ReadAll(resp.Body)
 		return "", fmt.Errorf("relay-token http %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))

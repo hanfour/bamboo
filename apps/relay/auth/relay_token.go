@@ -7,7 +7,8 @@
 //
 // Wire format: <base64url(json claims)>.<base64url(hmac-sha256(claims))>
 // Claims: { tid: <tenant uuid>, pid: <peer uuid>, wg: <pubkey>,
-//           iat: <unix>, exp: <unix> }
+//
+//	iat: <unix>, exp: <unix> }
 package auth
 
 import (
