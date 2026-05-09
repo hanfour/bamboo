@@ -78,6 +78,12 @@ private struct SettingsView: View {
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                 }
+                Section("Relay (optional)") {
+                    TextField("wss://relay.example/relay", text: $connection.relayURL)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .keyboardType(.URL)
+                }
                 Section("Device") {
                     TextField("Hostname", text: $connection.hostname)
                         .textInputAutocapitalization(.never)
