@@ -1,0 +1,51 @@
+# Default values for bamboo-controller. Override in tokyo-dev.yaml,
+# tokyo-prod.yaml, etc.
+
+image:
+  repository: ghcr.io/hanfour/bamboo-controller
+  tag: latest
+  pullPolicy: IfNotPresent
+
+# Number of controller replicas. The controller is mostly stateless
+# (Postgres holds state); 2 is the smallest sane HA configuration.
+replicaCount: 2
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+# AWS account ID + Secrets Manager paths. The controller reads
+# DATABASE_URL / CLICKHOUSE_URL / SESSION_SECRET / OIDC creds at
+# boot via External Secrets (set up separately).
+aws:
+  region: ap-northeast-1
+  accountId: ""
+  # Service account assumes this role (IRSA); the role has
+  # secretsmanager:GetSecretValue on the secret ARNs above.
+  irsaRoleArn: ""
+
+# ALB Ingress
+ingress:
+  enabled: true
+  className: alb
+  host: bamboo.example.com
+  annotations:
+    kubernetes.io/ingress.class: alb
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS":443}]'
+    alb.ingress.kubernetes.io/ssl-redirect: '443'
+
+# Ports the controller listens on inside the pod.
+ports:
+  grpc: 8080
+  http: 8081
+
+# OIDC base URL — must match the public-facing origin (used for OAuth
+# redirect URIs). Override in env values.
+oidc:
+  baseURL: https://bamboo.example.com

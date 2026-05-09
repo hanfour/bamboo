@@ -1,0 +1,10 @@
+# Terraform never wants these in git.
+*.tfstate
+*.tfstate.backup
+*.tfstate.lock.info
+.terraform/
+.terraform.lock.hcl
+
+# Per-environment secrets — checked-in templates are *.example.
+backend.tfvars
+terraform.tfvars

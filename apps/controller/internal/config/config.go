@@ -69,17 +69,27 @@ type ClientCredentials struct {
 	ClientSecret string `yaml:"client_secret"`
 }
 
-// Load reads the YAML at path, applies environment overrides, and validates.
+// Load reads the YAML at path (when non-empty), applies environment
+// overrides, and validates. When path is empty OR the file does not
+// exist, Load skips the file and relies entirely on environment
+// variables — useful for container deploys where every value comes
+// from the orchestrator's secret store.
 func Load(path string) (*Config, error) {
-	// path is operator-supplied via --config flag; intentional file inclusion.
-	raw, err := os.ReadFile(path) //nolint:gosec // G304: trusted operator input
-	if err != nil {
-		return nil, fmt.Errorf("read config %q: %w", path, err)
-	}
-
-	var cfg Config
-	if err := yaml.Unmarshal(raw, &cfg); err != nil {
-		return nil, fmt.Errorf("parse config %q: %w", path, err)
+	cfg := defaultConfig()
+	if path != "" {
+		// path is operator-supplied via --config flag; intentional file inclusion.
+		raw, err := os.ReadFile(path) //nolint:gosec // G304: trusted operator input
+		if err != nil {
+			if !os.IsNotExist(err) {
+				return nil, fmt.Errorf("read config %q: %w", path, err)
+			}
+			// File doesn't exist; fall through to env-only mode. The
+			// validate() call below catches any missing required values.
+		} else {
+			if err := yaml.Unmarshal(raw, &cfg); err != nil {
+				return nil, fmt.Errorf("parse config %q: %w", path, err)
+			}
+		}
 	}
 
 	cfg.applyEnvOverrides()
@@ -89,6 +99,21 @@ func Load(path string) (*Config, error) {
 	}
 
 	return &cfg, nil
+}
+
+// defaultConfig returns a Config pre-populated with safe defaults so
+// the env-only path doesn't have to set values like grpc_addr just
+// to satisfy validation. These mirror config/example.yaml.
+func defaultConfig() Config {
+	return Config{
+		Server: ServerConfig{
+			GRPCAddr: "0.0.0.0:8080",
+			HTTPAddr: "0.0.0.0:8081",
+		},
+		Auth: AuthConfig{
+			SessionTTL: "24h",
+		},
+	}
 }
 
 // applyEnvOverrides lets operators override secrets without committing them.

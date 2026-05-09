@@ -1,0 +1,14 @@
+apiVersion: v2
+name: bamboo-controller
+description: Helm chart for the bamboo control plane
+type: application
+version: 0.1.0
+appVersion: "0.0.1"
+keywords:
+  - bamboo
+  - mesh-vpn
+  - wireguard
+sources:
+  - https://github.com/hanfour/bamboo
+maintainers:
+  - name: hanfour
