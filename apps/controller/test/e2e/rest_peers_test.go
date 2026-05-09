@@ -253,4 +253,3 @@ func readSSEEvent(r io.Reader, name string, d time.Duration) (string, error) {
 		return "", context.DeadlineExceeded
 	}
 }
-
