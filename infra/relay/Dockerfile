@@ -6,16 +6,10 @@
 FROM golang:1.25-alpine AS build
 WORKDIR /src
 
-# Copy the workspace minus what the relay doesn't need. The relay
-# module depends only on apps/relay (and its transitive deps via
-# coder/websocket); the rest of the workspace is unused at runtime.
-COPY go.work go.work.sum ./
+# Relay is its own Go module with no intra-repo dependencies; build
+# it standalone (no go.work context needed). Only coder/websocket
+# is pulled in via go mod download.
 COPY apps/relay ./apps/relay
-COPY apps/controller/go.mod ./apps/controller/go.mod
-COPY clients/cli/go.mod ./clients/cli/go.mod
-COPY clients/core/go.mod ./clients/core/go.mod
-COPY pkg/base62/go.mod ./pkg/base62/go.mod
-COPY proto/go.mod ./proto/go.mod
 
 WORKDIR /src/apps/relay
 RUN CGO_ENABLED=0 go build \
