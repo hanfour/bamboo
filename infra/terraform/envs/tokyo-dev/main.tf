@@ -15,6 +15,10 @@ terraform {
       source  = "hashicorp/random"
       version = "~> 3.6"
     }
+    tls = {
+      source  = "hashicorp/tls"
+      version = "~> 4.0"
+    }
     clickhouse = {
       source  = "ClickHouse/clickhouse"
       version = "~> 1.0"
@@ -102,6 +106,13 @@ module "clickhouse" {
   ip_allowlist = var.operator_ip_cidrs
 }
 
+module "eks" {
+  source             = "../../modules/eks"
+  name               = "tokyo-dev"
+  vpc_id             = module.network.vpc_id
+  private_subnet_ids = module.network.private_subnet_ids
+}
+
 # Outputs surfaced for ops convenience and for downstream modules.
 
 output "vpc_id" {
@@ -130,4 +141,16 @@ output "redis_address" {
 
 output "clickhouse_endpoint_host" {
   value = module.clickhouse.endpoint_host
+}
+
+output "eks_cluster_name" {
+  value = module.eks.cluster_name
+}
+
+output "eks_cluster_endpoint" {
+  value = module.eks.cluster_endpoint
+}
+
+output "eks_oidc_provider_arn" {
+  value = module.eks.oidc_provider_arn
 }
