@@ -8,23 +8,25 @@ runs the actual WireGuard tunnel.
 
 ## Status
 
-Phase-2 scaffolding plus a real WireGuardKit-backed PacketTunnelProvider.
-The Swift sources here compile into:
+End-to-end working on both platforms (modulo signing — see prerequisites
+below). The Swift sources here compile into:
 
-- macOS menu-bar icon + popover with Connect/Disconnect/Quit
-- iOS full-screen layout with Connect/Disconnect
-- Shared `ConnectionViewModel` (still a stub — controller traffic
-  lands in DDDD)
-- `PacketTunnelProvider-{macOS,iOS}` decode a `BambooTunnelConfig`
-  from `NETunnelProviderProtocol.providerConfiguration`, build a
-  WireGuardKit `TunnelConfiguration`, and start a `WireGuardAdapter`
-- Shared `TunnelConfigurationBuilder` keeps the parsing identical
-  across platforms
+- macOS menu-bar icon + popover with Connect / Disconnect / Settings
+- iOS full-screen layout with Connect / Disconnect / Settings sheet
+- Settings: controller URL, tenant slug, optional pre-auth key, hostname
+- `ConnectionViewModel` is wired: on connect it generates (or loads)
+  a Curve25519 keypair from Keychain, calls `/api/v1/peers/register`,
+  hands the response to `TunnelManager.startTunnel`
+- `TunnelManager` owns the single `NETunnelProviderManager` for the
+  bamboo profile, writes a `BambooTunnelConfig` JSON blob into
+  `providerConfiguration`, and starts the system tunnel
+- `PacketTunnelProvider-{macOS,iOS}` decode that config and bring up a
+  WireGuardKit-backed tunnel via `WireGuardAdapter`
 
-What's *not* there yet: the SwiftUI app does not yet write a config
-into providerConfiguration (that lands in DDDD), and the controller
-has no STUN/relay surface so peer endpoints in the config will be
-empty until that ships.
+What's *not* there yet: peer endpoint discovery (no STUN / relay
+surface on the controller yet), so even with two peers registered the
+tunnels can't directly reach each other until that lands. Single-peer
+test (just bringing up your own tunnel address) works end-to-end.
 
 Theme 4 progress is tracked in
 [ADR 0012](../../docs/adr/0012-phase-2-transition.md).
@@ -36,6 +38,9 @@ clients/apple/
   project.yml                                    XcodeGen project specification
   Shared/
     ConnectionViewModel.swift                    cross-platform view model
+    BambooClient.swift                           REST client for /api/v1/*
+    KeychainStore.swift                          Keychain wrapper (private key, session token)
+    TunnelManager.swift                          NETunnelProviderManager driver
     TunnelConfigurationBuilder.swift             JSON config -> WireGuardKit TunnelConfiguration
     BambooTunnelError.swift                      shared error type
   BambooApp-macOS/                               macOS menu-bar app
@@ -119,11 +124,12 @@ talks to the extension through `NEVPNConnection`.
 
 | Capability | macOS | iOS |
 | --- | --- | --- |
-| App shell, Connect/Disconnect UI | ✅ stubbed | ✅ stubbed |
-| App ↔ Extension messaging via `NEVPNConnection` | ⏸ Phase 2 DDDD | ⏸ Phase 2 DDDD |
+| App shell, Connect / Disconnect / Settings UI | ✅ Phase 2 DDDD | ✅ Phase 2 DDDD |
+| App ↔ Extension via `NETunnelProviderManager` | ✅ Phase 2 DDDD | ✅ Phase 2 DDDD |
 | Controller registration via REST bridge | ✅ Phase 2 BBBB | ✅ Phase 2 BBBB |
 | WireGuard tunnel via WireGuardKit | ✅ Phase 2 CCCC | ✅ Phase 2 CCCC |
-| OIDC web flow (ASWebAuthenticationSession) | ⏸ Phase 2 DDDD | ⏸ Phase 2 DDDD |
+| Keychain-backed WG private key persistence | ✅ Phase 2 DDDD | ✅ Phase 2 DDDD |
+| OIDC web flow (ASWebAuthenticationSession) | ⏸ Phase 2 follow-up | ⏸ Phase 2 follow-up |
 | Peer endpoint discovery (STUN / relay) | ⏸ Phase 2 follow-up | ⏸ Phase 2 follow-up |
 | Code-signed installer (.pkg / DMG / TestFlight) | ⏸ Phase 2 EEEE | ⏸ Phase 2 EEEE |
 
