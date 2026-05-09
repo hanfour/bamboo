@@ -90,6 +90,20 @@ public final class ConnectionViewModel: ObservableObject {
             guard let url = URL(string: controllerURL) else {
                 throw ConnectionError.invalidControllerURL
             }
+
+            // Best-effort STUN discovery so other peers in the tenant
+            // learn how to reach us. Failure is logged but does not
+            // block the tunnel — we still get a working self-tunnel
+            // and other peers can dial us once their handshake retries.
+            var discoveredEndpoints: [String] = []
+            do {
+                let endpoint = try await STUNClient.discover()
+                discoveredEndpoints = [endpoint]
+                log.log("stun discovered \(endpoint, privacy: .public)")
+            } catch {
+                log.warning("stun discovery failed: \(String(describing: error), privacy: .public)")
+            }
+
             let client = BambooClient(
                 baseURL: url,
                 bearerToken: keychain.getString(for: BambooKeychainKey.sessionToken),
@@ -101,7 +115,8 @@ public final class ConnectionViewModel: ObservableObject {
                 os: currentOSName(),
                 clientVersion: "0.0.1",
                 preAuthKeySecret: preAuthKey.isEmpty ? nil : preAuthKey,
-                tenantSlug: tenantSlug
+                tenantSlug: tenantSlug,
+                endpoints: discoveredEndpoints.isEmpty ? nil : discoveredEndpoints
             ))
 
             let peers = resp.peers.map { p in
@@ -109,7 +124,7 @@ public final class ConnectionViewModel: ObservableObject {
                     id: p.id,
                     publicKey: p.wireguardPublicKey,
                     allowedIPs: ["\(p.ip)/32"],
-                    endpoint: nil,
+                    endpoint: p.endpoints?.first,
                     persistentKeepalive: 25
                 )
             }
