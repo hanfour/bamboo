@@ -53,6 +53,7 @@ func NewHTTPServer(addr string, pool *db.Pool, providers map[string]auth.OIDCPro
 		ttl:       ttl,
 	}
 	mux.HandleFunc("/auth/", h.routeAuth)
+	mux.HandleFunc("/auth/sign-out", h.handleSignOut)
 	mux.HandleFunc("/api/v1/", h.routeAPI)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -105,6 +106,29 @@ func (h *HTTPServer) Run(ctx context.Context) error {
 	case err := <-errCh:
 		return err
 	}
+}
+
+// handleSignOut clears the bamboo_session cookie. Idempotent; a request
+// with no cookie still receives a 200 + Set-Cookie that invalidates any
+// stale session in the browser. Redirects back to the referrer when
+// the request originated from the Web UI; returns 200 plain text
+// otherwise.
+func (h *HTTPServer) handleSignOut(w http.ResponseWriter, r *http.Request) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     SessionCookieName,
+		Value:    "",
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   r.TLS != nil,
+		SameSite: http.SameSiteLaxMode,
+		MaxAge:   -1,
+	})
+	if ref := r.Referer(); ref != "" {
+		http.Redirect(w, r, ref, http.StatusSeeOther)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte("signed out"))
 }
 
 // routeAuth dispatches `/auth/{provider}/{action}`.

@@ -11,6 +11,11 @@
     "settings": "設定",
     "signOut": "登出"
   },
+  "auth": {
+    "signIn": "登入",
+    "signOut": "登出",
+    "loggedInAs": "已登入：{email}"
+  },
   "landing": {
     "title": "bamboo",
     "subtitle": "登入以管理你的網路。",
