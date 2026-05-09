@@ -1,0 +1,136 @@
+name: Build + publish images
+
+# Push images to ghcr.io on:
+#   - main branch pushes (tagged ":main" + ":<short sha>")
+#   - vX.Y.Z tag pushes (tagged ":vX.Y.Z" + ":latest")
+# Pull requests get a build-only run (no push) so the dockerfile
+# changes still pass CI.
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    paths:
+      - "apps/controller/Dockerfile"
+      - "apps/relay/Dockerfile"
+      - "infra/relay/Dockerfile"
+      - "apps/web/Dockerfile"
+      - "apps/controller/**"
+      - "apps/relay/**"
+      - "apps/web/**"
+      - ".github/workflows/images.yml"
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  controller:
+    name: controller image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute tags
+        id: tags
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/}"
+            echo "tags=ghcr.io/${{ github.repository_owner }}/bamboo-controller:${VERSION},ghcr.io/${{ github.repository_owner }}/bamboo-controller:latest" >> $GITHUB_OUTPUT
+          else
+            echo "tags=ghcr.io/${{ github.repository_owner }}/bamboo-controller:main,ghcr.io/${{ github.repository_owner }}/bamboo-controller:${GITHUB_SHA::7}" >> $GITHUB_OUTPUT
+          fi
+
+      - uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: apps/controller/Dockerfile
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.tags.outputs.tags }}
+          build-args: |
+            VERSION=${{ github.ref_name }}
+            COMMIT=${{ github.sha }}
+            BUILD_DATE=${{ github.event.head_commit.timestamp || github.event.pull_request.updated_at }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  relay:
+    name: relay image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute tags
+        id: tags
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/}"
+            echo "tags=ghcr.io/${{ github.repository_owner }}/bamboo-relay:${VERSION},ghcr.io/${{ github.repository_owner }}/bamboo-relay:latest" >> $GITHUB_OUTPUT
+          else
+            echo "tags=ghcr.io/${{ github.repository_owner }}/bamboo-relay:main,ghcr.io/${{ github.repository_owner }}/bamboo-relay:${GITHUB_SHA::7}" >> $GITHUB_OUTPUT
+          fi
+
+      - uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: infra/relay/Dockerfile
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.tags.outputs.tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  web:
+    name: web image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute tags
+        id: tags
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/}"
+            echo "tags=ghcr.io/${{ github.repository_owner }}/bamboo-web:${VERSION},ghcr.io/${{ github.repository_owner }}/bamboo-web:latest" >> $GITHUB_OUTPUT
+          else
+            echo "tags=ghcr.io/${{ github.repository_owner }}/bamboo-web:main,ghcr.io/${{ github.repository_owner }}/bamboo-web:${GITHUB_SHA::7}" >> $GITHUB_OUTPUT
+          fi
+
+      - uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: apps/web/Dockerfile
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.tags.outputs.tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

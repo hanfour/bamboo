@@ -65,19 +65,25 @@ var migrateStatusCmd = &cobra.Command{
 }
 
 func init() {
-	migrateCmd.PersistentFlags().StringVarP(&migrateConfigPath, "config", "c", "config/example.yaml", "path to YAML config file")
+	migrateCmd.PersistentFlags().StringVarP(&migrateConfigPath, "config", "c", "", "path to YAML config file (optional; defaults to env-var-only when empty)")
 	migrateCmd.AddCommand(migrateUpCmd)
 	migrateCmd.AddCommand(migrateDownCmd)
 	migrateCmd.AddCommand(migrateStatusCmd)
 }
 
 func loadDSN(configPath string) (string, error) {
+	// Migrations only need DATABASE_URL — not session_secret or any
+	// of the other auth machinery validate() insists on. Take the
+	// short-cut and grab it directly from env when present.
+	if v := os.Getenv("DATABASE_URL"); v != "" {
+		return v, nil
+	}
 	cfg, err := config.Load(configPath)
 	if err != nil {
 		return "", err
 	}
 	if cfg.Database.URL == "" {
-		return "", fmt.Errorf("database.url not set")
+		return "", fmt.Errorf("database.url not set (or set DATABASE_URL)")
 	}
 	return cfg.Database.URL, nil
 }

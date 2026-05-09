@@ -1,29 +1,35 @@
 # syntax=docker/dockerfile:1.7
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Multi-stage build for the bamboo controller. Final image is
+# distroless static — ~20 MB compressed, no shell, no libc.
+# Build context must be the repository root (so go.work + every
+# referenced module is visible).
 
-FROM golang:1.23-alpine AS builder
+FROM golang:1.25-alpine AS build
 WORKDIR /src
-COPY go.mod go.sum* ./
-RUN --mount=type=cache,target=/go/pkg/mod \
-    --mount=type=cache,target=/root/.cache/go-build \
-    go mod download
-COPY . .
+
+# Controller is its own Go module; build it standalone (no go.work
+# context needed). The only intra-repo dep is proto, satisfied via
+# the replace directive in apps/controller/go.mod.
+COPY apps/controller ./apps/controller
+COPY proto ./proto
+
+WORKDIR /src/apps/controller
 ARG VERSION=dev
 ARG COMMIT=unknown
 ARG BUILD_DATE=unknown
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 go build \
-      -ldflags "-X main.Version=${VERSION} -X main.Commit=${COMMIT} -X main.BuildDate=${BUILD_DATE}" \
-      -o /out/controller ./cmd/controller
+      -trimpath \
+      -ldflags "-s -w -X main.Version=${VERSION} -X main.Commit=${COMMIT} -X main.BuildDate=${BUILD_DATE}" \
+      -o /out/controller \
+      ./cmd/controller
 
-FROM alpine:3.20
-RUN apk add --no-cache ca-certificates && \
-    adduser -D -u 1000 bamboo && \
-    mkdir -p /etc/bamboo && \
-    chown -R bamboo:bamboo /etc/bamboo
-USER bamboo
-COPY --from=builder /out/controller /usr/local/bin/controller
-COPY --chown=bamboo:bamboo config/example.yaml /etc/bamboo/config.yaml
+FROM gcr.io/distroless/static-debian12:nonroot
+COPY --from=build /out/controller /controller
 EXPOSE 8080 8081
-ENTRYPOINT ["/usr/local/bin/controller"]
-CMD ["serve", "--config=/etc/bamboo/config.yaml"]
+USER nonroot
+ENTRYPOINT ["/controller"]
+CMD ["serve"]

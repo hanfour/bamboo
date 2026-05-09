@@ -1,0 +1,15 @@
+# Copy to terraform.tfvars (gitignored) and fill in.
+
+domain = "bamboo.example.com"
+
+# ClickHouse Cloud credentials. Create them under
+# Settings -> API Keys at https://clickhouse.cloud
+clickhouse_organization_id = "00000000-0000-0000-0000-000000000000"
+clickhouse_token_key       = "..."
+clickhouse_token_secret    = "..."
+
+# CIDRs allowed to reach ClickHouse Cloud. Add your office IP +
+# (after the NAT GW exists) the EIP allocated by the network module.
+operator_ip_cidrs = [
+  # "203.0.113.5/32",
+]

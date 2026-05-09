@@ -201,3 +201,18 @@ clean: ## Remove build artifacts
 	@rm -rf bin/ dist/
 	@find . -name "*.exe" -not -path "./node_modules/*" -delete 2>/dev/null || true
 	@echo "==> cleaned"
+
+# ----- Local end-to-end stack ------------------------------------------------
+
+local-up: ## Bring up the full local stack (postgres + clickhouse + controller + web + relay)
+	@docker compose -f infra/local/docker-compose.yml up -d --wait
+	@echo "==> stack up; run 'make local-bootstrap' next"
+
+local-down: ## Tear down the local stack and delete volumes
+	@docker compose -f infra/local/docker-compose.yml down -v
+
+local-logs: ## Follow logs for every service in the local stack
+	@docker compose -f infra/local/docker-compose.yml logs -f
+
+local-bootstrap: ## Run migrations + mint a default preauth-key for the local stack
+	@./infra/local/bootstrap.sh
