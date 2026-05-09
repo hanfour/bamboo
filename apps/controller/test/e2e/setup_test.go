@@ -12,12 +12,17 @@ import (
 	"encoding/base64"
 	"fmt"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/hanfour/bamboo/apps/controller/internal/auth"
 	"github.com/hanfour/bamboo/apps/controller/internal/db"
+	"github.com/hanfour/bamboo/apps/controller/internal/events"
+	"github.com/hanfour/bamboo/apps/controller/internal/handlers"
 	"github.com/hanfour/bamboo/apps/controller/internal/server"
 	bamboov1 "github.com/hanfour/bamboo/proto/gen/go/bamboo/v1"
 	"google.golang.org/grpc"
@@ -26,7 +31,9 @@ import (
 )
 
 // fixture bundles a running gRPC server and the connection details tests
-// need to drive it.
+// need to drive it. The HTTP fixture (httpURL) is wired against the same
+// CoordinatorHandler so /api/v1/peers/* and the SSE stream share state
+// with the gRPC handlers.
 type fixture struct {
 	addr       string
 	pool       *db.Pool
@@ -35,6 +42,8 @@ type fixture struct {
 	auth       bamboov1.AuthServiceClient
 	coord      bamboov1.CoordinatorServiceClient
 	tenantSlug string // unique per test, prevents cross-test interference
+	httpURL    string // base URL of the in-process HTTP fixture
+	httpSrv    *httptest.Server
 }
 
 // startFixture brings up an in-process controller against a real Postgres
@@ -65,7 +74,7 @@ func startFixture(t *testing.T) *fixture {
 		t.Fatalf("listen: %v", err)
 	}
 
-	grpcSrv := server.BuildGRPCServer(pool)
+	grpcSrv, coord := buildGRPCFixture(pool)
 
 	go func() {
 		_ = grpcSrv.Serve(lis)
@@ -81,6 +90,8 @@ func startFixture(t *testing.T) *fixture {
 		t.Fatalf("dial: %v", err)
 	}
 
+	httpSrv := httptest.NewServer(buildHTTPMux(pool, coord))
+
 	f := &fixture{
 		addr:       lis.Addr().String(),
 		pool:       pool,
@@ -89,10 +100,13 @@ func startFixture(t *testing.T) *fixture {
 		auth:       bamboov1.NewAuthServiceClient(conn),
 		coord:      bamboov1.NewCoordinatorServiceClient(conn),
 		tenantSlug: fmt.Sprintf("e2e-%s", uuid.NewString()[:8]),
+		httpURL:    httpSrv.URL,
+		httpSrv:    httpSrv,
 	}
 
 	t.Cleanup(func() {
 		_ = conn.Close()
+		httpSrv.Close()
 		grpcSrv.GracefulStop()
 		// Best-effort cleanup of rows this test created.
 		cleanupTenant(pool, f.tenantSlug)
@@ -100,6 +114,38 @@ func startFixture(t *testing.T) *fixture {
 	})
 
 	return f
+}
+
+// buildGRPCFixture is a test-only constructor that mirrors what
+// server.New does in production but exposes the CoordinatorHandler so
+// the HTTP fixture can share it.
+func buildGRPCFixture(pool *db.Pool) (*grpc.Server, *handlers.CoordinatorHandler) {
+	bus := events.NewBus()
+	s := grpc.NewServer()
+	authHandler := handlers.NewAuthHandler(pool)
+	coord := handlers.NewCoordinatorHandler(pool, authHandler, bus)
+	bamboov1.RegisterAuthServiceServer(s, authHandler)
+	bamboov1.RegisterCoordinatorServiceServer(s, coord)
+	bamboov1.RegisterPolicyServiceServer(s, handlers.NewPolicyHandler(pool, nil))
+	bamboov1.RegisterTelemetryServiceServer(s, handlers.NewTelemetryHandler(pool, nil))
+	return s, coord
+}
+
+// buildHTTPMux returns the controller's HTTP routes (auth + REST API)
+// wired against the same coordinator handler the gRPC server uses.
+func buildHTTPMux(pool *db.Pool, coord *handlers.CoordinatorHandler) http.Handler {
+	secret := []byte("e2e-secret-with-at-least-32-bytes-padding")
+	httpSrv := server.NewHTTPServer(
+		"127.0.0.1:0",
+		pool,
+		map[string]auth.OIDCProvider{},
+		nil, // no clickhouse in tests
+		secret,
+		"http://127.0.0.1",
+		1*time.Hour,
+		coord,
+	)
+	return httpSrv.Handler()
 }
 
 // outgoingCtx returns a ctx that carries the fixture's tenant slug as gRPC

@@ -47,10 +47,10 @@ func New(cfg *config.Config, pool *db.Pool, ch *clickhouse.Conn) (*Server, error
 	ttl := parseTTL(cfg.Auth.SessionTTL, 24*time.Hour)
 	secret := []byte(cfg.Auth.SessionSecret)
 
-	grpcSrv, authHandler := buildGRPCWithAuth(pool, ch)
+	grpcSrv, authHandler, coordHandler := buildGRPCWithAuth(pool, ch)
 	authHandler.SetOIDCConfig(cfg.Auth.OIDC.BaseURL, secret, ttl)
 
-	httpSrv := NewHTTPServer(cfg.Server.HTTPAddr, pool, providers, ch, secret, cfg.Auth.OIDC.BaseURL, ttl)
+	httpSrv := NewHTTPServer(cfg.Server.HTTPAddr, pool, providers, ch, secret, cfg.Auth.OIDC.BaseURL, ttl, coordHandler)
 
 	return &Server{
 		cfg:  cfg,
@@ -60,21 +60,25 @@ func New(cfg *config.Config, pool *db.Pool, ch *clickhouse.Conn) (*Server, error
 	}, nil
 }
 
-// buildGRPCWithAuth is the production wiring used by Server.New. It returns
-// the underlying AuthHandler so the caller can apply OIDC configuration.
-// Tests use BuildGRPCServer instead, which takes the simpler path.
-func buildGRPCWithAuth(pool *db.Pool, ch *clickhouse.Conn) (*grpc.Server, *handlers.AuthHandler) {
+// buildGRPCWithAuth is the production wiring used by Server.New. It
+// returns the underlying AuthHandler (so the caller can apply OIDC
+// configuration) and the CoordinatorHandler (so the HTTP REST bridge
+// can delegate peer register / heartbeat / watch to the same code path
+// as gRPC). Tests use BuildGRPCServer instead, which takes the simpler
+// path.
+func buildGRPCWithAuth(pool *db.Pool, ch *clickhouse.Conn) (*grpc.Server, *handlers.AuthHandler, *handlers.CoordinatorHandler) {
 	bus := events.NewBus()
 	s := grpc.NewServer()
 
 	authHandler := handlers.NewAuthHandler(pool)
+	coordHandler := handlers.NewCoordinatorHandler(pool, authHandler, bus)
 	bamboov1.RegisterAuthServiceServer(s, authHandler)
-	bamboov1.RegisterCoordinatorServiceServer(s, handlers.NewCoordinatorHandler(pool, authHandler, bus))
+	bamboov1.RegisterCoordinatorServiceServer(s, coordHandler)
 	bamboov1.RegisterPolicyServiceServer(s, handlers.NewPolicyHandler(pool, ch))
 	bamboov1.RegisterTelemetryServiceServer(s, handlers.NewTelemetryHandler(pool, ch))
 	reflection.Register(s)
 
-	return s, authHandler
+	return s, authHandler, coordHandler
 }
 
 // BuildGRPCServer constructs and returns a fully wired *grpc.Server with

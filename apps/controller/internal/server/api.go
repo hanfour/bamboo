@@ -17,14 +17,44 @@ import (
 	"github.com/hanfour/bamboo/apps/controller/internal/policy/recommend"
 )
 
-// routeAPI dispatches /api/v1/* to read-only JSON endpoints.
+// routeAPI dispatches /api/v1/* to JSON endpoints.
 //
 // Auth precedence (per ADR 0012, Phase 2 starting state):
 //  1. Authorization: Bearer <jwt>
 //  2. Cookie: bamboo_session=<jwt>
 //  3. X-Tenant-Slug header (dev fallback; tenant only, no user)
 //  4. "default" tenant (dev convenience)
+//
+// Read endpoints accept GET; the peer-mutation endpoints under
+// /api/v1/peers/{register,heartbeat} accept POST. The
+// /api/v1/peers/watch endpoint is GET (Server-Sent Events stream).
 func (h *HTTPServer) routeAPI(w http.ResponseWriter, r *http.Request) {
+	// Peer mutation + watch endpoints have non-GET methods or stream
+	// responses; route them before the read-only switch below.
+	switch r.URL.Path {
+	case "/api/v1/peers/register":
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		h.apiPeersRegister(w, r)
+		return
+	case "/api/v1/peers/heartbeat":
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		h.apiPeersHeartbeat(w, r)
+		return
+	case "/api/v1/peers/watch":
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		h.apiPeersWatch(w, r)
+		return
+	}
+
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
