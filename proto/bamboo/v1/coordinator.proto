@@ -69,6 +69,10 @@ message RegisterRequest {
   string wireguard_public_key = 4;
   string os = 5;
   string client_version = 6;
+  // STUN-discovered host:port candidates the peer is reachable on.
+  // May be empty on first call; the client typically reports them on
+  // the next Heartbeat once discovery completes.
+  repeated string endpoints = 7;
 }
 
 message RegisterResponse {

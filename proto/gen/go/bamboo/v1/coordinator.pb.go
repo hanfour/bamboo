@@ -240,8 +240,12 @@ type RegisterRequest struct {
 	WireguardPublicKey string                       `protobuf:"bytes,4,opt,name=wireguard_public_key,json=wireguardPublicKey,proto3" json:"wireguard_public_key,omitempty"`
 	Os                 string                       `protobuf:"bytes,5,opt,name=os,proto3" json:"os,omitempty"`
 	ClientVersion      string                       `protobuf:"bytes,6,opt,name=client_version,json=clientVersion,proto3" json:"client_version,omitempty"`
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
+	// STUN-discovered host:port candidates the peer is reachable on.
+	// May be empty on first call; the client typically reports them on
+	// the next Heartbeat once discovery completes.
+	Endpoints     []string `protobuf:"bytes,7,rep,name=endpoints,proto3" json:"endpoints,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *RegisterRequest) Reset() {
@@ -325,6 +329,13 @@ func (x *RegisterRequest) GetClientVersion() string {
 		return x.ClientVersion
 	}
 	return ""
+}
+
+func (x *RegisterRequest) GetEndpoints() []string {
+	if x != nil {
+		return x.Endpoints
+	}
+	return nil
 }
 
 type isRegisterRequest_Credential interface {
@@ -1318,14 +1329,15 @@ const file_bamboo_v1_coordinator_proto_rawDesc = "" +
 	"lastSeenAt\x12\x1c\n" +
 	"\tendpoints\x18\r \x03(\tR\tendpoints\x12\x1f\n" +
 	"\vallowed_ips\x18\x0e \x03(\tR\n" +
-	"allowedIps\"\xfa\x01\n" +
+	"allowedIps\"\x98\x02\n" +
 	"\x0fRegisterRequest\x12#\n" +
 	"\fbearer_token\x18\x01 \x01(\tH\x00R\vbearerToken\x12/\n" +
 	"\x13pre_auth_key_secret\x18\x02 \x01(\tH\x00R\x10preAuthKeySecret\x12\x1a\n" +
 	"\bhostname\x18\x03 \x01(\tR\bhostname\x120\n" +
 	"\x14wireguard_public_key\x18\x04 \x01(\tR\x12wireguardPublicKey\x12\x0e\n" +
 	"\x02os\x18\x05 \x01(\tR\x02os\x12%\n" +
-	"\x0eclient_version\x18\x06 \x01(\tR\rclientVersionB\f\n" +
+	"\x0eclient_version\x18\x06 \x01(\tR\rclientVersion\x12\x1c\n" +
+	"\tendpoints\x18\a \x03(\tR\tendpointsB\f\n" +
 	"\n" +
 	"credential\"\xc4\x01\n" +
 	"\x10RegisterResponse\x12#\n" +
