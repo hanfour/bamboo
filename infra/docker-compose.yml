@@ -41,11 +41,19 @@ services:
   #     DATABASE_URL: postgres://bamboo:dev@postgres:5432/bamboo
   #     REDIS_URL: redis://redis:6379
 
-  # relay:
-  #   build: ../apps/relay
-  #   ports:
-  #     - "443:443"
-  #     - "3478:3478/udp"
+  # Local relay for end-to-end testing on a single host. Production
+  # deploys live in infra/relay/ with a Caddy reverse-proxy + Let's
+  # Encrypt; see docs/deployment/relay-on-vps.md.
+  relay:
+    profiles: ["relay"]
+    build:
+      context: ..
+      dockerfile: infra/relay/Dockerfile
+    ports:
+      - "18443:8443"
+    environment:
+      BAMBOO_RELAY_SHARED_SECRET: this-is-a-development-secret-do-not-use-in-production-pls
+    command: ["--addr=:8443", "--dev-plaintext"]
 
   # web:
   #   build: ../apps/web

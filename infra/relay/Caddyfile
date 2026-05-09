@@ -1,0 +1,9 @@
+# Caddy reverse-proxy for the bamboo relay.
+#
+# {$RELAY_HOSTNAME} is interpolated from the docker-compose env. Caddy
+# automatically obtains and renews a Let's Encrypt certificate for
+# this hostname; no manual cert management.
+
+{$RELAY_HOSTNAME} {
+    reverse_proxy relay:8443
+}

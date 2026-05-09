@@ -73,16 +73,25 @@ func runUp(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("build wireguard config: %w", err)
 	}
 
-	// Optional: route every peer through a relay server. Triggered
-	// by BAMBOO_RELAY_URL env var. Useful for testing on networks
-	// where direct STUN-discovered endpoints don't work (symmetric
-	// NAT, restrictive egress firewalls).
-	relayClient, err := maybeStartRelay(cmd.Context(), resp, priv, cfg)
+	// Optional: open a relay-server session as a *fallback* path.
+	// Triggered by BAMBOO_RELAY_URL env var. The relay is opened
+	// proactively so per-peer proxy ports exist; the monitor below
+	// swaps individual peers from direct to relay when their direct
+	// endpoint stops handshaking. Peers with no direct endpoint at
+	// all start on relay immediately.
+	relayClient, relayProxies, err := maybeOpenRelay(cmd.Context(), resp, priv)
 	if err != nil {
 		slog.Warn("relay setup failed; continuing without relay", "err", err)
 	}
 	if relayClient != nil {
 		defer relayClient.Close()
+		for i := range cfg.Peers {
+			if cfg.Peers[i].Endpoint == "" {
+				if r, ok := relayProxies[cfg.Peers[i].PublicKey.Base64()]; ok {
+					cfg.Peers[i].Endpoint = r
+				}
+			}
+		}
 	}
 
 	dev, err := device.New(device.Options{InterfaceName: flagIface})
@@ -114,6 +123,10 @@ func runUp(cmd *cobra.Command, _ []string) error {
 	defer daemonCancel()
 	go clientsync.RunHeartbeat(daemonCtx, adapter, resp.GetSelf().GetId(), discoverEndpoints)
 	go clientsync.RunWatchPeers(daemonCtx, adapter, dev, priv, cache, resp.GetSelf().GetId())
+	if relayClient != nil {
+		reapply := &deviceReapplier{dev: dev, base: cfg}
+		go clientsync.RunRelayFallback(daemonCtx, dev, reapply, relayProxies, time.Now())
+	}
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
@@ -159,57 +172,60 @@ func discoverEndpoints() []string {
 	return []string{addr.String()}
 }
 
-// maybeStartRelay opens a relay client when BAMBOO_RELAY_URL is set,
-// rewrites every peer's Endpoint in cfg to point at a localhost
-// proxy port, and returns the client (caller closes on exit). When
-// the env var is empty this returns (nil, nil) — the regular STUN
-// path remains in effect.
-func maybeStartRelay(ctx context.Context, resp *bamboov1.RegisterResponse, priv wg.PrivateKey, cfg *wg.DeviceConfig) (*relay.Client, error) {
+// maybeOpenRelay opens a relay client when BAMBOO_RELAY_URL is set
+// and pre-registers every peer so per-peer proxy ports exist. It
+// does NOT rewrite peer endpoints — the caller decides whether to
+// use direct or relay endpoints initially. The fallback monitor
+// (RunRelayFallback) is what swaps individual peers from direct to
+// relay on handshake failure.
+//
+// Returns (nil, nil, nil) when BAMBOO_RELAY_URL is unset.
+func maybeOpenRelay(ctx context.Context, resp *bamboov1.RegisterResponse, priv wg.PrivateKey) (*relay.Client, clientsync.PeerRelayMap, error) {
 	relayURL := os.Getenv("BAMBOO_RELAY_URL")
 	if relayURL == "" {
-		return nil, nil
+		return nil, nil, nil
 	}
 
-	// Mint a relay token from the controller.
 	token, err := mintRelayToken(ctx, resp.GetSelf().GetId(), priv.PublicKey().Base64())
 	if err != nil {
-		return nil, fmt.Errorf("mint relay token: %w", err)
+		return nil, nil, fmt.Errorf("mint relay token: %w", err)
 	}
-
 	selfKey, err := decodePubKey(priv.PublicKey().Base64())
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	// WG listens on flagListenPort (or kernel-picked port if zero).
-	// Phase 2: assume default 51820 if cfg.ListenPort is zero. The
-	// netlink device.go path uses 51820 as default too.
-	wgPort := int(cfg.ListenPort)
-	if wgPort == 0 {
-		wgPort = 51820
-	}
-
-	c, err := relay.Dial(ctx, relayURL, selfKey, token, fmt.Sprintf("127.0.0.1:%d", wgPort))
+	c, err := relay.Dial(ctx, relayURL, selfKey, token, "127.0.0.1:51820")
 	if err != nil {
-		return nil, fmt.Errorf("relay dial: %w", err)
+		return nil, nil, fmt.Errorf("relay dial: %w", err)
 	}
 
-	// Rewrite each peer's Endpoint to point at a localhost proxy
-	// socket on the relay client. WG will send packets there; the
-	// relay client wraps and forwards via WSS.
-	for i := range cfg.Peers {
-		peerKey, err := decodePubKey(cfg.Peers[i].PublicKey.Base64())
+	proxies := make(clientsync.PeerRelayMap, len(resp.GetPeers()))
+	for _, p := range resp.GetPeers() {
+		peerKey, err := decodePubKey(p.GetWireguardPublicKey())
 		if err != nil {
-			return nil, fmt.Errorf("peer %d pubkey: %w", i, err)
+			return nil, nil, fmt.Errorf("peer %s pubkey: %w", p.GetId(), err)
 		}
 		proxyAddr, err := c.AddPeer(peerKey)
 		if err != nil {
-			return nil, fmt.Errorf("relay add peer: %w", err)
+			return nil, nil, fmt.Errorf("relay add peer %s: %w", p.GetId(), err)
 		}
-		cfg.Peers[i].Endpoint = proxyAddr
+		proxies[p.GetWireguardPublicKey()] = proxyAddr
 	}
-	slog.Info("relay enabled", "url", relayURL, "peers", len(cfg.Peers))
-	return c, nil
+	slog.Info("relay opened", "url", relayURL, "peers", len(proxies))
+	return c, proxies, nil
+}
+
+// deviceReapplier wraps the bamboo CLI's device + base config so the
+// generic relay-fallback monitor can re-apply with endpoint overrides.
+type deviceReapplier struct {
+	dev  device.Device
+	base *wg.DeviceConfig
+}
+
+func (r *deviceReapplier) Reapply(ctx context.Context, overrides map[string]string) error {
+	out := clientsync.ApplyEndpointOverrides(r.base, overrides)
+	return r.dev.Apply(ctx, out)
 }
 
 // mintRelayToken calls the controller's POST /api/v1/relay-token
