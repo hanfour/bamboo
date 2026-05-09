@@ -68,7 +68,7 @@ func DiscoverFrom(localUDP, server string, timeout time.Duration) (netip.AddrPor
 	if err != nil {
 		return netip.AddrPort{}, fmt.Errorf("dial %s: %w", server, err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	deadline := time.Now().Add(timeout)
 	if err := conn.SetDeadline(deadline); err != nil {
