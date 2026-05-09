@@ -122,6 +122,38 @@ ai-lint: ## ruff check apps/ai
 ai-test: ## pytest apps/ai
 	@cd apps/ai && ./.venv/bin/pytest
 
+# ----- Apple clients (macOS + iOS) -------------------------------------------
+#
+# These targets only run on macOS with Xcode 15+ and `xcodegen` installed
+# (`brew install xcodegen`). They are deliberately kept off the main
+# `verify` gate because CI does not have macOS runners — but they are
+# the local fast path for the bamboo Apple developers.
+#
+# Required environment:
+#   BAMBOO_DEVELOPMENT_TEAM     Apple Team ID (10-char alphanumeric)
+#   BAMBOO_BUNDLE_ID_PREFIX     Reverse-DNS prefix; default dev.hanfour.bamboo
+
+apple-generate: ## Run xcodegen to materialize clients/apple/bamboo.xcodeproj
+	@command -v xcodegen >/dev/null || { echo "xcodegen not installed; run 'brew install xcodegen'"; exit 1; }
+	@cd clients/apple && xcodegen generate
+	@echo "==> clients/apple/bamboo.xcodeproj"
+
+apple-build-macos: apple-generate ## Build the macOS app + tunnel extension (Debug)
+	@cd clients/apple && xcodebuild \
+	  -project bamboo.xcodeproj \
+	  -scheme BambooApp-macOS \
+	  -destination 'platform=macOS' \
+	  -configuration Debug \
+	  build
+
+apple-build-ios: apple-generate ## Build the iOS app + tunnel extension for the simulator
+	@cd clients/apple && xcodebuild \
+	  -project bamboo.xcodeproj \
+	  -scheme BambooApp-iOS \
+	  -destination 'generic/platform=iOS Simulator' \
+	  -configuration Debug \
+	  build
+
 # ----- Web (Next.js) ---------------------------------------------------------
 
 web-install: ## Install Node dependencies for apps/web
