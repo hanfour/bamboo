@@ -8,18 +8,25 @@ runs the actual WireGuard tunnel.
 
 ## Status
 
-Phase-2 scaffolding. The Swift sources here compile into non-functional
-shells:
+Phase-2 scaffolding plus a real WireGuardKit-backed PacketTunnelProvider.
+The Swift sources here compile into:
 
 - macOS menu-bar icon + popover with Connect/Disconnect/Quit
 - iOS full-screen layout with Connect/Disconnect
-- Shared `ConnectionViewModel` between platforms (Phase 1 stub — no
-  controller traffic yet)
-- Both `PacketTunnelProvider` targets acknowledge start/stop but do not
-  bring up a tunnel
+- Shared `ConnectionViewModel` (still a stub — controller traffic
+  lands in DDDD)
+- `PacketTunnelProvider-{macOS,iOS}` decode a `BambooTunnelConfig`
+  from `NETunnelProviderProtocol.providerConfiguration`, build a
+  WireGuardKit `TunnelConfiguration`, and start a `WireGuardAdapter`
+- Shared `TunnelConfigurationBuilder` keeps the parsing identical
+  across platforms
 
-The remaining work to make this real is tracked under Phase 2 theme 4
-(macOS app real build + signed artifact) in
+What's *not* there yet: the SwiftUI app does not yet write a config
+into providerConfiguration (that lands in DDDD), and the controller
+has no STUN/relay surface so peer endpoints in the config will be
+empty until that ships.
+
+Theme 4 progress is tracked in
 [ADR 0012](../../docs/adr/0012-phase-2-transition.md).
 
 ## Repository layout
@@ -29,6 +36,8 @@ clients/apple/
   project.yml                                    XcodeGen project specification
   Shared/
     ConnectionViewModel.swift                    cross-platform view model
+    TunnelConfigurationBuilder.swift             JSON config -> WireGuardKit TunnelConfiguration
+    BambooTunnelError.swift                      shared error type
   BambooApp-macOS/                               macOS menu-bar app
     BambooApp.swift
     ContentView.swift
@@ -111,10 +120,11 @@ talks to the extension through `NEVPNConnection`.
 | Capability | macOS | iOS |
 | --- | --- | --- |
 | App shell, Connect/Disconnect UI | ✅ stubbed | ✅ stubbed |
-| App ↔ Extension messaging via `NEVPNConnection` | ⏸ next PR | ⏸ next PR |
-| Controller registration via REST bridge | ⏸ Phase 2 BBBB | ⏸ Phase 2 BBBB |
-| WireGuard tunnel via WireGuardKit | ⏸ Phase 2 CCCC | ⏸ Phase 2 CCCC |
+| App ↔ Extension messaging via `NEVPNConnection` | ⏸ Phase 2 DDDD | ⏸ Phase 2 DDDD |
+| Controller registration via REST bridge | ✅ Phase 2 BBBB | ✅ Phase 2 BBBB |
+| WireGuard tunnel via WireGuardKit | ✅ Phase 2 CCCC | ✅ Phase 2 CCCC |
 | OIDC web flow (ASWebAuthenticationSession) | ⏸ Phase 2 DDDD | ⏸ Phase 2 DDDD |
+| Peer endpoint discovery (STUN / relay) | ⏸ Phase 2 follow-up | ⏸ Phase 2 follow-up |
 | Code-signed installer (.pkg / DMG / TestFlight) | ⏸ Phase 2 EEEE | ⏸ Phase 2 EEEE |
 
 ## Risks
