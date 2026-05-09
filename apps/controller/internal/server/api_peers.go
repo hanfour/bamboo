@@ -25,24 +25,26 @@ import (
 
 // peerRegisterRequest mirrors bamboov1.RegisterRequest in JSON form.
 type peerRegisterRequest struct {
-	Hostname           string `json:"hostname"`
-	WireguardPublicKey string `json:"wireguardPublicKey"`
-	OS                 string `json:"os"`
-	ClientVersion      string `json:"clientVersion"`
-	PreAuthKeySecret   string `json:"preAuthKeySecret,omitempty"`
-	TenantSlug         string `json:"tenantSlug,omitempty"`
+	Hostname           string   `json:"hostname"`
+	WireguardPublicKey string   `json:"wireguardPublicKey"`
+	OS                 string   `json:"os"`
+	ClientVersion      string   `json:"clientVersion"`
+	PreAuthKeySecret   string   `json:"preAuthKeySecret,omitempty"`
+	TenantSlug         string   `json:"tenantSlug,omitempty"`
+	Endpoints          []string `json:"endpoints,omitempty"`
 }
 
 // peerJSON is the shape used in the register response and the SSE
 // peer_added / peer_updated events.
 type peerJSON struct {
-	ID                 string `json:"id"`
-	TenantID           string `json:"tenantId"`
-	Hostname           string `json:"hostname"`
-	IP                 string `json:"ip"`
-	WireguardPublicKey string `json:"wireguardPublicKey"`
-	OS                 string `json:"os,omitempty"`
-	ClientVersion      string `json:"clientVersion,omitempty"`
+	ID                 string   `json:"id"`
+	TenantID           string   `json:"tenantId"`
+	Hostname           string   `json:"hostname"`
+	IP                 string   `json:"ip"`
+	WireguardPublicKey string   `json:"wireguardPublicKey"`
+	OS                 string   `json:"os,omitempty"`
+	ClientVersion      string   `json:"clientVersion,omitempty"`
+	Endpoints          []string `json:"endpoints,omitempty"`
 }
 
 type peerRegisterResponse struct {
@@ -82,6 +84,7 @@ func (h *HTTPServer) apiPeersRegister(w http.ResponseWriter, r *http.Request) {
 		WireguardPublicKey: body.WireguardPublicKey,
 		Os:                 body.OS,
 		ClientVersion:      body.ClientVersion,
+		Endpoints:          body.Endpoints,
 	}
 	if body.PreAuthKeySecret != "" {
 		req.Credential = &bamboov1.RegisterRequest_PreAuthKeySecret{
@@ -102,8 +105,9 @@ func (h *HTTPServer) apiPeersRegister(w http.ResponseWriter, r *http.Request) {
 }
 
 type peerHeartbeatRequest struct {
-	PeerID              string `json:"peerId"`
-	KnownPolicyRevision int64  `json:"knownPolicyRevision"`
+	PeerID              string   `json:"peerId"`
+	KnownPolicyRevision int64    `json:"knownPolicyRevision"`
+	Endpoints           []string `json:"endpoints,omitempty"`
 }
 
 type peerHeartbeatResponse struct {
@@ -121,6 +125,7 @@ func (h *HTTPServer) apiPeersHeartbeat(w http.ResponseWriter, r *http.Request) {
 	resp, err := h.coord.Heartbeat(r.Context(), &bamboov1.HeartbeatRequest{
 		PeerId:              body.PeerID,
 		KnownPolicyRevision: body.KnownPolicyRevision,
+		Endpoints:           body.Endpoints,
 	})
 	if err != nil {
 		writeGRPCError(w, err)
@@ -251,6 +256,7 @@ func protoPeerToJSON(p *bamboov1.Peer) peerJSON {
 		WireguardPublicKey: p.GetWireguardPublicKey(),
 		OS:                 p.GetOs(),
 		ClientVersion:      p.GetClientVersion(),
+		Endpoints:          p.GetEndpoints(),
 	}
 }
 

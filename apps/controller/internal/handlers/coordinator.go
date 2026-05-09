@@ -76,6 +76,19 @@ func (h *CoordinatorHandler) Register(ctx context.Context, req *bamboov1.Registe
 	if existing != nil {
 		self = existing
 		slog.Info("re-registration", "peer_id", self.ID, "tenant", tenant.Slug)
+		// Honor endpoints reported on a re-register so a client that
+		// re-registers (e.g. after STUN discovery completes between
+		// boots) gets its endpoints persisted without waiting for the
+		// next heartbeat.
+		if eps := req.GetEndpoints(); len(eps) > 0 {
+			changed, err := h.peers.UpdateEndpoints(ctx, self.ID, eps)
+			if err != nil {
+				return nil, status.Errorf(codes.Internal, "update endpoints: %v", err)
+			}
+			if changed {
+				self.Endpoints = eps
+			}
+		}
 	} else {
 		used, err := h.peers.UsedIPs(ctx, tenant.ID)
 		if err != nil {
@@ -94,6 +107,7 @@ func (h *CoordinatorHandler) Register(ctx context.Context, req *bamboov1.Registe
 			OS:                 req.GetOs(),
 			ClientVersion:      req.GetClientVersion(),
 			Status:             "online",
+			Endpoints:          req.GetEndpoints(),
 		})
 		if err != nil {
 			return nil, status.Errorf(codes.Internal, "peer insert: %v", err)
@@ -161,10 +175,33 @@ func (h *CoordinatorHandler) Heartbeat(ctx context.Context, req *bamboov1.Heartb
 		return nil, status.Error(codes.NotFound, "peer not found")
 	}
 
+	// Apply endpoint updates if the client reported any. When the
+	// endpoint list changes, publish a PeerUpdated to other peers in
+	// the tenant so they can re-build their WireGuard config without
+	// waiting for the next register.
+	endpointsChanged := false
+	if eps := req.GetEndpoints(); eps != nil {
+		changed, err := h.peers.UpdateEndpoints(ctx, peerID, eps)
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "update endpoints: %v", err)
+		}
+		endpointsChanged = changed
+	}
+	if endpointsChanged {
+		updated, err := h.peers.GetByID(ctx, peerID)
+		if err == nil && updated != nil {
+			h.bus.Publish(updated.TenantID, &bamboov1.WatchPeersEvent{
+				Event: &bamboov1.WatchPeersEvent_PeerUpdated{
+					PeerUpdated: &bamboov1.PeerUpdated{Peer: toProtoPeer(updated)},
+				},
+			})
+		}
+	}
+
 	// Phase 1: policy revision is hardcoded to 1 until ACL handlers ship.
 	const currentRev = int64(1)
 	return &bamboov1.HeartbeatResponse{
-		PeersChanged:          false,
+		PeersChanged:          endpointsChanged,
 		PolicyChanged:         req.GetKnownPolicyRevision() != currentRev,
 		CurrentPolicyRevision: currentRev,
 	}, nil
@@ -270,6 +307,7 @@ func toProtoPeer(p *repo.Peer) *bamboov1.Peer {
 		Ip:                 p.IP,
 		Os:                 p.OS,
 		ClientVersion:      p.ClientVersion,
+		Endpoints:          p.Endpoints,
 		CreatedAt:          timestamppb.New(p.CreatedAt),
 	}
 	switch p.Status {

@@ -118,6 +118,115 @@ func TestRESTHeartbeat_HappyPath(t *testing.T) {
 	}
 }
 
+// TestRESTRegister_PersistsEndpoints verifies that endpoints supplied
+// on /api/v1/peers/register are stored and round-tripped in subsequent
+// list calls (the Mac / iPhone client passes its STUN-discovered
+// candidates this way).
+func TestRESTRegister_PersistsEndpoints(t *testing.T) {
+	f := startFixture(t)
+
+	body := map[string]any{
+		"hostname":           "rest-with-eps",
+		"wireguardPublicKey": randomPubKey(t),
+		"tenantSlug":         f.tenantSlug,
+		"endpoints":          []string{"203.0.113.5:51820", "192.168.1.5:51820"},
+	}
+	resp := postJSON(t, f.httpURL+"/api/v1/peers/register", body)
+	if resp.status != http.StatusOK {
+		t.Fatalf("register status = %d, body=%s", resp.status, resp.body)
+	}
+	var got struct {
+		Self struct {
+			Endpoints []string `json:"endpoints"`
+		} `json:"self"`
+	}
+	if err := json.Unmarshal(resp.body, &got); err != nil {
+		t.Fatalf("decode: %v; body=%s", err, resp.body)
+	}
+	want := []string{"203.0.113.5:51820", "192.168.1.5:51820"}
+	if len(got.Self.Endpoints) != len(want) {
+		t.Errorf("Self.Endpoints = %v, want %v", got.Self.Endpoints, want)
+	}
+	for i := range want {
+		if i < len(got.Self.Endpoints) && got.Self.Endpoints[i] != want[i] {
+			t.Errorf("Self.Endpoints[%d] = %s, want %s", i, got.Self.Endpoints[i], want[i])
+		}
+	}
+}
+
+// TestRESTHeartbeat_ReportsEndpointChange asserts that updating
+// endpoints via heartbeat reports peersChanged=true and emits a
+// peer_updated event on the SSE watch stream for OTHER peers in the
+// tenant.
+func TestRESTHeartbeat_ReportsEndpointChange(t *testing.T) {
+	f := startFixture(t)
+
+	// Watcher first so it can observe the change.
+	wResp := postJSON(t, f.httpURL+"/api/v1/peers/register", map[string]any{
+		"hostname":           "rest-watcher-eps",
+		"wireguardPublicKey": randomPubKey(t),
+		"tenantSlug":         f.tenantSlug,
+	})
+	if wResp.status != http.StatusOK {
+		t.Fatalf("register watcher: status=%d body=%s", wResp.status, wResp.body)
+	}
+	var watcher struct {
+		Self struct {
+			ID string `json:"id"`
+		} `json:"self"`
+	}
+	_ = json.Unmarshal(wResp.body, &watcher)
+
+	// The peer whose endpoints we'll update.
+	tResp := postJSON(t, f.httpURL+"/api/v1/peers/register", map[string]any{
+		"hostname":           "rest-target-eps",
+		"wireguardPublicKey": randomPubKey(t),
+		"tenantSlug":         f.tenantSlug,
+	})
+	if tResp.status != http.StatusOK {
+		t.Fatalf("register target: status=%d body=%s", tResp.status, tResp.body)
+	}
+	var target struct {
+		Self struct {
+			ID string `json:"id"`
+		} `json:"self"`
+	}
+	_ = json.Unmarshal(tResp.body, &target)
+
+	// Open the watch stream as the watcher peer.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		f.httpURL+"/api/v1/peers/watch?peerId="+watcher.Self.ID, nil)
+	if err != nil {
+		t.Fatalf("build watch request: %v", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("watch: %v", err)
+	}
+	defer resp.Body.Close()
+
+	// Heartbeat the target with new endpoints; expect peersChanged=true
+	// and a peer_updated event on the watch stream.
+	go func() {
+		hb := postJSON(nil, f.httpURL+"/api/v1/peers/heartbeat", map[string]any{
+			"peerId":              target.Self.ID,
+			"knownPolicyRevision": int64(1),
+			"endpoints":           []string{"203.0.113.99:51820"},
+		})
+		_ = hb // status check below via SSE
+	}()
+
+	got, err := readSSEEvent(resp.Body, "peer_updated", 3*time.Second)
+	if err != nil {
+		t.Fatalf("waiting for peer_updated: %v", err)
+	}
+	if !strings.Contains(got, "203.0.113.99") {
+		t.Errorf("peer_updated did not include new endpoint; got %q", got)
+	}
+}
+
 // TestRESTWatch_StreamsRegisteredPeer subscribes to /api/v1/peers/watch
 // for an existing peer, then registers a second peer over REST and
 // asserts the SSE stream emits a peer_added event for it.

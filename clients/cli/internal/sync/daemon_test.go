@@ -194,7 +194,7 @@ func TestRunHeartbeat_FiresPeriodically(t *testing.T) {
 	// of calls observed within the budget plus a non-zero floor.
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
-	sync.RunHeartbeat(ctx, cli, "self")
+	sync.RunHeartbeat(ctx, cli, "self", nil)
 
 	cli.mu.Lock()
 	defer cli.mu.Unlock()

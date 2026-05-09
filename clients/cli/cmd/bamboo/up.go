@@ -17,6 +17,7 @@ import (
 	clientsync "github.com/hanfour/bamboo/clients/cli/internal/sync"
 	"github.com/hanfour/bamboo/clients/core/client"
 	"github.com/hanfour/bamboo/clients/core/device"
+	"github.com/hanfour/bamboo/clients/core/stun"
 	"github.com/hanfour/bamboo/clients/core/wg"
 	bamboov1 "github.com/hanfour/bamboo/proto/gen/go/bamboo/v1"
 	"github.com/spf13/cobra"
@@ -91,7 +92,7 @@ func runUp(cmd *cobra.Command, _ []string) error {
 
 	daemonCtx, daemonCancel := context.WithCancel(cmd.Context())
 	defer daemonCancel()
-	go clientsync.RunHeartbeat(daemonCtx, adapter, resp.GetSelf().GetId())
+	go clientsync.RunHeartbeat(daemonCtx, adapter, resp.GetSelf().GetId(), discoverEndpoints)
 	go clientsync.RunWatchPeers(daemonCtx, adapter, dev, priv, cache, resp.GetSelf().GetId())
 
 	stop := make(chan os.Signal, 1)
@@ -103,13 +104,15 @@ func runUp(cmd *cobra.Command, _ []string) error {
 
 // registerWithController posts a Register call carrying either the
 // pre-auth-key credential (if --auth-key is set) or the dev tenant-slug
-// metadata fallback.
+// metadata fallback. STUN-discovered endpoints are included so other
+// peers in the tenant can dial this peer directly.
 func registerWithController(ctx context.Context, cli *client.Client, priv wg.PrivateKey) (*bamboov1.RegisterResponse, error) {
 	req := &bamboov1.RegisterRequest{
 		Hostname:           flagHostname,
 		WireguardPublicKey: priv.PublicKey().Base64(),
 		Os:                 runtime.GOOS,
 		ClientVersion:      Version,
+		Endpoints:          discoverEndpoints(),
 	}
 	if flagAuthKey != "" {
 		req.Credential = &bamboov1.RegisterRequest_PreAuthKeySecret{
@@ -119,4 +122,19 @@ func registerWithController(ctx context.Context, cli *client.Client, priv wg.Pri
 		ctx = metadata.AppendToOutgoingContext(ctx, "x-tenant-slug", flagTenant)
 	}
 	return cli.Coordinator.Register(ctx, req)
+}
+
+// discoverEndpoints returns the STUN-observed public host:port for
+// this peer, or nil if discovery fails. We deliberately swallow errors
+// here: failure to discover an endpoint should not block tunnel
+// bring-up. Callers that want stricter behavior can look at the log.
+func discoverEndpoints() []string {
+	addr, err := stun.Discover(stun.DefaultServer, 2*time.Second)
+	if err != nil {
+		slog.Warn("stun discovery failed; tunnel will rely on peer-initiated handshake",
+			"server", stun.DefaultServer, "err", err)
+		return nil
+	}
+	slog.Info("stun discovered endpoint", "endpoint", addr.String())
+	return []string{addr.String()}
 }

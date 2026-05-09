@@ -30,6 +30,7 @@ public struct BambooClient {
         public var clientVersion: String
         public var preAuthKeySecret: String?
         public var tenantSlug: String?
+        public var endpoints: [String]?
     }
 
     public struct PeerJSON: Codable, Equatable {
@@ -40,6 +41,7 @@ public struct BambooClient {
         public var wireguardPublicKey: String
         public var os: String?
         public var clientVersion: String?
+        public var endpoints: [String]?
     }
 
     public struct RegisterResponse: Decodable {
@@ -65,6 +67,7 @@ public struct BambooClient {
     public struct HeartbeatRequest: Encodable {
         public var peerId: String
         public var knownPolicyRevision: Int64
+        public var endpoints: [String]?
     }
 
     public struct HeartbeatResponse: Decodable {

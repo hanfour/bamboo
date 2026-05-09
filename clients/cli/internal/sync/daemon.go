@@ -64,10 +64,17 @@ const (
 	maxBackoff     = 30 * time.Second
 )
 
+// EndpointDiscoverer returns the locally-observed public endpoints
+// for this peer. The CLI plugs in clients/core/stun.Discover here.
+// Returns nil on failure (the daemon tolerates a missing endpoint).
+type EndpointDiscoverer func() []string
+
 // RunHeartbeat periodically pings the controller until ctx is canceled.
-// Errors are logged and tolerated; the loop continues so a transient
-// outage doesn't kill the daemon.
-func RunHeartbeat(ctx context.Context, cli CoordinatorClient, peerID string) {
+// When an endpoint discoverer is supplied it re-discovers on every
+// tick so the controller learns about NAT-mapping changes between
+// reboots / network swaps. Errors are logged and tolerated; the loop
+// continues so a transient outage doesn't kill the daemon.
+func RunHeartbeat(ctx context.Context, cli CoordinatorClient, peerID string, discover EndpointDiscoverer) {
 	t := time.NewTicker(HeartbeatInterval)
 	defer t.Stop()
 	for {
@@ -75,7 +82,11 @@ func RunHeartbeat(ctx context.Context, cli CoordinatorClient, peerID string) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			if _, err := cli.Heartbeat(ctx, &bamboov1.HeartbeatRequest{PeerId: peerID}); err != nil {
+			req := &bamboov1.HeartbeatRequest{PeerId: peerID}
+			if discover != nil {
+				req.Endpoints = discover()
+			}
+			if _, err := cli.Heartbeat(ctx, req); err != nil {
 				slog.Warn("heartbeat failed", "err", err)
 			}
 		}

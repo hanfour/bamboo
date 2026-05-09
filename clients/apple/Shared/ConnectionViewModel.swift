@@ -43,7 +43,17 @@ public final class ConnectionViewModel: ObservableObject {
     private let log = Logger(subsystem: "dev.hanfour.bamboo.app", category: "viewmodel")
     private let keychain: KeychainStore
     private let tunnel = TunnelManager()
+    private let heartbeat = HeartbeatLoop()
+    private let watcher = PeerWatcher()
     private var statusTask: Task<Void, Never>?
+
+    // Latest known tunnel config; held so we can rebuild + reapply
+    // when peer endpoints change without re-running the full register
+    // round-trip.
+    private var lastConfig: BambooTunnelConfig?
+    private var peerCache: [String: BambooClient.PeerJSON] = [:]
+    private var selfPeerID: String?
+    private var selfIPv4: String?
 
     public init(keychain: KeychainStore = KeychainStore()) {
         self.keychain = keychain
@@ -56,7 +66,13 @@ public final class ConnectionViewModel: ObservableObject {
         }
     }
 
-    deinit { statusTask?.cancel() }
+    deinit {
+        statusTask?.cancel()
+        Task { [heartbeat, watcher] in
+            await heartbeat.stop()
+            await watcher.stop()
+        }
+    }
 
     public var statusIcon: String {
         switch status {
@@ -72,6 +88,10 @@ public final class ConnectionViewModel: ObservableObject {
     }
 
     public func disconnect() {
+        Task { [heartbeat, watcher] in
+            await heartbeat.stop()
+            await watcher.stop()
+        }
         tunnel.stopTunnel()
         status = .disconnected
     }
@@ -90,6 +110,20 @@ public final class ConnectionViewModel: ObservableObject {
             guard let url = URL(string: controllerURL) else {
                 throw ConnectionError.invalidControllerURL
             }
+
+            // Best-effort STUN discovery so other peers in the tenant
+            // learn how to reach us. Failure is logged but does not
+            // block the tunnel — we still get a working self-tunnel
+            // and other peers can dial us once their handshake retries.
+            var discoveredEndpoints: [String] = []
+            do {
+                let endpoint = try await STUNClient.discover()
+                discoveredEndpoints = [endpoint]
+                log.log("stun discovered \(endpoint, privacy: .public)")
+            } catch {
+                log.warning("stun discovery failed: \(String(describing: error), privacy: .public)")
+            }
+
             let client = BambooClient(
                 baseURL: url,
                 bearerToken: keychain.getString(for: BambooKeychainKey.sessionToken),
@@ -101,7 +135,8 @@ public final class ConnectionViewModel: ObservableObject {
                 os: currentOSName(),
                 clientVersion: "0.0.1",
                 preAuthKeySecret: preAuthKey.isEmpty ? nil : preAuthKey,
-                tenantSlug: tenantSlug
+                tenantSlug: tenantSlug,
+                endpoints: discoveredEndpoints.isEmpty ? nil : discoveredEndpoints
             ))
 
             let peers = resp.peers.map { p in
@@ -109,7 +144,7 @@ public final class ConnectionViewModel: ObservableObject {
                     id: p.id,
                     publicKey: p.wireguardPublicKey,
                     allowedIPs: ["\(p.ip)/32"],
-                    endpoint: nil,
+                    endpoint: p.endpoints?.first,
                     persistentKeepalive: 25
                 )
             }
@@ -123,10 +158,90 @@ public final class ConnectionViewModel: ObservableObject {
 
             try await tunnel.startTunnel(with: config)
             log.log("connect: register ok ip=\(resp.self_.ip, privacy: .public) peers=\(peers.count)")
+
+            // Cache state so the watch stream can rebuild the config
+            // in-place when peer endpoints change.
+            self.lastConfig = config
+            self.peerCache = Dictionary(uniqueKeysWithValues: resp.peers.map { ($0.id, $0) })
+            self.selfPeerID = resp.self_.id
+            self.selfIPv4 = resp.self_.ip
+
+            // Background loops: heartbeat keeps last_seen fresh +
+            // re-reports our endpoint; watcher streams peer changes
+            // and triggers a tunnel rebuild on endpoint updates.
+            await heartbeat.start(client: client, peerID: resp.self_.id)
+            let bearer = keychain.getString(for: BambooKeychainKey.sessionToken)
+            let slug = self.tenantSlug
+            await watcher.start(baseURL: url, peerID: resp.self_.id,
+                                bearerToken: bearer, tenantSlug: slug) { [weak self] event in
+                Task { @MainActor [weak self] in
+                    self?.handleWatchEvent(event)
+                }
+            }
         } catch {
             log.error("connect: \(String(describing: error), privacy: .public)")
             self.lastError = String(describing: error)
             self.status = .failing
+        }
+    }
+
+    private func handleWatchEvent(_ event: PeerWatcher.Event) {
+        switch event {
+        case .peerAdded(let p):
+            peerCache[p.id] = p
+            log.log("watch: peer_added \(p.hostname, privacy: .public)")
+            rebuildAndReapply()
+        case .peerUpdated(let p):
+            peerCache[p.id] = p
+            log.log("watch: peer_updated \(p.hostname, privacy: .public)")
+            rebuildAndReapply()
+        case .peerRemoved(let id):
+            peerCache.removeValue(forKey: id)
+            log.log("watch: peer_removed \(id, privacy: .public)")
+            rebuildAndReapply()
+        case .policyChanged(let rev):
+            log.log("watch: policy_changed rev=\(rev, privacy: .public)")
+        }
+    }
+
+    /// rebuildAndReapply rebuilds the tunnel config from the cached
+    /// peer set and pushes it to the system VPN. WireGuard sees a
+    /// brief restart (~100ms); future PR can replace this with
+    /// handleAppMessage IPC so the extension reconfigures without
+    /// dropping the tunnel.
+    private func rebuildAndReapply() {
+        guard
+            let selfID = selfPeerID,
+            let selfIPv4 = selfIPv4,
+            let prevConfig = lastConfig
+        else { return }
+
+        let peers = peerCache.values
+            .filter { $0.id != selfID }
+            .map { p in
+                BambooPeerConfig(
+                    id: p.id,
+                    publicKey: p.wireguardPublicKey,
+                    allowedIPs: ["\(p.ip)/32"],
+                    endpoint: p.endpoints?.first,
+                    persistentKeepalive: 25
+                )
+            }
+        let config = BambooTunnelConfig(
+            privateKey: prevConfig.privateKey,
+            address: "\(selfIPv4)/32",
+            dnsServers: prevConfig.dnsServers,
+            mtu: prevConfig.mtu,
+            peers: peers
+        )
+        self.lastConfig = config
+
+        Task {
+            do {
+                try await self.tunnel.startTunnel(with: config)
+            } catch {
+                self.log.warning("rebuild apply: \(String(describing: error), privacy: .public)")
+            }
         }
     }
 
