@@ -46,6 +46,8 @@ clients/apple/
     TunnelManager.swift                          NETunnelProviderManager driver
     TunnelConfigurationBuilder.swift             JSON config -> WireGuardKit TunnelConfiguration
     BambooTunnelError.swift                      shared error type
+    TunnelIPC.swift                              app <-> extension message envelope
+    RelayClient.swift                            relay WSS client + per-peer UDP proxy
   BambooApp-macOS/                               macOS menu-bar app
     BambooApp.swift
     ContentView.swift
@@ -135,7 +137,8 @@ talks to the extension through `NEVPNConnection`.
 | OIDC web flow (ASWebAuthenticationSession) | ⏸ Phase 2 follow-up | ⏸ Phase 2 follow-up |
 | STUN endpoint discovery (`STUNClient`) | ✅ Phase 2 HHHH | ✅ Phase 2 HHHH |
 | Heartbeat + watch loops (peer roaming) | ✅ Phase 2 IIII | ✅ Phase 2 IIII |
-| Peer endpoint relay (TURN-style fallback) | ⏸ Phase 2 follow-up | ⏸ Phase 2 follow-up |
+| Live tunnel reconfig via IPC (no blip) | ✅ Phase 2 KKKK | ✅ Phase 2 KKKK |
+| Relay client (`RelayClient`) for symmetric NAT | ✅ Phase 2 NNNN | ✅ Phase 2 NNNN |
 | Code-signed installer (.pkg / DMG / TestFlight) | ⏸ Phase 2 EEEE | ⏸ Phase 2 EEEE |
 
 ## Risks

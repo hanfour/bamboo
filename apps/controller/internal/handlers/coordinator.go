@@ -26,6 +26,7 @@ type CoordinatorHandler struct {
 	tenants *repo.Tenants
 	users   *repo.Users
 	peers   *repo.Peers
+	relays  *repo.Relays
 	audits  *repo.AuditLogs
 	auth    *AuthHandler
 	bus     *events.Bus
@@ -41,6 +42,7 @@ func NewCoordinatorHandler(pool *db.Pool, auth *AuthHandler, bus *events.Bus) *C
 		tenants: repo.NewTenants(pool),
 		users:   repo.NewUsers(pool),
 		peers:   repo.NewPeers(pool),
+		relays:  repo.NewRelays(pool),
 		audits:  repo.NewAuditLogs(pool),
 		auth:    auth,
 		bus:     bus,
@@ -130,11 +132,28 @@ func (h *CoordinatorHandler) Register(ctx context.Context, req *bamboov1.Registe
 		return nil, status.Errorf(codes.Internal, "list peers: %v", err)
 	}
 
+	relays, err := h.relays.ListEnabled(ctx)
+	if err != nil {
+		// Relay listing failure should not block registration —
+		// peers can still come up via direct connection. Log and
+		// continue with an empty relay list.
+		slog.Warn("list relays for register response", "err", err)
+	}
+
 	resp := &bamboov1.RegisterResponse{
 		Self:           toProtoPeer(self),
 		Peers:          make([]*bamboov1.Peer, 0, len(allPeers)),
 		PolicyRevision: 1, // TODO: read from acl_policies once ACL handlers ship
-		RelayServers:   []*bamboov1.RelayServer{},
+		RelayServers:   make([]*bamboov1.RelayServer, 0, len(relays)),
+	}
+	for _, rs := range relays {
+		resp.RelayServers = append(resp.RelayServers, &bamboov1.RelayServer{
+			Id:        rs.ID.String(),
+			Region:    rs.Region,
+			Hostname:  rs.Hostname,
+			Port:      int32(rs.Port),
+			PublicKey: rs.PublicKey,
+		})
 	}
 	for _, p := range allPeers {
 		if p.ID == self.ID {

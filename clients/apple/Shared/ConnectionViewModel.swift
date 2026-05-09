@@ -39,12 +39,15 @@ public final class ConnectionViewModel: ObservableObject {
         UserDefaults.bambooStandard.string(forKey: "tenantSlug") ?? "default"
     @Published public var preAuthKey: String = ""
     @Published public var hostname: String = currentHostname()
+    @Published public var relayURL: String =
+        UserDefaults.bambooStandard.string(forKey: "relayURL") ?? ""
 
     private let log = Logger(subsystem: "dev.hanfour.bamboo.app", category: "viewmodel")
     private let keychain: KeychainStore
     private let tunnel = TunnelManager()
     private let heartbeat = HeartbeatLoop()
     private let watcher = PeerWatcher()
+    private var relay: RelayClient?
     private var statusTask: Task<Void, Never>?
 
     // Latest known tunnel config; held so we can rebuild + reapply
@@ -68,9 +71,11 @@ public final class ConnectionViewModel: ObservableObject {
 
     deinit {
         statusTask?.cancel()
+        let r = relay
         Task { [heartbeat, watcher] in
             await heartbeat.stop()
             await watcher.stop()
+            await r?.close()
         }
     }
 
@@ -88,12 +93,34 @@ public final class ConnectionViewModel: ObservableObject {
     }
 
     public func disconnect() {
+        let r = relay
+        relay = nil
         Task { [heartbeat, watcher] in
             await heartbeat.stop()
             await watcher.stop()
+            await r?.close()
         }
         tunnel.stopTunnel()
         status = .disconnected
+    }
+
+    /// ensureRelay mints a relay-token, opens a RelayClient, waits
+    /// for SERVER_HELLO. Caller registers peers via addPeer.
+    private func ensureRelay(client: BambooClient,
+                             selfId: String,
+                             selfPubKey: String,
+                             url: URL) async throws -> RelayClient {
+        let resp = try await client.relayToken(.init(peerId: selfId,
+                                                      wireguardPublicKey: selfPubKey))
+        guard let selfKey = Data(base64Encoded: selfPubKey) else {
+            throw BambooClientError.invalidResponse
+        }
+        // WG listens on the standard 51820 by default; future PR
+        // makes this user-configurable.
+        let r = RelayClient(selfKey: selfKey, token: resp.token,
+                            wgListenHost: "127.0.0.1", wgListenPort: 51820)
+        try await r.dial(relayURL: url)
+        return r
     }
 
     private func connectAsync() async {
@@ -102,6 +129,7 @@ public final class ConnectionViewModel: ObservableObject {
 
         UserDefaults.bambooStandard.set(controllerURL, forKey: "controllerURL")
         UserDefaults.bambooStandard.set(tenantSlug, forKey: "tenantSlug")
+        UserDefaults.bambooStandard.set(relayURL, forKey: "relayURL")
 
         do {
             let privateKey = try loadOrCreatePrivateKey()
@@ -139,12 +167,36 @@ public final class ConnectionViewModel: ObservableObject {
                 endpoints: discoveredEndpoints.isEmpty ? nil : discoveredEndpoints
             ))
 
+            // Optional: when relayURL is set, route every peer
+            // through the relay server. Useful on networks where
+            // direct STUN endpoints fail (symmetric NAT, restrictive
+            // egress firewalls).
+            var peerEndpoints: [String: String] = [:] // peer.id -> endpoint
+            if !relayURL.isEmpty, let url = URL(string: relayURL) {
+                do {
+                    let r = try await ensureRelay(client: client,
+                                                   selfId: resp.self_.id,
+                                                   selfPubKey: publicKey,
+                                                   url: url)
+                    for p in resp.peers {
+                        if let pkData = Data(base64Encoded: p.wireguardPublicKey) {
+                            let proxyAddr = try await r.addPeer(pkData)
+                            peerEndpoints[p.id] = proxyAddr
+                        }
+                    }
+                    self.relay = r
+                    log.log("relay enabled url=\(url.absoluteString, privacy: .public) peers=\(resp.peers.count, privacy: .public)")
+                } catch {
+                    log.warning("relay init failed; falling back to direct: \(String(describing: error), privacy: .public)")
+                }
+            }
+
             let peers = resp.peers.map { p in
                 BambooPeerConfig(
                     id: p.id,
                     publicKey: p.wireguardPublicKey,
                     allowedIPs: ["\(p.ip)/32"],
-                    endpoint: p.endpoints?.first,
+                    endpoint: peerEndpoints[p.id] ?? p.endpoints?.first,
                     persistentKeepalive: 25
                 )
             }
@@ -237,6 +289,16 @@ public final class ConnectionViewModel: ObservableObject {
         self.lastConfig = config
 
         Task {
+            // Prefer IPC: the running extension's WireGuardAdapter
+            // can apply the new config without dropping the tunnel.
+            // Fall back to the heavy saveToPreferences + startVPNTunnel
+            // path only when IPC fails (typically: extension hasn't
+            // started yet, or the IPC channel is wedged).
+            if await self.tunnel.applyConfig(config) {
+                self.log.log("rebuild applied via IPC (no restart)")
+                return
+            }
+            self.log.log("IPC apply failed; falling back to start path")
             do {
                 try await self.tunnel.startTunnel(with: config)
             } catch {

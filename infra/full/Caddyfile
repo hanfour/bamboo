@@ -1,0 +1,30 @@
+# Caddy reverse-proxy for the single-VPS bamboo deployment.
+#
+# Two virtual hosts, both with auto-issued Let's Encrypt certs:
+#
+#   {$DOMAIN}        Web UI + controller HTTP/REST + OIDC routes
+#   {$RELAY_DOMAIN}  Relay WebSocket only
+#
+# Hosting both on the same VPS is fine for first-user dogfood; a
+# production deployment moves the relay to its own host (Vultr
+# Tokyo / Hetzner Helsinki) so relay bandwidth doesn't compete with
+# control-plane traffic.
+
+{$DOMAIN} {
+    # Controller endpoints — REST + OIDC + healthz.
+    @controller path /api/* /auth/* /healthz
+    handle @controller {
+        reverse_proxy controller:8081
+    }
+
+    # Everything else lands on the Web UI (Next.js standalone).
+    handle {
+        reverse_proxy web:3000
+    }
+}
+
+{$RELAY_DOMAIN} {
+    # Relay WebSocket. Caddy preserves the WS upgrade handshake by
+    # default; no extra config needed.
+    reverse_proxy relay:8443
+}

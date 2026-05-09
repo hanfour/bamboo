@@ -86,6 +86,52 @@ public final class TunnelManager: ObservableObject {
         updateStatus()
     }
 
+    /// applyConfig pushes a fresh BambooTunnelConfig to the running
+    /// extension via IPC. The extension reapplies the WireGuard
+    /// configuration without dropping the tunnel
+    /// (`WireGuardAdapter.update`). Returns true on success, false on
+    /// any error — caller should fall back to startTunnel(with:) when
+    /// false (e.g. the extension isn't running yet).
+    @discardableResult
+    public func applyConfig(_ config: BambooTunnelConfig) async -> Bool {
+        guard let session = manager?.connection as? NETunnelProviderSession else {
+            return false
+        }
+        // Only useful when the tunnel is up; otherwise startTunnel
+        // already does the right thing.
+        guard session.status == .connected || session.status == .connecting else {
+            return false
+        }
+
+        let request = TunnelIPC.Request(kind: .applyConfig, config: config)
+        let payload: Data
+        do {
+            payload = try TunnelIPC.encode(request)
+        } catch {
+            log.error("applyConfig encode: \(String(describing: error), privacy: .public)")
+            return false
+        }
+
+        return await withCheckedContinuation { (cont: CheckedContinuation<Bool, Never>) in
+            do {
+                try session.sendProviderMessage(payload) { response in
+                    guard let response = response else {
+                        cont.resume(returning: false)
+                        return
+                    }
+                    if let decoded = try? TunnelIPC.decodeResponse(response), decoded.ok {
+                        cont.resume(returning: true)
+                    } else {
+                        cont.resume(returning: false)
+                    }
+                }
+            } catch {
+                self.log.warning("sendProviderMessage: \(String(describing: error), privacy: .public)")
+                cont.resume(returning: false)
+            }
+        }
+    }
+
     // MARK: - private
 
     private func attachObserver() {

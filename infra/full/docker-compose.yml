@@ -1,0 +1,112 @@
+# Single-VPS production-ish deployment of the entire bamboo stack.
+#
+# Same code as the local stack (infra/local/) but with:
+#   - Caddy in front terminating Let's Encrypt TLS for both
+#     <DOMAIN> and <RELAY_DOMAIN>
+#   - controller, web, relay all on the internal docker network
+#   - postgres + clickhouse not exposed on host ports (internal only)
+#
+# Intended for a single VPS (e.g. Hetzner CX22, Vultr Tokyo $5).
+# See docs/deployment/single-vps.md for the end-to-end walkthrough.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: bamboo
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: bamboo
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bamboo -d bamboo"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8-alpine
+    restart: unless-stopped
+    environment:
+      CLICKHOUSE_DB: bamboo
+      CLICKHOUSE_USER: bamboo
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    healthcheck:
+      test: ["CMD", "clickhouse-client", "--user", "bamboo", "--password", "${CLICKHOUSE_PASSWORD}", "--query", "SELECT 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 30s
+
+  controller:
+    image: ghcr.io/hanfour/bamboo-controller:latest
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: "postgres://bamboo:${POSTGRES_PASSWORD}@postgres:5432/bamboo?sslmode=disable"
+      CLICKHOUSE_URL: "http://bamboo:${CLICKHOUSE_PASSWORD}@clickhouse:8123/bamboo"
+      BAMBOO_SESSION_SECRET: "${BAMBOO_SESSION_SECRET}"
+      BAMBOO_BASE_URL: "https://${DOMAIN}"
+      BAMBOO_GRPC_ADDR: "0.0.0.0:8080"
+      BAMBOO_HTTP_ADDR: "0.0.0.0:8081"
+      OIDC_GOOGLE_CLIENT_ID: "${OIDC_GOOGLE_CLIENT_ID:-}"
+      OIDC_GOOGLE_CLIENT_SECRET: "${OIDC_GOOGLE_CLIENT_SECRET:-}"
+      OIDC_GITHUB_CLIENT_ID: "${OIDC_GITHUB_CLIENT_ID:-}"
+      OIDC_GITHUB_CLIENT_SECRET: "${OIDC_GITHUB_CLIENT_SECRET:-}"
+    command: ["serve", "--log-json"]
+
+  web:
+    image: ghcr.io/hanfour/bamboo-web:latest
+    restart: unless-stopped
+    depends_on:
+      - controller
+    environment:
+      # Inside the docker network, web talks to controller by service
+      # name. From the browser's perspective the same controller is
+      # reachable at https://${DOMAIN} via Caddy.
+      BAMBOO_API_URL: "http://controller:8081"
+      BAMBOO_TENANT: "default"
+
+  relay:
+    image: ghcr.io/hanfour/bamboo-relay:latest
+    restart: unless-stopped
+    environment:
+      BAMBOO_RELAY_SHARED_SECRET: "${BAMBOO_SESSION_SECRET}"
+    command: ["--addr=:8443", "--dev-plaintext"]
+    # Plaintext inside the docker network; Caddy adds TLS in front.
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    environment:
+      DOMAIN: "${DOMAIN}"
+      RELAY_DOMAIN: "${RELAY_DOMAIN}"
+    depends_on:
+      - controller
+      - web
+      - relay
+
+volumes:
+  postgres-data:
+  clickhouse-data:
+  caddy-data:
+  caddy-config:

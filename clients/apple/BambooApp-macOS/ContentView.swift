@@ -41,6 +41,7 @@ struct ContentView: View {
                     LabelledField(label: "Controller URL", text: $connection.controllerURL)
                     LabelledField(label: "Tenant slug", text: $connection.tenantSlug)
                     LabelledField(label: "Pre-auth key (optional)", text: $connection.preAuthKey)
+                    LabelledField(label: "Relay URL (optional)", text: $connection.relayURL)
                 }
                 .textFieldStyle(.roundedBorder)
             }

@@ -76,6 +76,16 @@ public struct BambooClient {
         public var currentPolicyRevision: Int64
     }
 
+    public struct RelayTokenRequest: Encodable {
+        public var peerId: String
+        public var wireguardPublicKey: String
+    }
+
+    public struct RelayTokenResponse: Decodable {
+        public var token: String
+        public var expiresAt: Date?
+    }
+
     public func register(_ req: RegisterRequest) async throws -> RegisterResponse {
         return try await postJSON("/api/v1/peers/register", req)
     }
@@ -86,6 +96,10 @@ public struct BambooClient {
 
     public func me() async throws -> MeResponse {
         return try await getJSON("/api/v1/me")
+    }
+
+    public func relayToken(_ req: RelayTokenRequest) async throws -> RelayTokenResponse {
+        return try await postJSON("/api/v1/relay-token", req)
     }
 
     // MARK: - private

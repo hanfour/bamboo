@@ -1,0 +1,112 @@
+# Single-host docker-compose for end-to-end local validation.
+#
+# Brings up the full bamboo stack on one machine: Postgres + ClickHouse
+# + controller + web + relay. No TLS — controller/web speak plain HTTP
+# on loopback. Use this to verify deploys end-to-end before trying
+# them on a real VPS or AWS.
+#
+# Usage:
+#   make local-up        # start everything
+#   make local-bootstrap # run migrations + mint first preauth key
+#   make local-down      # stop + remove
+#
+# After bootstrap completes the script prints the URLs:
+#   Controller HTTP:  http://localhost:8081
+#   Controller gRPC:  localhost:8080
+#   Web UI:           http://localhost:3000
+#   Relay (WS):       ws://localhost:18443/relay
+#
+# Mac + iPhone testing: replace "localhost" with your Mac's LAN IP
+# in the bamboo app's Settings sheet. The controller binds to 0.0.0.0
+# so it accepts connections from the LAN.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: bamboo
+      POSTGRES_PASSWORD: dev
+      POSTGRES_DB: bamboo
+    ports:
+      - "15432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bamboo -d bamboo"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8-alpine
+    environment:
+      CLICKHOUSE_DB: bamboo
+      CLICKHOUSE_USER: bamboo
+      CLICKHOUSE_PASSWORD: dev
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+    ports:
+      - "18123:8123"
+      - "19000:9000"
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    healthcheck:
+      test: ["CMD", "clickhouse-client", "--user", "bamboo", "--password", "dev", "--query", "SELECT 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 30s
+
+  controller:
+    image: ghcr.io/hanfour/bamboo-controller:main
+    # If you haven't built/published the image yet, swap to local build:
+    # build:
+    #   context: ../..
+    #   dockerfile: apps/controller/Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: "postgres://bamboo:dev@postgres:5432/bamboo?sslmode=disable"
+      CLICKHOUSE_URL: "http://bamboo:dev@clickhouse:8123/bamboo"
+      BAMBOO_SESSION_SECRET: "local-dev-session-secret-32-bytes-pad-padding-padding"
+      BAMBOO_BASE_URL: "http://localhost:8081"
+      BAMBOO_GRPC_ADDR: "0.0.0.0:8080"
+      BAMBOO_HTTP_ADDR: "0.0.0.0:8081"
+    ports:
+      - "8080:8080"  # gRPC
+      - "8081:8081"  # HTTP
+    command: ["serve", "--log-json"]
+
+  web:
+    image: ghcr.io/hanfour/bamboo-web:main
+    # build:
+    #   context: ../..
+    #   dockerfile: apps/web/Dockerfile
+    depends_on:
+      - controller
+    environment:
+      BAMBOO_API_URL: "http://controller:8081"
+      BAMBOO_TENANT: "default"
+    ports:
+      - "3000:3000"
+
+  relay:
+    image: ghcr.io/hanfour/bamboo-relay:main
+    # build:
+    #   context: ../..
+    #   dockerfile: infra/relay/Dockerfile
+    environment:
+      BAMBOO_RELAY_SHARED_SECRET: "local-dev-session-secret-32-bytes-pad-padding-padding"
+    command: ["--addr=:8443", "--dev-plaintext"]
+    ports:
+      - "18443:8443"
+
+volumes:
+  postgres-data:
+  clickhouse-data:
