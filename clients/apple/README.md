@@ -40,6 +40,8 @@ clients/apple/
     ConnectionViewModel.swift                    cross-platform view model
     BambooClient.swift                           REST client for /api/v1/*
     STUNClient.swift                             RFC 5389 binding-request client
+    HeartbeatLoop.swift                          periodic POST /api/v1/peers/heartbeat
+    PeerWatcher.swift                            SSE consumer for /api/v1/peers/watch
     KeychainStore.swift                          Keychain wrapper (private key, session token)
     TunnelManager.swift                          NETunnelProviderManager driver
     TunnelConfigurationBuilder.swift             JSON config -> WireGuardKit TunnelConfiguration
@@ -132,6 +134,7 @@ talks to the extension through `NEVPNConnection`.
 | Keychain-backed WG private key persistence | ✅ Phase 2 DDDD | ✅ Phase 2 DDDD |
 | OIDC web flow (ASWebAuthenticationSession) | ⏸ Phase 2 follow-up | ⏸ Phase 2 follow-up |
 | STUN endpoint discovery (`STUNClient`) | ✅ Phase 2 HHHH | ✅ Phase 2 HHHH |
+| Heartbeat + watch loops (peer roaming) | ✅ Phase 2 IIII | ✅ Phase 2 IIII |
 | Peer endpoint relay (TURN-style fallback) | ⏸ Phase 2 follow-up | ⏸ Phase 2 follow-up |
 | Code-signed installer (.pkg / DMG / TestFlight) | ⏸ Phase 2 EEEE | ⏸ Phase 2 EEEE |
 
