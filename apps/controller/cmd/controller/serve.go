@@ -28,7 +28,7 @@ var serveCmd = &cobra.Command{
 }
 
 func init() {
-	serveCmd.Flags().StringVarP(&serveConfigPath, "config", "c", "config/example.yaml", "path to YAML config file")
+	serveCmd.Flags().StringVarP(&serveConfigPath, "config", "c", "", "path to YAML config file (optional; defaults to env-var-only when empty)")
 	serveCmd.Flags().BoolVar(&serveLogJSON, "log-json", false, "emit JSON-formatted logs (default: text)")
 }
 
