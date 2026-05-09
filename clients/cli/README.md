@@ -66,9 +66,9 @@ sudo ./bin/bamboo down
 ## Why root?
 
 Bringing up a WireGuard interface needs `CAP_NET_ADMIN` (manage links,
-addresses, routes; talk to the wireguard kernel module). The macOS
-PacketTunnelProvider takes the same trust via the system VPN
-configuration prompt; that path lives under `clients/macos/`.
+addresses, routes; talk to the wireguard kernel module). The macOS /
+iOS PacketTunnelProvider takes the same trust via the system VPN
+configuration prompt; that path lives under `clients/apple/`.
 
 ## Tracking
 

@@ -24,7 +24,7 @@ Adopt a **dual-license** model:
 | Component                                  | License (target) | License (interim, see note) |
 | ------------------------------------------ | ---------------- | --------------------------- |
 | `clients/core/**`                          | Apache 2.0       | **AGPLv3** (NetBird-derived) |
-| `clients/cli/**`, `clients/macos/**`, `clients/windows/**`, `clients/linux/**` | Apache 2.0 | Apache 2.0 (clean room) |
+| `clients/cli/**`, `clients/apple/**`, `clients/windows/**`, `clients/linux/**` | Apache 2.0 | Apache 2.0 (clean room) |
 | `sdks/**`, `proto/**`                      | Apache 2.0       | Apache 2.0                  |
 | `apps/**` (controller, relay, web, ai)     | AGPLv3           | AGPLv3                      |
 | `infra/terraform/**`, `infra/helm/**`      | Apache 2.0       | Apache 2.0                  |

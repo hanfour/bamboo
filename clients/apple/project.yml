@@ -1,0 +1,101 @@
+# XcodeGen project specification for the bamboo Apple clients (macOS + iOS).
+#
+# We do not commit a generated *.xcodeproj — Xcode rewrites it constantly,
+# and merge conflicts on its plist contents are unproductive. Run
+# `xcodegen generate` (one-off `brew install xcodegen`) to materialize
+# bamboo.xcodeproj from this file before opening Xcode.
+#
+# Required environment variables:
+#
+#   BAMBOO_DEVELOPMENT_TEAM     Apple Team ID (10-char alphanumeric).
+#   BAMBOO_BUNDLE_ID_PREFIX     Reverse-DNS prefix; default dev.hanfour.bamboo.
+#                               App bundle ID becomes <prefix>.app and the
+#                               tunnel extension <prefix>.app.tunnel on
+#                               both macOS and iOS.
+#
+# See README.md for the Apple-side prerequisites that are not automated.
+
+name: bamboo
+options:
+  bundleIdPrefix: ${BAMBOO_BUNDLE_ID_PREFIX:-dev.hanfour.bamboo}
+  deploymentTarget:
+    macOS: "13.0"
+    iOS: "16.0"
+  developmentLanguage: en
+  createIntermediateGroups: true
+
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    MARKETING_VERSION: "0.0.1"
+    CURRENT_PROJECT_VERSION: "1"
+    CODE_SIGN_STYLE: Automatic
+    DEVELOPMENT_TEAM: "$(BAMBOO_DEVELOPMENT_TEAM)"
+
+# ----- macOS targets ---------------------------------------------------------
+
+targets:
+  BambooApp-macOS:
+    type: application
+    platform: macOS
+    sources:
+      - path: BambooApp-macOS
+      - path: Shared
+    info:
+      path: BambooApp-macOS/Info.plist
+    entitlements:
+      path: BambooApp-macOS/BambooApp.entitlements
+    settings:
+      base:
+        PRODUCT_NAME: bamboo
+        PRODUCT_BUNDLE_IDENTIFIER: ${BAMBOO_BUNDLE_ID_PREFIX:-dev.hanfour.bamboo}.app
+    dependencies:
+      - target: PacketTunnelProvider-macOS
+
+  PacketTunnelProvider-macOS:
+    type: app-extension
+    platform: macOS
+    sources:
+      - path: PacketTunnelProvider-macOS
+    info:
+      path: PacketTunnelProvider-macOS/Info.plist
+    entitlements:
+      path: PacketTunnelProvider-macOS/PacketTunnelProvider.entitlements
+    settings:
+      base:
+        PRODUCT_NAME: bamboo-tunnel
+        PRODUCT_BUNDLE_IDENTIFIER: ${BAMBOO_BUNDLE_ID_PREFIX:-dev.hanfour.bamboo}.app.tunnel
+
+# ----- iOS targets -----------------------------------------------------------
+
+  BambooApp-iOS:
+    type: application
+    platform: iOS
+    sources:
+      - path: BambooApp-iOS
+      - path: Shared
+    info:
+      path: BambooApp-iOS/Info.plist
+    entitlements:
+      path: BambooApp-iOS/BambooApp_iOS.entitlements
+    settings:
+      base:
+        PRODUCT_NAME: bamboo
+        PRODUCT_BUNDLE_IDENTIFIER: ${BAMBOO_BUNDLE_ID_PREFIX:-dev.hanfour.bamboo}.app
+        TARGETED_DEVICE_FAMILY: "1,2"
+    dependencies:
+      - target: PacketTunnelProvider-iOS
+
+  PacketTunnelProvider-iOS:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: PacketTunnelProvider-iOS
+    info:
+      path: PacketTunnelProvider-iOS/Info.plist
+    entitlements:
+      path: PacketTunnelProvider-iOS/PacketTunnelProvider_iOS.entitlements
+    settings:
+      base:
+        PRODUCT_NAME: bamboo-tunnel
+        PRODUCT_BUNDLE_IDENTIFIER: ${BAMBOO_BUNDLE_ID_PREFIX:-dev.hanfour.bamboo}.app.tunnel
