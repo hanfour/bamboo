@@ -27,10 +27,10 @@ const MaxFrameSize = 64 * 1024
 
 // Frame is the decoded form of one wire frame.
 //
-//   +--------+-----+----------+
-//   |  len   | typ | payload  |
-//   | 4 BE   | 1B  | variable |
-//   +--------+-----+----------+
+//	+--------+-----+----------+
+//	|  len   | typ | payload  |
+//	| 4 BE   | 1B  | variable |
+//	+--------+-----+----------+
 type Frame struct {
 	Type    byte
 	Payload []byte
@@ -68,7 +68,7 @@ func Decode(buf []byte) (Frame, error) {
 
 // PacketFrame is the decoded form of a TypePacket payload:
 //
-//   [32-byte dst pubkey] [WG packet bytes]
+//	[32-byte dst pubkey] [WG packet bytes]
 type PacketFrame struct {
 	DstKey [PubKeyLen]byte
 	Body   []byte
@@ -94,7 +94,7 @@ func EncodePacket(dst [PubKeyLen]byte, body []byte) Frame {
 // ParseClientHello extracts the source pubkey + auth token from a
 // CLIENT_HELLO payload. Layout:
 //
-//   [32-byte src pubkey] [auth token bytes]
+//	[32-byte src pubkey] [auth token bytes]
 //
 // The auth token is opaque to this skeleton — JWT verification lands
 // alongside the JJJJ-followup PR.

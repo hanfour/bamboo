@@ -84,7 +84,7 @@ func TestRunRelayFallback_SwapsStalePeer(t *testing.T) {
 
 	stats := &fakeStats{
 		rows: []device.PeerStats{
-			{PublicKey: pkA.PublicKey().Base64(), LastHandshakeTime: time.Time{}},          // stale
+			{PublicKey: pkA.PublicKey().Base64(), LastHandshakeTime: time.Time{}},                      // stale
 			{PublicKey: pkB.PublicKey().Base64(), LastHandshakeTime: time.Now().Add(-5 * time.Second)}, // healthy
 		},
 	}
