@@ -174,24 +174,10 @@ func (h *CoordinatorHandler) Heartbeat(ctx context.Context, req *bamboov1.Heartb
 // the lifetime of the stream.
 func (h *CoordinatorHandler) WatchPeers(req *bamboov1.WatchPeersRequest, stream bamboov1.CoordinatorService_WatchPeersServer) error {
 	ctx := stream.Context()
-
-	if req.GetPeerId() == "" {
-		return status.Error(codes.InvalidArgument, "peer_id is required")
-	}
-	peerID, err := uuid.Parse(req.GetPeerId())
+	ch, cancel, err := h.SubscribePeer(ctx, req.GetPeerId())
 	if err != nil {
-		return status.Errorf(codes.InvalidArgument, "invalid peer_id: %v", err)
+		return err
 	}
-
-	peer, err := h.peers.GetByID(ctx, peerID)
-	if err != nil {
-		if errors.Is(err, repo.ErrNotFound) {
-			return status.Error(codes.NotFound, "peer not found")
-		}
-		return status.Errorf(codes.Internal, "get peer: %v", err)
-	}
-
-	ch, cancel := h.bus.Subscribe(peer.TenantID)
 	defer cancel()
 
 	for {
@@ -207,6 +193,29 @@ func (h *CoordinatorHandler) WatchPeers(req *bamboov1.WatchPeersRequest, stream 
 			return nil
 		}
 	}
+}
+
+// SubscribePeer validates the peer ID and returns a channel of
+// WatchPeersEvent values plus a cancel func. Used by both the gRPC
+// streaming WatchPeers handler and the HTTP SSE adapter so they share
+// the same validation and bus-subscription path.
+func (h *CoordinatorHandler) SubscribePeer(ctx context.Context, peerIDStr string) (<-chan *bamboov1.WatchPeersEvent, func(), error) {
+	if peerIDStr == "" {
+		return nil, nil, status.Error(codes.InvalidArgument, "peer_id is required")
+	}
+	peerID, err := uuid.Parse(peerIDStr)
+	if err != nil {
+		return nil, nil, status.Errorf(codes.InvalidArgument, "invalid peer_id: %v", err)
+	}
+	peer, err := h.peers.GetByID(ctx, peerID)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return nil, nil, status.Error(codes.NotFound, "peer not found")
+		}
+		return nil, nil, status.Errorf(codes.Internal, "get peer: %v", err)
+	}
+	ch, cancel := h.bus.Subscribe(peer.TenantID)
+	return ch, cancel, nil
 }
 
 // resolveTenant chooses the tenant for a Register call by precedence:

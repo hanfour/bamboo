@@ -322,7 +322,7 @@ Minimal macOS app: menu bar icon, login button, status display. Wraps
 `clients/core` Go binary via xcframework.
 
 ### Acceptance criteria
-- [ ] Xcode project under `clients/macos/`
+- [ ] Xcode project under `clients/apple/`
 - [ ] App builds and signs (developer team ID configured)
 - [ ] Menu bar shows connection status
 - [ ] "Connect" button initiates OIDC login flow in browser

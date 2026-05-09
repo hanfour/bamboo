@@ -5,8 +5,8 @@
 // The Device interface is platform-agnostic. The Linux implementation
 // (device_linux.go) uses wgctrl + netlink and requires root /
 // CAP_NET_ADMIN. Other platforms get a stub that errors out;
-// macOS bring-up flows through the PacketTunnelProvider instead
-// (clients/macos/PacketTunnelProvider/).
+// macOS / iOS bring-up flows through the PacketTunnelProvider instead
+// (clients/apple/PacketTunnelProvider-{macOS,iOS}/).
 package device
 
 import (
@@ -18,7 +18,7 @@ import (
 
 // ErrUnsupported is returned by New on platforms that do not have a
 // native bring-up path. CLI users on those platforms should use the
-// platform's app target (e.g. clients/macos/) instead.
+// platform's app target (e.g. clients/apple/) instead.
 var ErrUnsupported = errors.New("device bring-up not supported on this OS in CLI mode")
 
 // Device is the platform-specific handle to a configured WireGuard interface.

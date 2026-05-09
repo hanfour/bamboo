@@ -14,6 +14,7 @@ import (
 	"github.com/hanfour/bamboo/apps/controller/internal/clickhouse"
 	"github.com/hanfour/bamboo/apps/controller/internal/db"
 	"github.com/hanfour/bamboo/apps/controller/internal/db/repo"
+	"github.com/hanfour/bamboo/apps/controller/internal/handlers"
 )
 
 // HTTPServer hosts the OIDC redirect / callback routes plus a thin
@@ -30,14 +31,27 @@ type HTTPServer struct {
 	policies  *repo.Policies
 	traces    *clickhouse.Traces
 	anomalies *clickhouse.Anomalies
+	coord     *handlers.CoordinatorHandler
 	secret    []byte
 	baseURL   string
 	ttl       time.Duration
 }
 
 // NewHTTPServer constructs the OIDC + REST HTTP frontend. ch may be nil
-// (REST recommendation endpoints degrade gracefully).
-func NewHTTPServer(addr string, pool *db.Pool, providers map[string]auth.OIDCProvider, ch *clickhouse.Conn, secret []byte, baseURL string, ttl time.Duration) *HTTPServer {
+// (REST recommendation endpoints degrade gracefully). coord is the
+// shared CoordinatorHandler — REST peer endpoints delegate to it so
+// the gRPC and REST paths share validation, IP allocation, audit log,
+// and the events bus.
+func NewHTTPServer(
+	addr string,
+	pool *db.Pool,
+	providers map[string]auth.OIDCProvider,
+	ch *clickhouse.Conn,
+	secret []byte,
+	baseURL string,
+	ttl time.Duration,
+	coord *handlers.CoordinatorHandler,
+) *HTTPServer {
 	mux := http.NewServeMux()
 	h := &HTTPServer{
 		addr:      addr,
@@ -48,6 +62,7 @@ func NewHTTPServer(addr string, pool *db.Pool, providers map[string]auth.OIDCPro
 		policies:  repo.NewPolicies(pool),
 		traces:    clickhouse.NewTraces(ch),
 		anomalies: clickhouse.NewAnomalies(ch),
+		coord:     coord,
 		secret:    secret,
 		baseURL:   baseURL,
 		ttl:       ttl,
@@ -84,6 +99,13 @@ func withCORS(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// Handler returns the wired HTTP handler. Used by the e2e fixture so
+// tests can drive /auth/* and /api/v1/* through httptest.NewServer
+// without binding a real port. Production callers should use Run.
+func (h *HTTPServer) Handler() http.Handler {
+	return h.srv.Handler
 }
 
 // Run blocks until ctx is canceled or the listener errors.

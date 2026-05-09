@@ -67,7 +67,7 @@ func runUp(cmd *cobra.Command, _ []string) error {
 	dev, err := device.New(device.Options{InterfaceName: flagIface})
 	if err != nil {
 		if errors.Is(err, device.ErrUnsupported) {
-			return fmt.Errorf("bamboo up requires Linux with root; on macOS use the menu-bar app under clients/macos/")
+			return fmt.Errorf("bamboo up requires Linux with root; on macOS / iOS use the app under clients/apple/")
 		}
 		return fmt.Errorf("device: %w", err)
 	}

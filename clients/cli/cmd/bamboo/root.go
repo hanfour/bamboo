@@ -26,7 +26,7 @@ var rootCmd = &cobra.Command{
 
 Bringing up an interface (bamboo up) requires root / CAP_NET_ADMIN on
 Linux and is currently unsupported on other platforms; macOS users
-should use the menu-bar app under clients/macos/.`,
+should use the app under clients/apple/.`,
 	PersistentPreRun: func(_ *cobra.Command, _ []string) {
 		configureLogger(flagLogJSON)
 	},
