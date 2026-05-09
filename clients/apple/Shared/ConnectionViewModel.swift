@@ -237,6 +237,16 @@ public final class ConnectionViewModel: ObservableObject {
         self.lastConfig = config
 
         Task {
+            // Prefer IPC: the running extension's WireGuardAdapter
+            // can apply the new config without dropping the tunnel.
+            // Fall back to the heavy saveToPreferences + startVPNTunnel
+            // path only when IPC fails (typically: extension hasn't
+            // started yet, or the IPC channel is wedged).
+            if await self.tunnel.applyConfig(config) {
+                self.log.log("rebuild applied via IPC (no restart)")
+                return
+            }
+            self.log.log("IPC apply failed; falling back to start path")
             do {
                 try await self.tunnel.startTunnel(with: config)
             } catch {
