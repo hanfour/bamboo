@@ -6,7 +6,7 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/hanfour/bamboo/apps/relay/internal/server"
+	"github.com/hanfour/bamboo/apps/relay/server"
 )
 
 func TestFrame_RoundTrip(t *testing.T) {

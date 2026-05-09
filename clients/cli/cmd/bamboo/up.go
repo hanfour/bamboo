@@ -3,13 +3,20 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
+	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"runtime"
+	"strings"
 	"syscall"
 	"time"
 
@@ -17,6 +24,7 @@ import (
 	clientsync "github.com/hanfour/bamboo/clients/cli/internal/sync"
 	"github.com/hanfour/bamboo/clients/core/client"
 	"github.com/hanfour/bamboo/clients/core/device"
+	"github.com/hanfour/bamboo/clients/core/relay"
 	"github.com/hanfour/bamboo/clients/core/stun"
 	"github.com/hanfour/bamboo/clients/core/wg"
 	bamboov1 "github.com/hanfour/bamboo/proto/gen/go/bamboo/v1"
@@ -63,6 +71,18 @@ func runUp(cmd *cobra.Command, _ []string) error {
 	cfg, err := wg.BuildDeviceConfig(priv, resp)
 	if err != nil {
 		return fmt.Errorf("build wireguard config: %w", err)
+	}
+
+	// Optional: route every peer through a relay server. Triggered
+	// by BAMBOO_RELAY_URL env var. Useful for testing on networks
+	// where direct STUN-discovered endpoints don't work (symmetric
+	// NAT, restrictive egress firewalls).
+	relayClient, err := maybeStartRelay(cmd.Context(), resp, priv, cfg)
+	if err != nil {
+		slog.Warn("relay setup failed; continuing without relay", "err", err)
+	}
+	if relayClient != nil {
+		defer relayClient.Close()
 	}
 
 	dev, err := device.New(device.Options{InterfaceName: flagIface})
@@ -137,4 +157,110 @@ func discoverEndpoints() []string {
 	}
 	slog.Info("stun discovered endpoint", "endpoint", addr.String())
 	return []string{addr.String()}
+}
+
+// maybeStartRelay opens a relay client when BAMBOO_RELAY_URL is set,
+// rewrites every peer's Endpoint in cfg to point at a localhost
+// proxy port, and returns the client (caller closes on exit). When
+// the env var is empty this returns (nil, nil) — the regular STUN
+// path remains in effect.
+func maybeStartRelay(ctx context.Context, resp *bamboov1.RegisterResponse, priv wg.PrivateKey, cfg *wg.DeviceConfig) (*relay.Client, error) {
+	relayURL := os.Getenv("BAMBOO_RELAY_URL")
+	if relayURL == "" {
+		return nil, nil
+	}
+
+	// Mint a relay token from the controller.
+	token, err := mintRelayToken(ctx, resp.GetSelf().GetId(), priv.PublicKey().Base64())
+	if err != nil {
+		return nil, fmt.Errorf("mint relay token: %w", err)
+	}
+
+	selfKey, err := decodePubKey(priv.PublicKey().Base64())
+	if err != nil {
+		return nil, err
+	}
+
+	// WG listens on flagListenPort (or kernel-picked port if zero).
+	// Phase 2: assume default 51820 if cfg.ListenPort is zero. The
+	// netlink device.go path uses 51820 as default too.
+	wgPort := int(cfg.ListenPort)
+	if wgPort == 0 {
+		wgPort = 51820
+	}
+
+	c, err := relay.Dial(ctx, relayURL, selfKey, token, fmt.Sprintf("127.0.0.1:%d", wgPort))
+	if err != nil {
+		return nil, fmt.Errorf("relay dial: %w", err)
+	}
+
+	// Rewrite each peer's Endpoint to point at a localhost proxy
+	// socket on the relay client. WG will send packets there; the
+	// relay client wraps and forwards via WSS.
+	for i := range cfg.Peers {
+		peerKey, err := decodePubKey(cfg.Peers[i].PublicKey.Base64())
+		if err != nil {
+			return nil, fmt.Errorf("peer %d pubkey: %w", i, err)
+		}
+		proxyAddr, err := c.AddPeer(peerKey)
+		if err != nil {
+			return nil, fmt.Errorf("relay add peer: %w", err)
+		}
+		cfg.Peers[i].Endpoint = proxyAddr
+	}
+	slog.Info("relay enabled", "url", relayURL, "peers", len(cfg.Peers))
+	return c, nil
+}
+
+// mintRelayToken calls the controller's POST /api/v1/relay-token
+// endpoint and returns the JWT. Uses the controller HTTP base URL
+// from BAMBOO_CONTROLLER_HTTP_URL (default localhost:8081 in dev).
+func mintRelayToken(ctx context.Context, peerID, wgPubKey string) (string, error) {
+	base := os.Getenv("BAMBOO_CONTROLLER_HTTP_URL")
+	if base == "" {
+		base = "http://localhost:8081"
+	}
+	body, _ := json.Marshal(map[string]string{
+		"peerId":             peerID,
+		"wireguardPublicKey": wgPubKey,
+	})
+	u, err := url.JoinPath(base, "/api/v1/relay-token")
+	if err != nil {
+		return "", err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, bytes.NewReader(body))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Tenant-Slug", flagTenant)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("relay-token http %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
+	}
+	var out struct {
+		Token string `json:"token"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return "", err
+	}
+	return out.Token, nil
+}
+
+func decodePubKey(b64 string) ([relay.PubKeyLen]byte, error) {
+	var out [relay.PubKeyLen]byte
+	raw, err := base64.StdEncoding.DecodeString(b64)
+	if err != nil {
+		return out, err
+	}
+	if len(raw) != relay.PubKeyLen {
+		return out, fmt.Errorf("pubkey wrong size: %d", len(raw))
+	}
+	copy(out[:], raw)
+	return out, nil
 }

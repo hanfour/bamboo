@@ -12,6 +12,8 @@ package server
 
 import (
 	"context"
+	"crypto/subtle"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -19,22 +21,48 @@ import (
 	"sync"
 
 	"github.com/coder/websocket"
+	"github.com/hanfour/bamboo/apps/relay/auth"
 )
 
-// Server is the in-process router.
-type Server struct {
-	log      *slog.Logger
-	mu       sync.RWMutex
-	sessions map[[PubKeyLen]byte]*session
+// Options configures a relay Server. Zero-value Options is allowed in
+// dev mode (--dev-no-auth) but in production SharedSecret should be
+// non-empty so the relay refuses any CLIENT_HELLO without a valid
+// controller-issued JWT.
+type Options struct {
+	Log          *slog.Logger
+	SharedSecret []byte // HMAC key shared with the controller's relay-token issuer
+	AllowNoAuth  bool   // if true, accept any CLIENT_HELLO (single global tenant)
 }
 
-func New(log *slog.Logger) *Server {
+// Server is the in-process router. Sessions are partitioned by
+// tenant_id from the verified token so cross-tenant traffic is
+// impossible.
+type Server struct {
+	log         *slog.Logger
+	secret      []byte
+	allowNoAuth bool
+
+	mu       sync.RWMutex
+	sessions map[sessionKey]*session
+}
+
+// sessionKey scopes a connection to one tenant. Two peers in
+// different tenants can hold identical pubkeys without collision.
+type sessionKey struct {
+	tenant string
+	pubkey [PubKeyLen]byte
+}
+
+func New(opts Options) *Server {
+	log := opts.Log
 	if log == nil {
 		log = slog.Default()
 	}
 	return &Server{
-		log:      log,
-		sessions: make(map[[PubKeyLen]byte]*session),
+		log:         log,
+		secret:      opts.SharedSecret,
+		allowNoAuth: opts.AllowNoAuth,
+		sessions:    make(map[sessionKey]*session),
 	}
 }
 
@@ -58,9 +86,10 @@ func (s *Server) HandleRelay(w http.ResponseWriter, r *http.Request) {
 
 // session holds one connected client's state.
 type session struct {
-	conn *websocket.Conn
-	key  [PubKeyLen]byte
-	send chan []byte
+	conn   *websocket.Conn
+	key    sessionKey
+	pubkey [PubKeyLen]byte // shortcut for the pubkey portion of key
+	send   chan []byte
 }
 
 func (s *Server) runSession(ctx context.Context, c *websocket.Conn) error {
@@ -85,11 +114,19 @@ func (s *Server) runSession(ctx context.Context, c *websocket.Conn) error {
 	if err != nil {
 		return err
 	}
-	// TODO(JJJJ-followup): verify ch.AuthToken as a controller-issued
-	// JWT and partition the session map by tenant. v0 accepts any
-	// CLIENT_HELLO and uses a single global namespace.
 
-	sess := &session{conn: c, key: ch.SrcKey, send: make(chan []byte, 64)}
+	tenantID, err := s.verifyAuth(ch)
+	if err != nil {
+		s.log.Warn("auth rejected", "err", err)
+		return fmt.Errorf("auth: %w", err)
+	}
+
+	sess := &session{
+		conn:   c,
+		key:    sessionKey{tenant: tenantID, pubkey: ch.SrcKey},
+		pubkey: ch.SrcKey,
+		send:   make(chan []byte, 64),
+	}
 	s.register(sess)
 	defer s.unregister(sess)
 
@@ -101,7 +138,10 @@ func (s *Server) runSession(ctx context.Context, c *websocket.Conn) error {
 		return fmt.Errorf("write server_hello: %w", err)
 	}
 
-	s.log.Info("client connected", "key", fmt.Sprintf("%x", ch.SrcKey[:6]))
+	s.log.Info("client connected",
+		"tenant", tenantID,
+		"key", fmt.Sprintf("%x", ch.SrcKey[:6]),
+	)
 
 	// Two goroutines: one reads from the wire and routes outbound
 	// PACKET frames, the other drains sess.send -> wire.
@@ -161,15 +201,18 @@ func (s *Server) writeLoop(ctx context.Context, sess *session) error {
 }
 
 // forward routes a packet from sess to the connection that owns
-// pkt.DstKey. When the destination isn't connected we send a
-// PEER_GONE back so the sender can stop trying.
+// pkt.DstKey, scoped to sender's tenant. When the destination isn't
+// connected (or is in a different tenant) we send a PEER_GONE back
+// so the sender can stop trying.
 func (s *Server) forward(sender *session, pkt PacketFrame) {
+	dstKey := sessionKey{tenant: sender.key.tenant, pubkey: pkt.DstKey}
 	s.mu.RLock()
-	dst := s.sessions[pkt.DstKey]
+	dst := s.sessions[dstKey]
 	dstFound := dst != nil
 	s.mu.RUnlock()
 	s.log.Debug("forward",
-		"src", fmt.Sprintf("%x", sender.key[:6]),
+		"tenant", sender.key.tenant,
+		"src", fmt.Sprintf("%x", sender.pubkey[:6]),
 		"dst", fmt.Sprintf("%x", pkt.DstKey[:6]),
 		"found", dstFound,
 		"body_len", len(pkt.Body),
@@ -194,7 +237,7 @@ func (s *Server) forward(sender *session, pkt PacketFrame) {
 	// path back without a separate lookup; we encode it as the
 	// "destination" of the response packet payload from the
 	// destination's point of view.
-	out := EncodePacket(sender.key, pkt.Body)
+	out := EncodePacket(sender.pubkey, pkt.Body)
 	buf, err := Encode(out)
 	if err != nil {
 		return
@@ -226,4 +269,35 @@ func (s *Server) unregister(sess *session) {
 		close(sess.send)
 	}
 	s.mu.Unlock()
+}
+
+// verifyAuth verifies the CLIENT_HELLO auth token. Returns the
+// tenant_id the connection should be scoped to. In --dev-no-auth
+// mode the token is ignored and every connection lands in tenant
+// "dev" so existing test paths still work.
+func (s *Server) verifyAuth(ch ClientHello) (string, error) {
+	if s.allowNoAuth {
+		return "dev", nil
+	}
+	if len(s.secret) == 0 {
+		return "", errors.New("server has no shared secret configured")
+	}
+	if ch.AuthToken == "" {
+		return "", errors.New("client_hello missing auth token")
+	}
+	claims, err := auth.VerifyRelayToken(s.secret, ch.AuthToken)
+	if err != nil {
+		return "", err
+	}
+	// Bind the token's wg pubkey to the CLIENT_HELLO src key —
+	// otherwise a peer could redeem its own token and impersonate any
+	// pubkey it likes.
+	want, err := base64.StdEncoding.DecodeString(claims.WGPublicKey)
+	if err != nil || len(want) != PubKeyLen {
+		return "", errors.New("token wg pubkey malformed")
+	}
+	if subtle.ConstantTimeCompare(want, ch.SrcKey[:]) != 1 {
+		return "", errors.New("client_hello pubkey does not match token")
+	}
+	return claims.TenantID, nil
 }

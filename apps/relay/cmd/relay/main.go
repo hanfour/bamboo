@@ -20,7 +20,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/hanfour/bamboo/apps/relay/internal/server"
+	"github.com/hanfour/bamboo/apps/relay/server"
 )
 
 func main() {
@@ -28,12 +28,23 @@ func main() {
 	certFile := flag.String("cert", "", "TLS certificate file (use empty for unencrypted dev mode on -addr)")
 	keyFile := flag.String("key", "", "TLS private key file")
 	devPlaintext := flag.Bool("dev-plaintext", false, "run on plaintext HTTP (dev only; never in production)")
+	devNoAuth := flag.Bool("dev-no-auth", false, "accept any CLIENT_HELLO without verifying the JWT (dev only)")
 	flag.Parse()
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	slog.SetDefault(logger)
 
-	srv := server.New(logger)
+	secret := []byte(os.Getenv("BAMBOO_RELAY_SHARED_SECRET"))
+	if !*devNoAuth && len(secret) == 0 {
+		slog.Error("BAMBOO_RELAY_SHARED_SECRET is required (or pass --dev-no-auth)")
+		os.Exit(2)
+	}
+
+	srv := server.New(server.Options{
+		Log:          logger,
+		SharedSecret: secret,
+		AllowNoAuth:  *devNoAuth,
+	})
 	mux := http.NewServeMux()
 	mux.HandleFunc("/relay", srv.HandleRelay)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {

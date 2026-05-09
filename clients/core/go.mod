@@ -12,6 +12,7 @@ require (
 )
 
 require (
+	github.com/coder/websocket v1.8.13
 	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/josharian/native v1.1.0 // indirect
 	github.com/mdlayher/genetlink v1.3.2 // indirect

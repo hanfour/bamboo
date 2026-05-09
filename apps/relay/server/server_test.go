@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
-	"github.com/hanfour/bamboo/apps/relay/internal/server"
+	"github.com/hanfour/bamboo/apps/relay/server"
 )
 
 // TestRelay_ForwardsBetweenTwoClients drives a real HTTP+WS server,
@@ -20,7 +20,7 @@ import (
 // from A to B, and asserts B's read loop receives it. This exercises
 // the full session lifecycle end to end.
 func TestRelay_ForwardsBetweenTwoClients(t *testing.T) {
-	srv := server.New(nil)
+	srv := server.New(server.Options{AllowNoAuth: true})
 	ts := httptest.NewServer(http.HandlerFunc(srv.HandleRelay))
 	defer ts.Close()
 
@@ -78,7 +78,7 @@ func TestRelay_ForwardsBetweenTwoClients(t *testing.T) {
 // TestRelay_PeerGoneWhenDestUnknown asserts a PACKET frame to an
 // unconnected peer returns PEER_GONE to the sender.
 func TestRelay_PeerGoneWhenDestUnknown(t *testing.T) {
-	srv := server.New(nil)
+	srv := server.New(server.Options{AllowNoAuth: true})
 	ts := httptest.NewServer(http.HandlerFunc(srv.HandleRelay))
 	defer ts.Close()
 
