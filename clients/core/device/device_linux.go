@@ -55,6 +55,32 @@ func (d *linuxDevice) Apply(_ context.Context, cfg *wg.DeviceConfig) error {
 	return d.applyRoutes(cfg)
 }
 
+// Stats implements Device.
+func (d *linuxDevice) Stats() ([]PeerStats, error) {
+	if d.link == nil {
+		return nil, nil
+	}
+	dev, err := d.wg.Device(d.opts.InterfaceName)
+	if err != nil {
+		return nil, fmt.Errorf("wg device: %w", err)
+	}
+	out := make([]PeerStats, 0, len(dev.Peers))
+	for _, p := range dev.Peers {
+		var endpoint string
+		if p.Endpoint != nil {
+			endpoint = p.Endpoint.String()
+		}
+		out = append(out, PeerStats{
+			PublicKey:         p.PublicKey.String(),
+			Endpoint:          endpoint,
+			LastHandshakeTime: p.LastHandshakeTime,
+			RxBytes:           uint64(p.ReceiveBytes),
+			TxBytes:           uint64(p.TransmitBytes),
+		})
+	}
+	return out, nil
+}
+
 // Close implements Device.
 func (d *linuxDevice) Close() error {
 	defer func() { _ = d.wg.Close() }()
