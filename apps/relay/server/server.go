@@ -76,7 +76,7 @@ func (s *Server) HandleRelay(w http.ResponseWriter, r *http.Request) {
 		s.log.Warn("ws accept failed", "err", err, "remote", r.RemoteAddr)
 		return
 	}
-	defer c.Close(websocket.StatusInternalError, "handler exit")
+	defer func() { _ = c.Close(websocket.StatusInternalError, "handler exit") }()
 
 	ctx := r.Context()
 	if err := s.runSession(ctx, c); err != nil && !errors.Is(err, context.Canceled) {

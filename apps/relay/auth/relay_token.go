@@ -35,6 +35,9 @@ type RelayClaims struct {
 	ExpiresAt   int64  `json:"exp"`
 }
 
+// VerifyRelayToken parses and validates a controller-issued relay
+// token. On success returns the embedded claims; failures collapse
+// to ErrInvalidToken so the caller never leaks validation details.
 func VerifyRelayToken(secret []byte, token string) (*RelayClaims, error) {
 	body, sig, ok := strings.Cut(token, ".")
 	if !ok {
