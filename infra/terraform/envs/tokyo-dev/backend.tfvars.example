@@ -1,0 +1,4 @@
+# Copy to backend.tfvars and pass via -backend-config=backend.tfvars
+# at terraform init time. backend.tfvars is gitignored.
+
+bucket = "bamboo-tfstate-<your-account-id>"
