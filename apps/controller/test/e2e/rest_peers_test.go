@@ -171,7 +171,9 @@ func TestRESTHeartbeat_ReportsEndpointChange(t *testing.T) {
 		t.Fatalf("register watcher: status=%d body=%s", wResp.status, wResp.body)
 	}
 	var watcher struct {
-		Self struct{ ID string `json:"id"` } `json:"self"`
+		Self struct {
+			ID string `json:"id"`
+		} `json:"self"`
 	}
 	_ = json.Unmarshal(wResp.body, &watcher)
 
@@ -185,7 +187,9 @@ func TestRESTHeartbeat_ReportsEndpointChange(t *testing.T) {
 		t.Fatalf("register target: status=%d body=%s", tResp.status, tResp.body)
 	}
 	var target struct {
-		Self struct{ ID string `json:"id"` } `json:"self"`
+		Self struct {
+			ID string `json:"id"`
+		} `json:"self"`
 	}
 	_ = json.Unmarshal(tResp.body, &target)
 
