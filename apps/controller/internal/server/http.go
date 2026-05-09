@@ -29,6 +29,7 @@ type HTTPServer struct {
 	users     *repo.Users
 	peers     *repo.Peers
 	policies  *repo.Policies
+	relays    *repo.Relays
 	traces    *clickhouse.Traces
 	anomalies *clickhouse.Anomalies
 	coord     *handlers.CoordinatorHandler
@@ -60,6 +61,7 @@ func NewHTTPServer(
 		users:     repo.NewUsers(pool),
 		peers:     repo.NewPeers(pool),
 		policies:  repo.NewPolicies(pool),
+		relays:    repo.NewRelays(pool),
 		traces:    clickhouse.NewTraces(ch),
 		anomalies: clickhouse.NewAnomalies(ch),
 		coord:     coord,
@@ -69,6 +71,7 @@ func NewHTTPServer(
 	}
 	mux.HandleFunc("/auth/", h.routeAuth)
 	mux.HandleFunc("/auth/sign-out", h.handleSignOut)
+	mux.HandleFunc("/api/v1/admin/relays", h.routeAdminRelays)
 	mux.HandleFunc("/api/v1/", h.routeAPI)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
