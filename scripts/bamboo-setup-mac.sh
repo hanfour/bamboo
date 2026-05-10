@@ -10,6 +10,7 @@ VPS_IP="${VPS_IP:-54.238.9.51}"
 VPS_WG_PORT="${VPS_WG_PORT:-51820}"
 VPS_PUBKEY="${VPS_PUBKEY:-w+3xhUb6yQ7+lXiL0U9EYq+xPJJJCRnVHiWdISvgpnQ=}"
 VPS_TUN_IP="${VPS_TUN_IP:-100.64.0.1}"
+MESH_CIDR="${MESH_CIDR:-100.64.0.0/24}"
 SSH_KEY="${SSH_KEY:-$HOME/.ssh/bamboo-lightsail.pem}"
 HOSTNAME_LABEL="${HOSTNAME_LABEL:-$(hostname -s)}"
 OUT="${OUT:-$HOME/Desktop/bamboo-mac.conf}"
@@ -60,10 +61,14 @@ PrivateKey = $PRIV
 DNS        = 1.1.1.1
 
 [Peer]
-# vps-tokyo (bamboo VPS at $VPS_IP)
+# vps-tokyo (bamboo VPS at $VPS_IP). The VPS forwards between
+# tunnel peers (DERP-style hub), so AllowedIPs must cover the
+# whole tenant subnet, not just the VPS's own tunnel IP —
+# otherwise traffic to other peers (e.g. iPhone) skips the
+# tunnel and silently goes out the public default route.
 PublicKey           = $VPS_PUBKEY
 Endpoint            = $VPS_IP:$VPS_WG_PORT
-AllowedIPs          = $VPS_TUN_IP/32
+AllowedIPs          = $MESH_CIDR
 PersistentKeepalive = 25
 EOF
 chmod 600 "$OUT"
