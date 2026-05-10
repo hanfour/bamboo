@@ -65,6 +65,14 @@ services:
       OIDC_GOOGLE_CLIENT_SECRET: "${OIDC_GOOGLE_CLIENT_SECRET:-}"
       OIDC_GITHUB_CLIENT_ID: "${OIDC_GITHUB_CLIENT_ID:-}"
       OIDC_GITHUB_CLIENT_SECRET: "${OIDC_GITHUB_CLIENT_SECRET:-}"
+      # wg-state reporter: reads the host-side dump produced by
+      # wg-state-reporter.timer and reconciles peer liveness into
+      # the DB. Empty path disables; controller HTTP is unaffected.
+      BAMBOO_WG_STATE_PATH: "/var/lib/bamboo/wg-state.txt"
+    volumes:
+      # Read-only mount; the host timer writes via mv(1) so the
+      # controller never sees a half-written dump.
+      - /var/lib/bamboo:/var/lib/bamboo:ro
     command: ["serve", "--log-json"]
 
   web:

@@ -49,6 +49,22 @@ if command -v iptables >/dev/null 2>&1; then
     fi
 fi
 
+# 1b) Install the wg-state-reporter systemd timer. The controller
+# container can't reach the host's WireGuard netlink, so a host-side
+# timer dumps `wg show $IFACE` to /var/lib/bamboo/wg-state.txt every
+# 30s; the controller's wgsync reporter mirrors that into the peers
+# table so the UI's online / last-seen columns reflect real state.
+# Idempotent: install/upgrade the units, then enable+restart the
+# timer (which re-fires the oneshot service immediately).
+echo "==> installing wg-state-reporter systemd timer"
+sudo install -d -m 0755 -o root -g root /var/lib/bamboo
+sudo install -m 0755 wg-state-reporter.sh    /usr/local/sbin/wg-state-reporter.sh
+sudo install -m 0644 wg-state-reporter.service /etc/systemd/system/wg-state-reporter.service
+sudo install -m 0644 wg-state-reporter.timer   /etc/systemd/system/wg-state-reporter.timer
+sudo systemctl daemon-reload
+sudo systemctl enable --now wg-state-reporter.timer
+sudo systemctl restart wg-state-reporter.service
+
 # 2) Run migrations via the controller container itself. We need the
 # embedded migration files which live in the image; running migrate
 # in a one-shot container is the simplest path.

@@ -1,0 +1,17 @@
+[Unit]
+Description=Dump bamboo WireGuard hub state for the controller container
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/wg-state-reporter.sh
+# Run as root: `wg show` needs CAP_NET_ADMIN to read peer state.
+User=root
+# Tighten the rest of the service surface — we only need to read the
+# wg interface and write a single file under /var/lib/bamboo.
+ProtectSystem=strict
+ReadWritePaths=/var/lib/bamboo
+ProtectHome=true
+PrivateTmp=true
+NoNewPrivileges=true
