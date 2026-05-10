@@ -45,7 +45,7 @@ echo "    assigned: $SELF_IP  (peer id $SELF_ID)"
 echo "==> adding Mac peer on VPS"
 ssh -i "$SSH_KEY" -o StrictHostKeyChecking=accept-new \
     "ubuntu@$VPS_IP" \
-    "sudo wg set bamboo0 peer '$PUB' allowed-ips '$SELF_IP/32'"
+    "sudo wg set bamboo0 peer '$PUB' allowed-ips '$SELF_IP/32' && sudo wg-quick save bamboo0"
 echo "    done"
 
 # 4) Write a wg-quick conf that the WireGuard macOS / iOS app can
