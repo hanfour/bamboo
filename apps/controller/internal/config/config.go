@@ -17,6 +17,21 @@ type Config struct {
 	Redis      RedisConfig      `yaml:"redis"`
 	ClickHouse ClickHouseConfig `yaml:"clickhouse"`
 	Auth       AuthConfig       `yaml:"auth"`
+	WGSync     WGSyncConfig     `yaml:"wgsync"`
+}
+
+// WGSyncConfig configures the wg-state reporter that mirrors host
+// WireGuard liveness into the peers table. An empty StatePath
+// disables the reporter — appropriate for dev / non-VPS deploys.
+//
+// On a single-VPS production deploy, infra/full/bootstrap.sh
+// installs a systemd timer that writes `wg show $IFACE dump` to
+// the StatePath every Interval; the controller only needs read
+// access (mounted ro into the container).
+type WGSyncConfig struct {
+	StatePath    string `yaml:"state_path"`
+	Interval     string `yaml:"interval"`      // default 30s
+	OnlineWindow string `yaml:"online_window"` // default 3m
 }
 
 // ServerConfig holds gRPC and HTTP listener addresses.
@@ -151,6 +166,15 @@ func (c *Config) applyEnvOverrides() {
 	}
 	if v := os.Getenv("BAMBOO_BASE_URL"); v != "" {
 		c.Auth.OIDC.BaseURL = v
+	}
+	if v := os.Getenv("BAMBOO_WG_STATE_PATH"); v != "" {
+		c.WGSync.StatePath = v
+	}
+	if v := os.Getenv("BAMBOO_WG_SYNC_INTERVAL"); v != "" {
+		c.WGSync.Interval = v
+	}
+	if v := os.Getenv("BAMBOO_WG_ONLINE_WINDOW"); v != "" {
+		c.WGSync.OnlineWindow = v
 	}
 }
 

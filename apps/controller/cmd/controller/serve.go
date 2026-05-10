@@ -8,11 +8,14 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/hanfour/bamboo/apps/controller/internal/clickhouse"
 	"github.com/hanfour/bamboo/apps/controller/internal/config"
 	"github.com/hanfour/bamboo/apps/controller/internal/db"
+	"github.com/hanfour/bamboo/apps/controller/internal/db/repo"
 	"github.com/hanfour/bamboo/apps/controller/internal/server"
+	"github.com/hanfour/bamboo/apps/controller/internal/wgsync"
 	"github.com/spf13/cobra"
 )
 
@@ -68,6 +71,29 @@ func runServe(_ *cobra.Command, _ []string) error {
 	srv, err := server.New(cfg, pool, ch)
 	if err != nil {
 		return err
+	}
+
+	// Spawn the wg-state reporter when configured. On a single-VPS
+	// deploy infra/full/bootstrap.sh installs a host systemd timer
+	// that writes `wg show $IFACE dump` to StatePath; the reporter
+	// reconciles each peer's status into the DB so the UI's online
+	// / last-seen columns reflect actual cryptokey-routing state
+	// rather than a once-set 'online' that never decays. Empty
+	// StatePath disables the reporter for dev deploys.
+	if cfg.WGSync.StatePath != "" {
+		interval, _ := time.ParseDuration(cfg.WGSync.Interval)
+		win, _ := time.ParseDuration(cfg.WGSync.OnlineWindow)
+		reporter := wgsync.New(wgsync.Config{
+			Peers:        repo.NewPeers(pool),
+			StatePath:    cfg.WGSync.StatePath,
+			Interval:     interval,
+			OnlineWindow: win,
+		})
+		go func() {
+			if err := reporter.Run(ctx); err != nil {
+				slog.Warn("wgsync reporter exited", "err", err)
+			}
+		}()
 	}
 
 	slog.Info("controller starting",

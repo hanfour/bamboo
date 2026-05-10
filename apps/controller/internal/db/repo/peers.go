@@ -174,6 +174,53 @@ func (r *Peers) UpdateEndpoints(ctx context.Context, id uuid.UUID, endpoints []s
 	return tag.RowsAffected() > 0, nil
 }
 
+// SetStatusByPubKey writes status (and bumps last_seen_at when the
+// proposed value is newer) for a peer keyed by WireGuard public
+// key. Used by the wg-state reporter to mirror cryptokey-routing
+// state into the DB without clobbering a fresher last_seen_at
+// already written by client Heartbeat. lastSeen.IsZero() is
+// passed through as NULL so GREATEST keeps the existing value.
+//
+// No-op when no peer matches the pubkey.
+func (r *Peers) SetStatusByPubKey(ctx context.Context, pubKey, status string, lastSeen time.Time) error {
+	var ts any
+	if !lastSeen.IsZero() {
+		ts = lastSeen.UTC()
+	}
+	_, err := r.pool.Exec(ctx, `
+		UPDATE peers
+		   SET status       = $1,
+		       last_seen_at = GREATEST(last_seen_at, $2::timestamptz),
+		       updated_at   = now()
+		 WHERE wireguard_public_key = $3
+	`, status, ts, pubKey)
+	return err
+}
+
+// MarkOfflineExcept sets status='offline' on every peer whose
+// pubkey is NOT in keepPubKeys. last_seen_at is preserved so the
+// UI can still show "last seen N hours ago" for retired peers.
+// Empty keepPubKeys marks every peer offline.
+func (r *Peers) MarkOfflineExcept(ctx context.Context, keepPubKeys []string) error {
+	if len(keepPubKeys) == 0 {
+		_, err := r.pool.Exec(ctx, `
+			UPDATE peers
+			   SET status     = 'offline',
+			       updated_at = now()
+			 WHERE status <> 'offline'
+		`)
+		return err
+	}
+	_, err := r.pool.Exec(ctx, `
+		UPDATE peers
+		   SET status     = 'offline',
+		       updated_at = now()
+		 WHERE wireguard_public_key <> ALL($1::text[])
+		   AND status <> 'offline'
+	`, keepPubKeys)
+	return err
+}
+
 // UsedIPs returns the IP addresses already allocated within a tenant.
 // Used by the IP allocator.
 func (r *Peers) UsedIPs(ctx context.Context, tenantID uuid.UUID) ([]string, error) {
