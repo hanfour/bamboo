@@ -77,10 +77,22 @@
       },
       "actions": {
         "disable": "Disable peer",
+        "enable": "Enable peer",
         "rename": "Rename",
         "delete": "Delete peer",
-        "comingSoon": "Coming soon"
+        "confirmDelete": "Delete this peer? This cannot be undone.",
+        "confirmYes": "Delete",
+        "confirmCancel": "Cancel"
       },
+      "inline": {
+        "save": "Save",
+        "cancel": "Cancel",
+        "working": "Working…",
+        "editHostname": "Edit hostname",
+        "editTags": "Edit tags",
+        "tagsPlaceholder": "Comma-separated, e.g. db, prod"
+      },
+      "errorPrefix": "Action failed:",
       "empty": {
         "endpoints": "No endpoints reported yet",
         "tags": "No tags",

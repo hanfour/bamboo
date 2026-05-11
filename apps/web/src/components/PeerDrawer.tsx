@@ -2,14 +2,24 @@
 
 'use client';
 
-import { useEffect } from 'react';
+import { useEffect, useState, useTransition } from 'react';
 import { useTranslations } from 'next-intl';
+import {
+  deletePeerAction,
+  renamePeerAction,
+  setPeerStatusAction,
+  setPeerTagsAction,
+} from '@/lib/actions';
 import type { Peer } from '@/lib/types';
 
 type Props = {
   peer: Peer | null;
   open: boolean;
   onClose: () => void;
+  // onDeleted fires after a successful delete so PeersView can clear
+  // the ?selected= URL query — otherwise the drawer would re-open
+  // pointing at a now-404 id.
+  onDeleted: () => void;
 };
 
 // PeerDrawer is the slide-in side panel that appears when a row is
@@ -17,7 +27,7 @@ type Props = {
 // forward and link-sharing both work; `peer` is null when the id
 // resolved to 404 (deleted peer or stale link), and the drawer
 // renders a not-found state in that case.
-export function PeerDrawer({ peer, open, onClose }: Props) {
+export function PeerDrawer({ peer, open, onClose, onDeleted }: Props) {
   const t = useTranslations('peers.drawer');
   const tStatus = useTranslations('peers.status');
 
@@ -51,7 +61,13 @@ export function PeerDrawer({ peer, open, onClose }: Props) {
       >
         <DrawerHeader peer={peer} statusLabel={peer ? tStatus(peer.status) : ''} onClose={onClose} closeLabel={t('close')} />
         <div className="flex-1 overflow-y-auto px-6 py-4">
-          {peer ? <DrawerBody peer={peer} /> : <NotFoundState message={t('notFound')} />}
+          {peer ? (
+            // key forces the body to remount on peer-change so the
+            // inline edit / confirm state resets between selections.
+            <DrawerBody key={peer.id} peer={peer} onDeleted={onDeleted} />
+          ) : (
+            <NotFoundState message={t('notFound')} />
+          )}
         </div>
       </div>
     </div>
@@ -99,34 +115,24 @@ function DrawerHeader({
   );
 }
 
-function DrawerBody({ peer }: { peer: Peer }) {
+function DrawerBody({ peer, onDeleted }: { peer: Peer; onDeleted: () => void }) {
   const t = useTranslations('peers.drawer');
+  const [error, setError] = useState<string | null>(null);
+
   return (
     <div className="space-y-6">
+      {error && (
+        <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-900/50 dark:bg-red-950/40 dark:text-red-300">
+          {t('errorPrefix')} {error}
+        </div>
+      )}
+
       <Section title={t('sections.basic')}>
-        <Field label={t('fields.hostname')} value={peer.hostname} />
+        <HostnameField peer={peer} onError={setError} />
         <Field label={t('fields.ip')} value={peer.ip} mono />
         <Field label={t('fields.os')} value={peer.os || '—'} />
         <Field label={t('fields.clientVersion')} value={peer.clientVersion || '—'} mono />
-        <Field
-          label={t('fields.tags')}
-          value={
-            peer.tags.length === 0 ? (
-              <span className="text-zinc-500 dark:text-zinc-400">{t('empty.tags')}</span>
-            ) : (
-              <div className="flex flex-wrap gap-1">
-                {peer.tags.map((tag) => (
-                  <span
-                    key={tag}
-                    className="rounded bg-zinc-100 px-2 py-0.5 text-xs text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
-                  >
-                    {tag}
-                  </span>
-                ))}
-              </div>
-            )
-          }
-        />
+        <TagsField peer={peer} onError={setError} />
       </Section>
 
       <Section title={t('sections.wireguard')}>
@@ -187,11 +193,274 @@ function DrawerBody({ peer }: { peer: Peer }) {
       </Section>
 
       <Section title={t('sections.actions')}>
-        <ActionPlaceholder label={t('actions.rename')} title={t('actions.comingSoon')} />
-        <ActionPlaceholder label={t('actions.disable')} title={t('actions.comingSoon')} />
-        <ActionPlaceholder label={t('actions.delete')} title={t('actions.comingSoon')} danger />
+        <DisableToggle peer={peer} onError={setError} />
+        <DeleteButton peer={peer} onError={setError} onDeleted={onDeleted} />
       </Section>
     </div>
+  );
+}
+
+// HostnameField wraps the basic-info hostname row with click-to-edit
+// behavior: shows the value with a small "edit" affordance until
+// clicked, then turns into a text input with save / cancel buttons.
+// Enter saves, Esc cancels.
+function HostnameField({ peer, onError }: { peer: Peer; onError: (msg: string | null) => void }) {
+  const t = useTranslations('peers.drawer');
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(peer.hostname);
+  const [pending, startTransition] = useTransition();
+
+  function save() {
+    const next = draft.trim();
+    if (next === '' || next === peer.hostname) {
+      setEditing(false);
+      setDraft(peer.hostname);
+      return;
+    }
+    startTransition(async () => {
+      const res = await renamePeerAction(peer.id, next);
+      if (res.ok) {
+        setEditing(false);
+        onError(null);
+      } else {
+        onError(res.error);
+      }
+    });
+  }
+
+  return (
+    <div className="grid grid-cols-[7rem_1fr] gap-3 text-sm">
+      <dt className="text-zinc-500 dark:text-zinc-400">{t('fields.hostname')}</dt>
+      <dd className="min-w-0 break-words text-zinc-900 dark:text-zinc-100">
+        {editing ? (
+          <div className="flex gap-2">
+            <input
+              autoFocus
+              type="text"
+              value={draft}
+              disabled={pending}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') save();
+                if (e.key === 'Escape') {
+                  setEditing(false);
+                  setDraft(peer.hostname);
+                }
+              }}
+              className="flex-1 rounded border border-zinc-300 bg-white px-2 py-1 text-sm text-zinc-900 outline-none focus:border-bamboo-500 focus:ring-1 focus:ring-bamboo-500 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
+            />
+            <button
+              type="button"
+              onClick={save}
+              disabled={pending}
+              className="rounded border border-bamboo-600 bg-bamboo-600 px-2 text-xs font-medium text-white hover:bg-bamboo-700 disabled:opacity-50"
+            >
+              {t('inline.save')}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setEditing(false);
+                setDraft(peer.hostname);
+              }}
+              disabled={pending}
+              className="rounded border border-zinc-300 px-2 text-xs text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
+            >
+              {t('inline.cancel')}
+            </button>
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={() => setEditing(true)}
+            className="group flex items-center gap-2 text-left"
+            title={t('inline.editHostname')}
+          >
+            <span>{peer.hostname}</span>
+            <span className="text-xs text-zinc-400 opacity-0 group-hover:opacity-100">
+              ✎
+            </span>
+          </button>
+        )}
+      </dd>
+    </div>
+  );
+}
+
+// TagsField turns the read-only tags row into an editable comma-
+// separated input. Blur commits the change; we accept the server's
+// canonical form (sorted, trimmed) implicitly via the next re-render
+// because the Server Action revalidates the page.
+function TagsField({ peer, onError }: { peer: Peer; onError: (msg: string | null) => void }) {
+  const t = useTranslations('peers.drawer');
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(peer.tags.join(', '));
+  const [pending, startTransition] = useTransition();
+
+  function commit() {
+    // Defer the action; toggling editing first avoids a stuck state
+    // when the user blurs the input by clicking elsewhere.
+    setEditing(false);
+    const next = draft
+      .split(',')
+      .map((s) => s.trim())
+      .filter((s) => s !== '');
+    const same = next.length === peer.tags.length && next.every((v, i) => v === peer.tags[i]);
+    if (same) return;
+    startTransition(async () => {
+      const res = await setPeerTagsAction(peer.id, next);
+      if (res.ok) {
+        onError(null);
+      } else {
+        onError(res.error);
+      }
+    });
+  }
+
+  return (
+    <div className="grid grid-cols-[7rem_1fr] gap-3 text-sm">
+      <dt className="text-zinc-500 dark:text-zinc-400">{t('fields.tags')}</dt>
+      <dd className="min-w-0 break-words text-zinc-900 dark:text-zinc-100">
+        {editing ? (
+          <input
+            autoFocus
+            type="text"
+            value={draft}
+            disabled={pending}
+            placeholder={t('inline.tagsPlaceholder')}
+            onChange={(e) => setDraft(e.target.value)}
+            onBlur={commit}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+              if (e.key === 'Escape') {
+                setEditing(false);
+                setDraft(peer.tags.join(', '));
+              }
+            }}
+            className="w-full rounded border border-zinc-300 bg-white px-2 py-1 text-sm text-zinc-900 outline-none focus:border-bamboo-500 focus:ring-1 focus:ring-bamboo-500 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
+          />
+        ) : (
+          <button
+            type="button"
+            onClick={() => {
+              setDraft(peer.tags.join(', '));
+              setEditing(true);
+            }}
+            className="group flex w-full flex-wrap items-center gap-1 text-left"
+            title={t('inline.editTags')}
+          >
+            {peer.tags.length === 0 ? (
+              <span className="text-zinc-500 dark:text-zinc-400">{t('empty.tags')}</span>
+            ) : (
+              peer.tags.map((tag) => (
+                <span
+                  key={tag}
+                  className="rounded bg-zinc-100 px-2 py-0.5 text-xs text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
+                >
+                  {tag}
+                </span>
+              ))
+            )}
+            <span className="text-xs text-zinc-400 opacity-0 group-hover:opacity-100">✎</span>
+          </button>
+        )}
+      </dd>
+    </div>
+  );
+}
+
+// DisableToggle flips a peer between 'disabled' and 'online'. The
+// online/offline distinction reverts to reporter control on the
+// next tick — we don't try to remember the last reporter-derived
+// status before disabling. Re-enabling sets 'online' optimistically
+// and trusts the reporter to correct it.
+function DisableToggle({ peer, onError }: { peer: Peer; onError: (msg: string | null) => void }) {
+  const t = useTranslations('peers.drawer');
+  const [pending, startTransition] = useTransition();
+  const isDisabled = peer.status === 'disabled';
+  const label = isDisabled ? t('actions.enable') : t('actions.disable');
+  const nextStatus = isDisabled ? 'online' : 'disabled';
+
+  return (
+    <button
+      type="button"
+      disabled={pending}
+      onClick={() => {
+        startTransition(async () => {
+          const res = await setPeerStatusAction(peer.id, nextStatus);
+          if (res.ok) onError(null);
+          else onError(res.error);
+        });
+      }}
+      className="w-full rounded-md border border-zinc-200 px-3 py-1.5 text-left text-sm text-zinc-700 hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-900"
+    >
+      {pending ? t('inline.working') : label}
+    </button>
+  );
+}
+
+// DeleteButton uses a two-stage confirm pattern instead of a modal:
+// first click reveals "確定 / 取消" buttons inline; second click on
+// confirm fires the action. Avoids importing a modal lib for one
+// destructive verb.
+function DeleteButton({
+  peer,
+  onError,
+  onDeleted,
+}: {
+  peer: Peer;
+  onError: (msg: string | null) => void;
+  onDeleted: () => void;
+}) {
+  const t = useTranslations('peers.drawer');
+  const [confirming, setConfirming] = useState(false);
+  const [pending, startTransition] = useTransition();
+
+  if (confirming) {
+    return (
+      <div className="space-y-1">
+        <p className="text-sm text-red-700 dark:text-red-300">{t('actions.confirmDelete')}</p>
+        <div className="flex gap-2">
+          <button
+            type="button"
+            disabled={pending}
+            onClick={() => {
+              startTransition(async () => {
+                const res = await deletePeerAction(peer.id);
+                if (res.ok) {
+                  onError(null);
+                  onDeleted();
+                } else {
+                  onError(res.error);
+                  setConfirming(false);
+                }
+              });
+            }}
+            className="flex-1 rounded-md border border-red-600 bg-red-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-red-700 disabled:opacity-50"
+          >
+            {pending ? t('inline.working') : t('actions.confirmYes')}
+          </button>
+          <button
+            type="button"
+            disabled={pending}
+            onClick={() => setConfirming(false)}
+            className="flex-1 rounded-md border border-zinc-200 px-3 py-1.5 text-sm text-zinc-700 hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-900"
+          >
+            {t('actions.confirmCancel')}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={() => setConfirming(true)}
+      className="w-full rounded-md border border-red-200 px-3 py-1.5 text-left text-sm text-red-700 hover:bg-red-50 dark:border-red-900/50 dark:text-red-400 dark:hover:bg-red-950/40"
+    >
+      {t('actions.delete')}
+    </button>
   );
 }
 
@@ -230,31 +499,6 @@ function Field({
         {value}
       </dd>
     </div>
-  );
-}
-
-function ActionPlaceholder({
-  label,
-  title,
-  danger = false,
-}: {
-  label: string;
-  title: string;
-  danger?: boolean;
-}) {
-  return (
-    <button
-      type="button"
-      disabled
-      title={title}
-      className={`w-full cursor-not-allowed rounded-md border px-3 py-1.5 text-left text-sm opacity-60 ${
-        danger
-          ? 'border-red-200 text-red-700 dark:border-red-900/50 dark:text-red-400'
-          : 'border-zinc-200 text-zinc-700 dark:border-zinc-800 dark:text-zinc-300'
-      }`}
-    >
-      {label}
-    </button>
   );
 }
 

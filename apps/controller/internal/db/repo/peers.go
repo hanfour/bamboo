@@ -4,6 +4,8 @@ package repo
 
 import (
 	"context"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -14,6 +16,19 @@ import (
 type Peers struct {
 	pool *db.Pool
 }
+
+// peerTagsSubquery returns the SQL fragment used by every Peer read
+// path to materialize the Tags slice without a second round-trip.
+// The schema (migration 00001) has tags + peer_tags normalized: tag
+// values live in `tags(id, tenant_id, name)`, peer_tags is the
+// (peer_id, tag_id) join. We surface tag *names* — that's what the
+// UI and the ACL DSL (`tag:foo`) consume.
+const peerTagsSubquery = `COALESCE((
+    SELECT array_agg(t.name ORDER BY t.name)
+    FROM peer_tags pt
+    JOIN tags t ON t.id = pt.tag_id
+    WHERE pt.peer_id = peers.id
+), ARRAY[]::text[])`
 
 // NewPeers constructs a Peers repository.
 func NewPeers(pool *db.Pool) *Peers {
@@ -35,6 +50,11 @@ type Peer struct {
 	// populated by the client via STUN discovery (or LAN heuristics).
 	// Empty until the peer first reports them.
 	Endpoints []string
+	// Tags are user-defined labels from the peer_tags join table.
+	// Populated by every read path via a COALESCE+array_agg subquery
+	// so callers never see nil; Insert RETURNING sets this to an
+	// empty slice because a freshly-inserted peer has no tags yet.
+	Tags []string
 	// WGEndpoint is the host:port the hub currently sees this peer
 	// dial from, written by the wg-state reporter. NULL until the
 	// reporter observes a non-"(none)" endpoint. Distinct from
@@ -72,6 +92,9 @@ func (r *Peers) Insert(ctx context.Context, p *Peer) (*Peer, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Freshly-inserted peer has no peer_tags rows yet; skip the
+	// subquery and inline the empty slice.
+	out.Tags = []string{}
 	return &out, nil
 }
 
@@ -82,7 +105,8 @@ func (r *Peers) GetByID(ctx context.Context, id uuid.UUID) (*Peer, error) {
 		SELECT id, tenant_id, user_id, hostname, wireguard_public_key,
 		       host(ip), os, client_version, status, endpoints,
 		       wg_endpoint, rx_bytes, tx_bytes,
-		       created_at, updated_at, last_seen_at, last_handshake_at
+		       created_at, updated_at, last_seen_at, last_handshake_at,
+		       `+peerTagsSubquery+`
 		FROM peers
 		WHERE id = $1
 	`, id).Scan(
@@ -90,6 +114,7 @@ func (r *Peers) GetByID(ctx context.Context, id uuid.UUID) (*Peer, error) {
 		&p.IP, &p.OS, &p.ClientVersion, &p.Status, &p.Endpoints,
 		&p.WGEndpoint, &p.RxBytes, &p.TxBytes,
 		&p.CreatedAt, &p.UpdatedAt, &p.LastSeenAt, &p.LastHandshakeAt,
+		&p.Tags,
 	)
 	if err != nil {
 		return nil, asNotFound(err)
@@ -121,7 +146,8 @@ func (r *Peers) FindByPubKey(ctx context.Context, tenantID uuid.UUID, pubKey str
 		SELECT id, tenant_id, user_id, hostname, wireguard_public_key,
 		       host(ip), os, client_version, status, endpoints,
 		       wg_endpoint, rx_bytes, tx_bytes,
-		       created_at, updated_at, last_seen_at, last_handshake_at
+		       created_at, updated_at, last_seen_at, last_handshake_at,
+		       `+peerTagsSubquery+`
 		FROM peers
 		WHERE tenant_id = $1 AND wireguard_public_key = $2
 	`, tenantID, pubKey).Scan(
@@ -129,6 +155,7 @@ func (r *Peers) FindByPubKey(ctx context.Context, tenantID uuid.UUID, pubKey str
 		&p.IP, &p.OS, &p.ClientVersion, &p.Status, &p.Endpoints,
 		&p.WGEndpoint, &p.RxBytes, &p.TxBytes,
 		&p.CreatedAt, &p.UpdatedAt, &p.LastSeenAt, &p.LastHandshakeAt,
+		&p.Tags,
 	)
 	if err != nil {
 		return nil, asNotFound(err)
@@ -142,7 +169,8 @@ func (r *Peers) ListByTenant(ctx context.Context, tenantID uuid.UUID) ([]*Peer, 
 		SELECT id, tenant_id, user_id, hostname, wireguard_public_key,
 		       host(ip), os, client_version, status, endpoints,
 		       wg_endpoint, rx_bytes, tx_bytes,
-		       created_at, updated_at, last_seen_at, last_handshake_at
+		       created_at, updated_at, last_seen_at, last_handshake_at,
+		       `+peerTagsSubquery+`
 		FROM peers
 		WHERE tenant_id = $1
 		ORDER BY ip
@@ -160,6 +188,7 @@ func (r *Peers) ListByTenant(ctx context.Context, tenantID uuid.UUID) ([]*Peer, 
 			&p.IP, &p.OS, &p.ClientVersion, &p.Status, &p.Endpoints,
 			&p.WGEndpoint, &p.RxBytes, &p.TxBytes,
 			&p.CreatedAt, &p.UpdatedAt, &p.LastSeenAt, &p.LastHandshakeAt,
+			&p.Tags,
 		); err != nil {
 			return nil, err
 		}
@@ -206,8 +235,11 @@ type WGSyncState struct {
 // SyncWGState mirrors one peer's state from the host's wg dump into
 // the peers row identified by pubkey. Used by the wg-state reporter.
 //
-//   - status is overwritten outright (it's a derived attribute the
-//     reporter computes from the handshake age).
+//   - status is overwritten EXCEPT when the row is admin-disabled
+//     ('disabled'), in which case the reporter's online/offline
+//     derivation is suppressed and the column sticks at 'disabled'.
+//     Wgsync metrics (endpoint, bytes, handshake) still update so
+//     forensic observability of a disabled peer remains useful.
 //   - last_seen_at and last_handshake_at use GREATEST so a stale
 //     dump (clock skew, parallel write from REST Heartbeat) cannot
 //     roll the timestamp backwards.
@@ -235,7 +267,7 @@ func (r *Peers) SyncWGState(ctx context.Context, s WGSyncState) (int64, error) {
 	}
 	tag, err := r.pool.Exec(ctx, `
 		UPDATE peers
-		   SET status            = $1,
+		   SET status            = CASE WHEN status = 'disabled' THEN 'disabled' ELSE $1 END,
 		       last_seen_at      = GREATEST(last_seen_at, $2::timestamptz),
 		       last_handshake_at = GREATEST(last_handshake_at, $2::timestamptz),
 		       wg_endpoint       = COALESCE($3, wg_endpoint),
@@ -273,9 +305,148 @@ func (r *Peers) MarkOfflineExcept(ctx context.Context, keepPubKeys []string) err
 		   SET status     = 'offline',
 		       updated_at = now()
 		 WHERE wireguard_public_key <> ALL($1::text[])
-		   AND status <> 'offline'
+		   AND status NOT IN ('offline', 'disabled')
 	`, keepPubKeys)
 	return err
+}
+
+// UpdateHostname renames a peer in place. Returns true when the new
+// hostname differs from what was stored, so the caller can decide
+// whether to publish a PeerUpdated event and write an audit row.
+// A no-op update — same hostname as before — returns (false, nil).
+func (r *Peers) UpdateHostname(ctx context.Context, id uuid.UUID, hostname string) (bool, error) {
+	tag, err := r.pool.Exec(ctx, `
+		UPDATE peers
+		   SET hostname   = $2,
+		       updated_at = now()
+		 WHERE id = $1
+		   AND hostname IS DISTINCT FROM $2
+	`, id, hostname)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
+// SetStatus writes the status column directly. Used by the REST
+// handlers for the disable / enable buttons; the wg-state reporter
+// uses SyncWGState instead, which also bumps the timestamp columns.
+// Returns the number of rows updated; 0 means the peer no longer
+// exists.
+func (r *Peers) SetStatus(ctx context.Context, id uuid.UUID, status string) (int64, error) {
+	tag, err := r.pool.Exec(ctx, `
+		UPDATE peers
+		   SET status     = $2,
+		       updated_at = now()
+		 WHERE id = $1
+		   AND status IS DISTINCT FROM $2
+	`, id, status)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
+}
+
+// Delete removes a peer by id. peer_tags rows cascade via the FK
+// constraint defined in migration 00001. Returns the number of rows
+// deleted; 0 means the peer was already gone.
+func (r *Peers) Delete(ctx context.Context, id uuid.UUID) (int64, error) {
+	tag, err := r.pool.Exec(ctx, `DELETE FROM peers WHERE id = $1`, id)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
+}
+
+// SetTags replaces a peer's tag set atomically. Tags are normalized
+// in the schema: tag *names* live in `tags(tenant_id, name)` and the
+// peer_tags join links peer_id → tag_id. SetTags:
+//
+//  1. canonicalizes the input (trim, drop empties, dedupe, sort);
+//  2. upserts each name into `tags` for the peer's tenant;
+//  3. replaces the peer_tags rows for this peer with the resolved
+//     tag_ids in a single transaction.
+//
+// Returns the canonical tag-name set the row now carries, so
+// callers can audit-log a stable diff without re-querying.
+//
+// Note we keep orphan `tags` rows on purpose (no DELETE FROM tags
+// when the last peer with a tag is untagged). Tags are tenant-
+// scoped descriptors and may be referenced by ACL policy text by
+// name; collecting them is a separate concern from peer membership.
+func (r *Peers) SetTags(ctx context.Context, id uuid.UUID, tags []string) ([]string, error) {
+	// Canonicalize: trim, drop empties + over-long, dedupe, sort.
+	// The 64-char cap matches the typical max for ACL labels we've
+	// seen elsewhere; intentionally silent so a long entry gets
+	// dropped instead of failing the whole call (hostname rejects
+	// outright because there's only one of it per request).
+	seen := make(map[string]struct{}, len(tags))
+	clean := make([]string, 0, len(tags))
+	for _, t := range tags {
+		t = strings.TrimSpace(t)
+		if t == "" || len(t) > 64 {
+			continue
+		}
+		if _, ok := seen[t]; ok {
+			continue
+		}
+		seen[t] = struct{}{}
+		clean = append(clean, t)
+	}
+	sort.Strings(clean)
+
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	// Need the peer's tenant_id to scope tag upserts. We could
+	// require callers to pass it, but the API layer already has
+	// the peer loaded and looking it up here keeps SetTags's
+	// signature minimal.
+	var tenantID uuid.UUID
+	if err := tx.QueryRow(ctx, `SELECT tenant_id FROM peers WHERE id = $1`, id).Scan(&tenantID); err != nil {
+		return nil, asNotFound(err)
+	}
+
+	// Resolve each tag name to a tag_id, creating the tags row when
+	// missing. The ON CONFLICT clause's DO UPDATE is a self-assign
+	// no-op that exists solely so RETURNING fires for existing rows;
+	// DO NOTHING would skip RETURNING and force a second SELECT.
+	tagIDs := make([]uuid.UUID, 0, len(clean))
+	for _, name := range clean {
+		var tagID uuid.UUID
+		if err := tx.QueryRow(ctx, `
+			INSERT INTO tags (tenant_id, name) VALUES ($1, $2)
+			ON CONFLICT (tenant_id, name) DO UPDATE SET name = EXCLUDED.name
+			RETURNING id
+		`, tenantID, name).Scan(&tagID); err != nil {
+			return nil, err
+		}
+		tagIDs = append(tagIDs, tagID)
+	}
+
+	if _, err := tx.Exec(ctx, `DELETE FROM peer_tags WHERE peer_id = $1`, id); err != nil {
+		return nil, err
+	}
+	for _, tagID := range tagIDs {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO peer_tags (peer_id, tag_id) VALUES ($1, $2)
+			ON CONFLICT (peer_id, tag_id) DO NOTHING
+		`, id, tagID); err != nil {
+			return nil, err
+		}
+	}
+	// Bump updated_at on the peer so consumers polling for changes
+	// see a fresh timestamp even though no peers column changed.
+	if _, err := tx.Exec(ctx, `UPDATE peers SET updated_at = now() WHERE id = $1`, id); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return clean, nil
 }
 
 // UsedIPs returns the IP addresses already allocated within a tenant.

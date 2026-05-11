@@ -301,6 +301,221 @@ func equalStrings(a, b []string) bool {
 	return true
 }
 
+// TestPeers_TagsRoundtrip covers the peer_tags wiring: a freshly
+// inserted peer has zero tags, SetTags canonicalizes (trim, dedupe,
+// sort), and every read path returns the same set.
+func TestPeers_TagsRoundtrip(t *testing.T) {
+	pool := requireDB(t)
+	tenants := repo.NewTenants(pool)
+	peers := repo.NewPeers(pool)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	slug := fmt.Sprintf("tags-%s", uuid.NewString()[:8])
+	tenant, err := tenants.GetOrCreate(ctx, slug, "tags test", "100.64.0.0/24")
+	if err != nil {
+		t.Fatalf("GetOrCreate tenant: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, tenant.ID)
+	})
+
+	pub := randomB64(t)
+	inserted, err := peers.Insert(ctx, &repo.Peer{
+		TenantID:           tenant.ID,
+		Hostname:           "p-tags",
+		WireGuardPublicKey: pub,
+		IP:                 "100.64.0.30",
+		Status:             "online",
+	})
+	if err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+	if len(inserted.Tags) != 0 {
+		t.Errorf("fresh peer Tags = %v, want []", inserted.Tags)
+	}
+
+	// Canonicalization: whitespace + duplicates + out-of-order.
+	got, err := peers.SetTags(ctx, inserted.ID, []string{"  db", "lan", "db", "", "  ", "lan", "api"})
+	if err != nil {
+		t.Fatalf("SetTags: %v", err)
+	}
+	want := []string{"api", "db", "lan"}
+	if !equalStrings(got, want) {
+		t.Errorf("SetTags returned %v, want %v", got, want)
+	}
+
+	// All read paths see the canonical set.
+	byID, _ := peers.GetByID(ctx, inserted.ID)
+	if !equalStrings(byID.Tags, want) {
+		t.Errorf("GetByID Tags = %v, want %v", byID.Tags, want)
+	}
+	list, _ := peers.ListByTenant(ctx, tenant.ID)
+	if len(list) != 1 || !equalStrings(list[0].Tags, want) {
+		t.Errorf("ListByTenant Tags = %v, want %v", list, want)
+	}
+	byPub, _ := peers.FindByPubKey(ctx, tenant.ID, pub)
+	if !equalStrings(byPub.Tags, want) {
+		t.Errorf("FindByPubKey Tags = %v, want %v", byPub.Tags, want)
+	}
+
+	// Replace with a different set.
+	if _, err := peers.SetTags(ctx, inserted.ID, []string{"prod"}); err != nil {
+		t.Fatalf("SetTags second: %v", err)
+	}
+	byID, _ = peers.GetByID(ctx, inserted.ID)
+	if !equalStrings(byID.Tags, []string{"prod"}) {
+		t.Errorf("after replace Tags = %v, want [prod]", byID.Tags)
+	}
+
+	// Empty input clears the set.
+	if _, err := peers.SetTags(ctx, inserted.ID, nil); err != nil {
+		t.Fatalf("SetTags nil: %v", err)
+	}
+	byID, _ = peers.GetByID(ctx, inserted.ID)
+	if len(byID.Tags) != 0 {
+		t.Errorf("after clear Tags = %v, want []", byID.Tags)
+	}
+}
+
+// TestPeers_UpdateHostname covers happy path + no-op detection.
+func TestPeers_UpdateHostname(t *testing.T) {
+	pool := requireDB(t)
+	tenants := repo.NewTenants(pool)
+	peers := repo.NewPeers(pool)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	slug := fmt.Sprintf("rename-%s", uuid.NewString()[:8])
+	tenant, _ := tenants.GetOrCreate(ctx, slug, "rename test", "100.64.0.0/24")
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, tenant.ID)
+	})
+
+	inserted, err := peers.Insert(ctx, &repo.Peer{
+		TenantID:           tenant.ID,
+		Hostname:           "before",
+		WireGuardPublicKey: randomB64(t),
+		IP:                 "100.64.0.31",
+		Status:             "online",
+	})
+	if err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+
+	changed, err := peers.UpdateHostname(ctx, inserted.ID, "after")
+	if err != nil || !changed {
+		t.Fatalf("UpdateHostname: changed=%v err=%v", changed, err)
+	}
+	got, _ := peers.GetByID(ctx, inserted.ID)
+	if got.Hostname != "after" {
+		t.Errorf("Hostname = %q, want after", got.Hostname)
+	}
+
+	// No-op: same value returns false, no error.
+	changed, err = peers.UpdateHostname(ctx, inserted.ID, "after")
+	if err != nil || changed {
+		t.Errorf("no-op UpdateHostname: changed=%v err=%v, want changed=false", changed, err)
+	}
+}
+
+// TestPeers_Delete covers cascade (peer_tags rows go) and idempotency.
+func TestPeers_Delete(t *testing.T) {
+	pool := requireDB(t)
+	tenants := repo.NewTenants(pool)
+	peers := repo.NewPeers(pool)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	slug := fmt.Sprintf("delete-%s", uuid.NewString()[:8])
+	tenant, _ := tenants.GetOrCreate(ctx, slug, "delete test", "100.64.0.0/24")
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, tenant.ID)
+	})
+
+	inserted, _ := peers.Insert(ctx, &repo.Peer{
+		TenantID:           tenant.ID,
+		Hostname:           "doomed",
+		WireGuardPublicKey: randomB64(t),
+		IP:                 "100.64.0.32",
+		Status:             "online",
+	})
+	if _, err := peers.SetTags(ctx, inserted.ID, []string{"tag-a", "tag-b"}); err != nil {
+		t.Fatalf("SetTags: %v", err)
+	}
+
+	n, err := peers.Delete(ctx, inserted.ID)
+	if err != nil || n != 1 {
+		t.Fatalf("Delete: n=%d err=%v, want n=1", n, err)
+	}
+
+	// FK cascade: no peer_tags rows survive.
+	var tagCount int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM peer_tags WHERE peer_id = $1`, inserted.ID).Scan(&tagCount); err != nil {
+		t.Fatalf("count peer_tags: %v", err)
+	}
+	if tagCount != 0 {
+		t.Errorf("peer_tags rows after delete = %d, want 0 (cascade)", tagCount)
+	}
+
+	// Idempotent: re-delete returns 0 rows, no error.
+	n, err = peers.Delete(ctx, inserted.ID)
+	if err != nil || n != 0 {
+		t.Errorf("re-delete: n=%d err=%v, want n=0", n, err)
+	}
+}
+
+// TestPeers_SyncWGState_DisabledLock asserts that once an admin
+// sets status='disabled', the wgsync reporter cannot override it on
+// the next tick. Other wgsync fields still update so a disabled
+// peer's forensic data stays fresh.
+func TestPeers_SyncWGState_DisabledLock(t *testing.T) {
+	pool := requireDB(t)
+	tenants := repo.NewTenants(pool)
+	peers := repo.NewPeers(pool)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	slug := fmt.Sprintf("dislock-%s", uuid.NewString()[:8])
+	tenant, _ := tenants.GetOrCreate(ctx, slug, "disabled-lock test", "100.64.0.0/24")
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, tenant.ID)
+	})
+
+	pub := randomB64(t)
+	inserted, _ := peers.Insert(ctx, &repo.Peer{
+		TenantID:           tenant.ID,
+		Hostname:           "p-dis",
+		WireGuardPublicKey: pub,
+		IP:                 "100.64.0.33",
+		Status:             "disabled",
+	})
+
+	// Reporter ticks with a fresh handshake claiming online: status
+	// must stay disabled, but byte counters should still update.
+	if _, err := peers.SyncWGState(ctx, repo.WGSyncState{
+		PubKey:        pub,
+		Status:        "online",
+		LastHandshake: time.Now().UTC(),
+		Endpoint:      "203.0.113.99:51820",
+		RxBytes:       777,
+		TxBytes:       888,
+	}); err != nil {
+		t.Fatalf("SyncWGState: %v", err)
+	}
+	got, _ := peers.GetByID(ctx, inserted.ID)
+	if got.Status != "disabled" {
+		t.Errorf("status = %q, want disabled (reporter must not override admin disable)", got.Status)
+	}
+	if got.RxBytes != 777 || got.TxBytes != 888 {
+		t.Errorf("forensic byte counters did not update: rx=%d tx=%d", got.RxBytes, got.TxBytes)
+	}
+}
+
 func randomB64(t *testing.T) string {
 	t.Helper()
 	buf := make([]byte, 32)

@@ -439,6 +439,180 @@ func TestRESTGetPeer_BadUUID(t *testing.T) {
 	}
 }
 
+// TestRESTPatchPeer_HappyPath PATCHes hostname + status + tags in
+// one call and asserts the response carries the updated state.
+// Also verifies the audit row was written.
+func TestRESTPatchPeer_HappyPath(t *testing.T) {
+	f := startFixture(t)
+
+	reg := postJSON(t, f.httpURL+"/api/v1/peers/register", map[string]any{
+		"hostname":           "patch-before",
+		"wireguardPublicKey": randomPubKey(t),
+		"tenantSlug":         f.tenantSlug,
+	})
+	if reg.status != http.StatusOK {
+		t.Fatalf("register status=%d body=%s", reg.status, reg.body)
+	}
+	var regOut struct {
+		Self struct {
+			ID string `json:"id"`
+		} `json:"self"`
+	}
+	_ = json.Unmarshal(reg.body, &regOut)
+
+	resp := sendJSONWithTenant(t, http.MethodPatch, f.httpURL+"/api/v1/peers/"+regOut.Self.ID, f.tenantSlug, map[string]any{
+		"hostname": "patch-after",
+		"status":   "disabled",
+		"tags":     []string{"  db ", "lan", "db"}, // dupes + whitespace
+	})
+	if resp.status != http.StatusOK {
+		t.Fatalf("patch status=%d body=%s", resp.status, resp.body)
+	}
+
+	var p struct {
+		Hostname string   `json:"hostname"`
+		Status   string   `json:"status"`
+		Tags     []string `json:"tags"`
+	}
+	if err := json.Unmarshal(resp.body, &p); err != nil {
+		t.Fatalf("decode: %v; body=%s", err, resp.body)
+	}
+	if p.Hostname != "patch-after" {
+		t.Errorf("hostname = %q, want patch-after", p.Hostname)
+	}
+	if p.Status != "disabled" {
+		t.Errorf("status = %q, want disabled", p.Status)
+	}
+	want := []string{"db", "lan"} // canonicalized
+	if len(p.Tags) != len(want) {
+		t.Errorf("tags = %v, want %v", p.Tags, want)
+	}
+	for i, v := range want {
+		if i < len(p.Tags) && p.Tags[i] != v {
+			t.Errorf("tags[%d] = %q, want %q", i, p.Tags[i], v)
+		}
+	}
+
+	// One audit row recorded.
+	var count int
+	if err := f.pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM audit_log WHERE action='peer.update' AND resource_id = $1`,
+		regOut.Self.ID).Scan(&count); err != nil {
+		t.Fatalf("audit query: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("audit_log rows for peer.update = %d, want 1", count)
+	}
+}
+
+// TestRESTPatchPeer_RejectsInvalidStatus exercises the status enum
+// validation. A bad value must surface as 400 before any DB write.
+func TestRESTPatchPeer_RejectsInvalidStatus(t *testing.T) {
+	f := startFixture(t)
+	reg := postJSON(t, f.httpURL+"/api/v1/peers/register", map[string]any{
+		"hostname":           "patch-bad-status",
+		"wireguardPublicKey": randomPubKey(t),
+		"tenantSlug":         f.tenantSlug,
+	})
+	var regOut struct {
+		Self struct{ ID string }
+	}
+	_ = json.Unmarshal(reg.body, &regOut)
+	resp := sendJSONWithTenant(t, http.MethodPatch, f.httpURL+"/api/v1/peers/"+regOut.Self.ID, f.tenantSlug, map[string]any{
+		"status": "banana",
+	})
+	if resp.status != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400; body=%s", resp.status, resp.body)
+	}
+}
+
+// TestRESTPatchPeer_CrossTenantIsolation verifies the PATCH path
+// shares the same tenant-scoping contract as GET — a peer in
+// another tenant returns 404, not 403 or the actual row, so callers
+// cannot probe existence across tenants.
+func TestRESTPatchPeer_CrossTenantIsolation(t *testing.T) {
+	f := startFixture(t)
+	reg := postJSON(t, f.httpURL+"/api/v1/peers/register", map[string]any{
+		"hostname":           "patch-iso",
+		"wireguardPublicKey": randomPubKey(t),
+		"tenantSlug":         f.tenantSlug,
+	})
+	var regOut struct {
+		Self struct{ ID string }
+	}
+	_ = json.Unmarshal(reg.body, &regOut)
+
+	otherSlug := "e2e-other-" + regOut.Self.ID[:8]
+	t.Cleanup(func() { cleanupTenant(f.pool, otherSlug) })
+	resp := sendJSONWithTenant(t, http.MethodPatch, f.httpURL+"/api/v1/peers/"+regOut.Self.ID, otherSlug, map[string]any{
+		"hostname": "hijack-attempt",
+	})
+	if resp.status != http.StatusNotFound {
+		t.Errorf("cross-tenant patch should 404; got status=%d body=%s", resp.status, resp.body)
+	}
+}
+
+// TestRESTDeletePeer_HappyPath deletes a peer and asserts the row
+// is gone (subsequent GET 404s) plus an audit row was written.
+func TestRESTDeletePeer_HappyPath(t *testing.T) {
+	f := startFixture(t)
+	reg := postJSON(t, f.httpURL+"/api/v1/peers/register", map[string]any{
+		"hostname":           "doomed",
+		"wireguardPublicKey": randomPubKey(t),
+		"tenantSlug":         f.tenantSlug,
+	})
+	var regOut struct {
+		Self struct{ ID string }
+	}
+	_ = json.Unmarshal(reg.body, &regOut)
+
+	resp := sendJSONWithTenant(t, http.MethodDelete, f.httpURL+"/api/v1/peers/"+regOut.Self.ID, f.tenantSlug, nil)
+	if resp.status != http.StatusNoContent {
+		t.Fatalf("delete status=%d body=%s", resp.status, resp.body)
+	}
+
+	getResp := getJSON(t, f.httpURL+"/api/v1/peers/"+regOut.Self.ID, f.tenantSlug)
+	if getResp.status != http.StatusNotFound {
+		t.Errorf("after delete GET = %d, want 404", getResp.status)
+	}
+
+	var count int
+	_ = f.pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM audit_log WHERE action='peer.delete' AND resource_id = $1`,
+		regOut.Self.ID).Scan(&count)
+	if count != 1 {
+		t.Errorf("audit_log rows for peer.delete = %d, want 1", count)
+	}
+}
+
+// TestRESTDeletePeer_CrossTenantIsolation matches the PATCH version:
+// deleting another tenant's peer returns 404 and leaves the row.
+func TestRESTDeletePeer_CrossTenantIsolation(t *testing.T) {
+	f := startFixture(t)
+	reg := postJSON(t, f.httpURL+"/api/v1/peers/register", map[string]any{
+		"hostname":           "survive",
+		"wireguardPublicKey": randomPubKey(t),
+		"tenantSlug":         f.tenantSlug,
+	})
+	var regOut struct {
+		Self struct{ ID string }
+	}
+	_ = json.Unmarshal(reg.body, &regOut)
+
+	otherSlug := "e2e-other-" + regOut.Self.ID[:8]
+	t.Cleanup(func() { cleanupTenant(f.pool, otherSlug) })
+	resp := sendJSONWithTenant(t, http.MethodDelete, f.httpURL+"/api/v1/peers/"+regOut.Self.ID, otherSlug, nil)
+	if resp.status != http.StatusNotFound {
+		t.Errorf("cross-tenant delete should 404; got status=%d body=%s", resp.status, resp.body)
+	}
+
+	// Original tenant can still see the peer.
+	getResp := getJSON(t, f.httpURL+"/api/v1/peers/"+regOut.Self.ID, f.tenantSlug)
+	if getResp.status != http.StatusOK {
+		t.Errorf("original tenant GET = %d, want 200 (peer should still exist)", getResp.status)
+	}
+}
+
 // TestRESTGetPeer_CrossTenantIsolation registers a peer in tenant A
 // then fetches the same id with X-Tenant-Slug: B and expects 404.
 // Returning the real peer would let an attacker probe peer existence
@@ -493,6 +667,32 @@ func getJSON(t *testing.T, url, tenantSlug string) jsonResponse {
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
 	return jsonResponse{status: resp.StatusCode, body: body}
+}
+
+// sendJSONWithTenant issues a method+body request with X-Tenant-Slug
+// set. Used by the PATCH / DELETE tests below.
+func sendJSONWithTenant(t *testing.T, method, url, tenantSlug string, payload any) jsonResponse {
+	t.Helper()
+	var body io.Reader
+	if payload != nil {
+		buf, _ := json.Marshal(payload)
+		body = bytes.NewReader(buf)
+	}
+	req, err := http.NewRequest(method, url, body)
+	if err != nil {
+		t.Fatalf("build %s %s: %v", method, url, err)
+	}
+	if payload != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	req.Header.Set("X-Tenant-Slug", tenantSlug)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("%s %s: %v", method, url, err)
+	}
+	defer resp.Body.Close()
+	out, _ := io.ReadAll(resp.Body)
+	return jsonResponse{status: resp.StatusCode, body: out}
 }
 
 func postJSON(t *testing.T, url string, payload any) jsonResponse {
