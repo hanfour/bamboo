@@ -42,7 +42,12 @@ export function PeersView({ peers, selectedPeer, selectedId }: Props) {
   return (
     <>
       <PeerTable peers={peers} selectedId={selectedId} onSelect={(id) => setSelected(id)} />
-      <PeerDrawer peer={selectedPeer} open={open} onClose={() => setSelected(null)} />
+      <PeerDrawer
+        peer={selectedPeer}
+        open={open}
+        onClose={() => setSelected(null)}
+        onDeleted={() => setSelected(null)}
+      />
     </>
   );
 }

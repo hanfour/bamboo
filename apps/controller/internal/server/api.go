@@ -6,6 +6,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -55,11 +57,6 @@ func (h *HTTPServer) routeAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
 	authn, err := h.authenticate(r)
 	if err != nil {
 		writeError(w, http.StatusUnauthorized, err)
@@ -69,6 +66,30 @@ func (h *HTTPServer) routeAPI(w http.ResponseWriter, r *http.Request) {
 	tenant, err := h.resolveTenant(r, authn)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+
+	// /api/v1/peers/{id} accepts GET / PATCH / DELETE. Handled here
+	// before the GET-only block so the mutation methods are routed
+	// without a 405. The reserved sub-paths (register / heartbeat /
+	// watch) are exact-matched in the early switch above and never
+	// reach this prefix check.
+	if rest, ok := strings.CutPrefix(r.URL.Path, "/api/v1/peers/"); ok && rest != "" && !strings.Contains(rest, "/") {
+		switch r.Method {
+		case http.MethodGet:
+			h.apiPeer(w, r, tenant, rest)
+		case http.MethodPatch:
+			h.apiPeerPatch(w, r, authn, tenant, rest)
+		case http.MethodDelete:
+			h.apiPeerDelete(w, r, authn, tenant, rest)
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+		return
+	}
+
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
@@ -84,14 +105,6 @@ func (h *HTTPServer) routeAPI(w http.ResponseWriter, r *http.Request) {
 	case "/api/v1/recommendations":
 		h.apiRecommendations(w, r, tenant)
 	default:
-		// /api/v1/peers/{id} for single-peer fetch. The mutation
-		// and stream sub-paths (register / heartbeat / watch) are
-		// already short-circuited above, so any remaining
-		// /api/v1/peers/* segment is the {id} form.
-		if rest, ok := strings.CutPrefix(r.URL.Path, "/api/v1/peers/"); ok && rest != "" && !strings.Contains(rest, "/") {
-			h.apiPeer(w, r, tenant, rest)
-			return
-		}
 		http.NotFound(w, r)
 	}
 }
@@ -218,12 +231,16 @@ func peerToJSON(p *repo.Peer) apiPeerJSON {
 	if endpoints == nil {
 		endpoints = []string{}
 	}
+	tags := p.Tags
+	if tags == nil {
+		tags = []string{}
+	}
 	return apiPeerJSON{
 		ID:                 p.ID.String(),
 		TenantID:           p.TenantID.String(),
 		Hostname:           p.Hostname,
 		IP:                 p.IP,
-		Tags:               []string{}, // populated once peer_tags wiring lands
+		Tags:               tags,
 		OS:                 p.OS,
 		ClientVersion:      p.ClientVersion,
 		Status:             p.Status,
@@ -274,6 +291,198 @@ func (h *HTTPServer) apiPeer(w http.ResponseWriter, r *http.Request, tenant *rep
 		return
 	}
 	writeJSON(w, http.StatusOK, peerToJSON(p))
+}
+
+// apiPeerPatchReq is the request shape for PATCH /api/v1/peers/{id}.
+// Each field is a pointer so the handler can distinguish "field
+// absent" (preserve) from "field set to its zero value" (e.g. empty
+// tag list = clear all tags).
+type apiPeerPatchReq struct {
+	Hostname *string   `json:"hostname,omitempty"`
+	Status   *string   `json:"status,omitempty"`
+	Tags     *[]string `json:"tags,omitempty"`
+}
+
+// apiPeerPatch implements PATCH /api/v1/peers/{id}. Any subset of
+// hostname / status / tags can be updated in one call; the audit
+// row records before/after only for the fields that actually
+// changed. Tenant scoping is identical to apiPeer — a peer in a
+// different tenant returns 404.
+func (h *HTTPServer) apiPeerPatch(w http.ResponseWriter, r *http.Request, authn *authnContext, tenant *repo.Tenant, idStr string) {
+	id, err := uuid.Parse(idStr)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	var req apiPeerPatchReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("decode body: %w", err))
+		return
+	}
+
+	current, err := h.peers.GetByID(r.Context(), id)
+	if errors.Is(err, repo.ErrNotFound) {
+		http.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if current.TenantID != tenant.ID {
+		http.NotFound(w, r)
+		return
+	}
+
+	// Validate before any write so we never half-apply.
+	var newHostname string
+	if req.Hostname != nil {
+		newHostname = strings.TrimSpace(*req.Hostname)
+		if newHostname == "" {
+			writeError(w, http.StatusBadRequest, errors.New("hostname must be non-empty"))
+			return
+		}
+		if len(newHostname) > 253 {
+			writeError(w, http.StatusBadRequest, errors.New("hostname exceeds 253 chars"))
+			return
+		}
+	}
+	if req.Status != nil {
+		switch *req.Status {
+		case "online", "offline", "disabled":
+		default:
+			writeError(w, http.StatusBadRequest, fmt.Errorf("status must be online | offline | disabled, got %q", *req.Status))
+			return
+		}
+	}
+
+	diff := map[string]any{}
+
+	if req.Hostname != nil && newHostname != current.Hostname {
+		if _, err := h.peers.UpdateHostname(r.Context(), id, newHostname); err != nil {
+			writeError(w, http.StatusInternalServerError, fmt.Errorf("update hostname: %w", err))
+			return
+		}
+		diff["hostname"] = map[string]string{"from": current.Hostname, "to": newHostname}
+	}
+	if req.Status != nil && *req.Status != current.Status {
+		if _, err := h.peers.SetStatus(r.Context(), id, *req.Status); err != nil {
+			writeError(w, http.StatusInternalServerError, fmt.Errorf("set status: %w", err))
+			return
+		}
+		diff["status"] = map[string]string{"from": current.Status, "to": *req.Status}
+	}
+	if req.Tags != nil {
+		newTags, err := h.peers.SetTags(r.Context(), id, *req.Tags)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, fmt.Errorf("set tags: %w", err))
+			return
+		}
+		if !stringSlicesEqual(current.Tags, newTags) {
+			diff["tags"] = map[string][]string{"from": current.Tags, "to": newTags}
+		}
+	}
+
+	if len(diff) > 0 {
+		writePeerAudit(r.Context(), h.audits, authn, tenant.ID, id, "peer.update", diff)
+	}
+
+	// Re-read so the response carries the canonical post-update state
+	// (including the de-duped, sorted tag set from SetTags).
+	updated, err := h.peers.GetByID(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, peerToJSON(updated))
+}
+
+// apiPeerDelete implements DELETE /api/v1/peers/{id}. peer_tags rows
+// cascade via FK; the audit row captures the deleted peer's
+// identifying attributes so the timeline still shows what was
+// removed after the row is gone. Idempotent: deleting an already-
+// missing peer returns 204 (matches the cross-tenant 404 contract —
+// a re-delete after a real delete shouldn't 404 here, but a delete
+// against another tenant must, otherwise it leaks existence).
+func (h *HTTPServer) apiPeerDelete(w http.ResponseWriter, r *http.Request, authn *authnContext, tenant *repo.Tenant, idStr string) {
+	id, err := uuid.Parse(idStr)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	current, err := h.peers.GetByID(r.Context(), id)
+	if errors.Is(err, repo.ErrNotFound) {
+		http.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if current.TenantID != tenant.ID {
+		http.NotFound(w, r)
+		return
+	}
+
+	if _, err := h.peers.Delete(r.Context(), id); err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("delete peer: %w", err))
+		return
+	}
+	writePeerAudit(r.Context(), h.audits, authn, tenant.ID, id, "peer.delete", map[string]any{
+		"hostname":           current.Hostname,
+		"ip":                 current.IP,
+		"wireguardPublicKey": current.WireGuardPublicKey,
+		"tags":               current.Tags,
+	})
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// writePeerAudit centralizes the actor + tenant + resource binding
+// for peer mutation audit rows. authn==nil or authn.claims==nil
+// happens in dev-fallback mode (no JWT); we record actor_type=system
+// in that case rather than refusing the write — the alternative
+// would block all admin actions outside a logged-in browser.
+func writePeerAudit(ctx context.Context, audits *repo.AuditLogs, authn *authnContext, tenantID, peerID uuid.UUID, action string, diffMap map[string]any) {
+	if audits == nil {
+		return
+	}
+	ev := &repo.AuditEvent{
+		TenantID:     &tenantID,
+		Action:       action,
+		ResourceType: "peer",
+		ResourceID:   &peerID,
+		Diff:         marshalDiff(diffMap),
+	}
+	if authn != nil && authn.claims != nil {
+		ev.ActorType = "user"
+		uid := authn.claims.UserID
+		ev.ActorID = &uid
+	} else {
+		ev.ActorType = "system"
+	}
+	if err := audits.Insert(ctx, ev); err != nil {
+		slog.Warn("peer audit insert failed", "action", action, "peer_id", peerID, "err", err)
+	}
+}
+
+func marshalDiff(v any) json.RawMessage {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return nil
+	}
+	return b
+}
+
+func stringSlicesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 type apiACLRuleJSON struct {
