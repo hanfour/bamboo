@@ -2,7 +2,7 @@
 
 'use client';
 
-import { useEffect, useRef } from 'react';
+import { useEffect } from 'react';
 import { useTranslations } from 'next-intl';
 import type { Peer } from '@/lib/types';
 
@@ -20,7 +20,6 @@ type Props = {
 export function PeerDrawer({ peer, open, onClose }: Props) {
   const t = useTranslations('peers.drawer');
   const tStatus = useTranslations('peers.status');
-  const panelRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -43,7 +42,6 @@ export function PeerDrawer({ peer, open, onClose }: Props) {
         onClick={onClose}
       />
       <div
-        ref={panelRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby="peer-drawer-title"

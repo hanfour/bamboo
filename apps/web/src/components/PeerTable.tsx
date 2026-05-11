@@ -51,8 +51,10 @@ export function PeerTable({ peers, selectedId, onSelect }: Props) {
                 tabIndex={0}
                 role="button"
                 aria-pressed={isSelected}
-                className={`cursor-pointer text-zinc-700 transition-colors hover:bg-zinc-50 focus:bg-zinc-100 focus:outline-none dark:text-zinc-300 dark:hover:bg-zinc-900 dark:focus:bg-zinc-800 ${
-                  isSelected ? 'bg-bamboo-50 dark:bg-bamboo-900/20' : ''
+                className={`cursor-pointer text-zinc-700 transition-colors focus:outline-none focus:ring-1 focus:ring-bamboo-500 dark:text-zinc-300 ${
+                  isSelected
+                    ? 'bg-bamboo-50 hover:bg-bamboo-100 dark:bg-bamboo-900/20 dark:hover:bg-bamboo-900/30'
+                    : 'hover:bg-zinc-50 dark:hover:bg-zinc-900'
                 }`}
               >
                 <td className="px-4 py-3 font-medium text-zinc-900 dark:text-zinc-100">
