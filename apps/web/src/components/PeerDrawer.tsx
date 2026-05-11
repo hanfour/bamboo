@@ -10,10 +10,11 @@ import {
   setPeerStatusAction,
   setPeerTagsAction,
 } from '@/lib/actions';
-import type { Peer } from '@/lib/types';
+import type { Peer, PeerEvent } from '@/lib/types';
 
 type Props = {
   peer: Peer | null;
+  events: PeerEvent[];
   open: boolean;
   onClose: () => void;
   // onDeleted fires after a successful delete so PeersView can clear
@@ -27,7 +28,7 @@ type Props = {
 // forward and link-sharing both work; `peer` is null when the id
 // resolved to 404 (deleted peer or stale link), and the drawer
 // renders a not-found state in that case.
-export function PeerDrawer({ peer, open, onClose, onDeleted }: Props) {
+export function PeerDrawer({ peer, events, open, onClose, onDeleted }: Props) {
   const t = useTranslations('peers.drawer');
   const tStatus = useTranslations('peers.status');
 
@@ -64,7 +65,7 @@ export function PeerDrawer({ peer, open, onClose, onDeleted }: Props) {
           {peer ? (
             // key forces the body to remount on peer-change so the
             // inline edit / confirm state resets between selections.
-            <DrawerBody key={peer.id} peer={peer} onDeleted={onDeleted} />
+            <DrawerBody key={peer.id} peer={peer} events={events} onDeleted={onDeleted} />
           ) : (
             <NotFoundState message={t('notFound')} />
           )}
@@ -115,7 +116,15 @@ function DrawerHeader({
   );
 }
 
-function DrawerBody({ peer, onDeleted }: { peer: Peer; onDeleted: () => void }) {
+function DrawerBody({
+  peer,
+  events,
+  onDeleted,
+}: {
+  peer: Peer;
+  events: PeerEvent[];
+  onDeleted: () => void;
+}) {
   const t = useTranslations('peers.drawer');
   const [error, setError] = useState<string | null>(null);
 
@@ -195,6 +204,10 @@ function DrawerBody({ peer, onDeleted }: { peer: Peer; onDeleted: () => void }) 
       <Section title={t('sections.actions')}>
         <DisableToggle peer={peer} onError={setError} />
         <DeleteButton peer={peer} onError={setError} onDeleted={onDeleted} />
+      </Section>
+
+      <Section title={t('sections.timeline')}>
+        <Timeline events={events} />
       </Section>
     </div>
   );
@@ -462,6 +475,140 @@ function DeleteButton({
       {t('actions.delete')}
     </button>
   );
+}
+
+// Timeline renders the per-peer audit log newest-first. Each entry
+// shows action label + actor + relative time, with an inline diff
+// summary tuned to the action's diff shape:
+//   - peer.update: per-field "key: from → to" lines (the only diff
+//     shape the controller actively renames toward field-level)
+//   - peer.register / peer.delete: small key: value list of the
+//     attribute snapshot the controller wrote
+// Unknown actions or malformed diffs fall back to pretty JSON.
+function Timeline({ events }: { events: PeerEvent[] }) {
+  const t = useTranslations('peers.drawer');
+  if (events.length === 0) {
+    return <p className="text-sm text-zinc-500 dark:text-zinc-400">{t('empty.timeline')}</p>;
+  }
+  return (
+    <ol className="space-y-3">
+      {events.map((e) => (
+        <li
+          key={e.id}
+          className="rounded-md border border-zinc-200 px-3 py-2 dark:border-zinc-800"
+        >
+          <div className="flex items-baseline justify-between gap-2 text-sm">
+            <span className="font-medium text-zinc-900 dark:text-zinc-100">
+              {actionLabel(t, e.action)}
+            </span>
+            <span className="shrink-0 text-xs text-zinc-500 dark:text-zinc-400">
+              {formatRelative(e.occurredAt)}
+            </span>
+          </div>
+          <div className="mt-0.5 text-xs text-zinc-500 dark:text-zinc-400">
+            {actorLabel(t, e)}
+          </div>
+          {e.diff && <DiffRender action={e.action} diff={e.diff} />}
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+// Whitelists of audit action / actor type strings that have a
+// matching messages-JSON entry. next-intl 3.x throws on missing
+// keys by default (no onError handler is configured in this app),
+// so calling t() with an unknown suffix would crash the Timeline
+// for that event. Keeping these in sync with messages/{en,zh-TW}.json
+// is intentional — when the controller ships a new audit kind, the
+// Web UI falls back to the raw event name until the locale catches
+// up.
+const KNOWN_TIMELINE_ACTIONS = new Set([
+  'peer.register',
+  'peer.update',
+  'peer.delete',
+  'peer.heartbeat',
+]);
+
+const KNOWN_ACTOR_TYPES = new Set<PeerEvent['actorType']>(['user', 'system', 'api']);
+
+function actionLabel(t: ReturnType<typeof useTranslations>, action: string): string {
+  if (KNOWN_TIMELINE_ACTIONS.has(action)) {
+    // The runtime cast is safe because we just checked the key is
+    // present in messages JSON; next-intl's typed-key generic would
+    // require a wider refactor of the messages typegen.
+    return t(`timeline.action.${action}` as never);
+  }
+  return action;
+}
+
+function actorLabel(t: ReturnType<typeof useTranslations>, e: PeerEvent): string {
+  if (e.actorType === 'user' && e.actorEmail) {
+    return e.actorEmail;
+  }
+  if (KNOWN_ACTOR_TYPES.has(e.actorType)) {
+    return t(`timeline.actor.${e.actorType}` as never);
+  }
+  return e.actorType;
+}
+
+function DiffRender({ action, diff }: { action: string; diff: Record<string, unknown> }) {
+  // peer.update is the structured-diff case: every value is
+  // { from, to }. Render each as a tight line.
+  if (action === 'peer.update') {
+    return (
+      <ul className="mt-2 space-y-1 text-xs">
+        {Object.entries(diff).map(([key, val]) => {
+          const ft = val as { from?: unknown; to?: unknown } | undefined;
+          if (!ft || !('from' in ft) || !('to' in ft)) return null;
+          return (
+            <li key={key} className="flex flex-wrap items-baseline gap-1">
+              <span className="font-medium text-zinc-600 dark:text-zinc-400">{key}:</span>
+              <code className="rounded bg-zinc-100 px-1 font-mono text-zinc-700 dark:bg-zinc-900 dark:text-zinc-300">
+                {formatDiffValue(ft.from)}
+              </code>
+              <span className="text-zinc-400">→</span>
+              <code className="rounded bg-bamboo-50 px-1 font-mono text-bamboo-800 dark:bg-bamboo-900/30 dark:text-bamboo-200">
+                {formatDiffValue(ft.to)}
+              </code>
+            </li>
+          );
+        })}
+      </ul>
+    );
+  }
+  // peer.register / peer.delete: shallow key: value snapshot.
+  return (
+    <ul className="mt-2 space-y-0.5 text-xs">
+      {Object.entries(diff).map(([key, val]) => (
+        <li key={key} className="flex flex-wrap items-baseline gap-1">
+          <span className="text-zinc-500 dark:text-zinc-400">{key}:</span>
+          <code className="rounded bg-zinc-100 px-1 font-mono text-zinc-700 dark:bg-zinc-900 dark:text-zinc-300">
+            {formatDiffValue(val)}
+          </code>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function formatDiffValue(v: unknown): string {
+  if (v === null || v === undefined) return '—';
+  if (typeof v === 'string') return v === '' ? '∅' : v;
+  if (Array.isArray(v)) return v.length === 0 ? '[]' : v.join(', ');
+  return JSON.stringify(v);
+}
+
+// formatRelative produces "3m ago" style strings. Granularity is
+// deliberately coarse — timelines are scanned, not measured.
+function formatRelative(iso: string): string {
+  const ms = Date.now() - new Date(iso).getTime();
+  if (!Number.isFinite(ms) || ms < 0) return '—';
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.round(s / 60)}m`;
+  if (s < 86_400) return `${Math.round(s / 3600)}h`;
+  return `${Math.round(s / 86_400)}d`;
 }
 
 function NotFoundState({ message }: { message: string }) {

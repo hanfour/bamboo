@@ -39,6 +39,10 @@ type AuditEvent struct {
 	IPAddress    *string
 	UserAgent    *string
 	OccurredAt   time.Time
+	// ActorEmail is populated by ListByResource via a LEFT JOIN on
+	// users when ActorType='user'. Other read paths leave it empty.
+	// Empty string = unresolved (system actor or deleted user).
+	ActorEmail string
 }
 
 // Insert persists a single event.
@@ -85,6 +89,61 @@ func (r *AuditLogs) ListByTenant(ctx context.Context, tenantID uuid.UUID, limit 
 		if err := rows.Scan(
 			&e.ID, &e.TenantID, &e.ActorID, &e.ActorType, &e.Action,
 			&e.ResourceType, &e.ResourceID, &diff, &ip, &e.UserAgent, &e.OccurredAt,
+		); err != nil {
+			return nil, err
+		}
+		if len(diff) > 0 {
+			e.Diff = diff
+		}
+		e.IPAddress = ip
+		out = append(out, &e)
+	}
+	return out, rows.Err()
+}
+
+// ListByResource returns audit events for a specific (tenant, resource)
+// pair, newest first. Used by the per-peer timeline in the Web UI.
+// Joins users to resolve actor_id → email for user-driven events;
+// system events leave ActorEmail empty.
+//
+// limit is clamped to [1, 200]: the timeline UI shows a bounded
+// recent slice; deeper history will be a separate, paginated endpoint.
+func (r *AuditLogs) ListByResource(ctx context.Context, tenantID uuid.UUID, resourceType string, resourceID uuid.UUID, limit int) ([]*AuditEvent, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 200 {
+		limit = 200
+	}
+	rows, err := r.pool.Query(ctx, `
+		SELECT a.id, a.tenant_id, a.actor_id, a.actor_type, a.action,
+		       a.resource_type, a.resource_id, a.diff,
+		       host(a.ip_address), a.user_agent, a.occurred_at,
+		       COALESCE(u.email, '')
+		FROM audit_log a
+		LEFT JOIN users u
+		       ON u.id = a.actor_id
+		      AND a.actor_type = 'user'
+		WHERE a.tenant_id = $1
+		  AND a.resource_type = $2
+		  AND a.resource_id = $3
+		ORDER BY a.occurred_at DESC
+		LIMIT $4
+	`, tenantID, resourceType, resourceID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []*AuditEvent
+	for rows.Next() {
+		var e AuditEvent
+		var ip *string
+		var diff []byte
+		if err := rows.Scan(
+			&e.ID, &e.TenantID, &e.ActorID, &e.ActorType, &e.Action,
+			&e.ResourceType, &e.ResourceID, &diff, &ip, &e.UserAgent, &e.OccurredAt,
+			&e.ActorEmail,
 		); err != nil {
 			return nil, err
 		}

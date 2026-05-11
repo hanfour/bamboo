@@ -2,7 +2,7 @@
 
 import { useTranslations } from 'next-intl';
 import { PeersView } from '@/components/PeersView';
-import { fetchPeer, fetchPeers } from '@/lib/api';
+import { fetchPeer, fetchPeerEvents, fetchPeers } from '@/lib/api';
 
 type SearchParams = { selected?: string };
 
@@ -13,20 +13,30 @@ export default async function PeersPage({
   searchParams: Promise<SearchParams>;
 }) {
   const { selected } = await searchParams;
-  const [peers, selectedPeer] = await Promise.all([
+  const [peers, selectedPeer, selectedEvents] = await Promise.all([
     fetchPeers(),
     selected ? fetchPeer(selected) : Promise.resolve(null),
+    selected ? fetchPeerEvents(selected) : Promise.resolve([]),
   ]);
-  return <Peers peers={peers} selectedPeer={selectedPeer} selectedId={selected} />;
+  return (
+    <Peers
+      peers={peers}
+      selectedPeer={selectedPeer}
+      selectedEvents={selectedEvents}
+      selectedId={selected}
+    />
+  );
 }
 
 function Peers({
   peers,
   selectedPeer,
+  selectedEvents,
   selectedId,
 }: {
   peers: Awaited<ReturnType<typeof fetchPeers>>;
   selectedPeer: Awaited<ReturnType<typeof fetchPeer>>;
+  selectedEvents: Awaited<ReturnType<typeof fetchPeerEvents>>;
   selectedId?: string;
 }) {
   const t = useTranslations('peers');
@@ -41,7 +51,12 @@ function Peers({
           {t('addPeer')}
         </button>
       </header>
-      <PeersView peers={peers} selectedPeer={selectedPeer} selectedId={selectedId} />
+      <PeersView
+        peers={peers}
+        selectedPeer={selectedPeer}
+        selectedEvents={selectedEvents}
+        selectedId={selectedId}
+      />
     </div>
   );
 }

@@ -4,13 +4,14 @@
 
 import { useCallback } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import type { Peer } from '@/lib/types';
+import type { Peer, PeerEvent } from '@/lib/types';
 import { PeerTable } from './PeerTable';
 import { PeerDrawer } from './PeerDrawer';
 
 type Props = {
   peers: Peer[];
   selectedPeer: Peer | null;
+  selectedEvents: PeerEvent[];
   selectedId?: string;
 };
 
@@ -18,7 +19,7 @@ type Props = {
 // The peer data itself is fetched server-side in peers/page.tsx so
 // deep-linking to ?selected=<id> renders fully on the server; this
 // component only mediates click → router.push and back.
-export function PeersView({ peers, selectedPeer, selectedId }: Props) {
+export function PeersView({ peers, selectedPeer, selectedEvents, selectedId }: Props) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -44,6 +45,7 @@ export function PeersView({ peers, selectedPeer, selectedId }: Props) {
       <PeerTable peers={peers} selectedId={selectedId} onSelect={(id) => setSelected(id)} />
       <PeerDrawer
         peer={selectedPeer}
+        events={selectedEvents}
         open={open}
         onClose={() => setSelected(null)}
         onDeleted={() => setSelected(null)}

@@ -17,7 +17,7 @@
 
 import { cookies } from 'next/headers';
 
-import type { AclPolicy, AclRule, Peer } from './types';
+import type { AclPolicy, AclRule, Peer, PeerEvent } from './types';
 
 const BASE = process.env.BAMBOO_API_URL ?? 'http://localhost:8081';
 const TENANT = process.env.BAMBOO_TENANT ?? 'default';
@@ -176,6 +176,25 @@ export async function fetchPeer(id: string): Promise<Peer | null> {
     return apiPeerToPeer(p);
   } catch {
     return null;
+  }
+}
+
+// fetchPeerEvents returns the audit timeline for one peer. Errors
+// (network, 404, malformed JSON) collapse to an empty list so the
+// drawer renders a clean empty state — the table + drawer's primary
+// data already came from fetchPeer; the timeline is a side-channel
+// nice-to-have, not load-bearing.
+export async function fetchPeerEvents(id: string): Promise<PeerEvent[]> {
+  try {
+    const res = await fetch(`${BASE}/api/v1/peers/${encodeURIComponent(id)}/events`, {
+      headers: await buildHeaders(),
+      cache: 'no-store',
+    });
+    if (!res.ok) return [];
+    const body = (await res.json()) as { events: PeerEvent[] };
+    return body.events ?? [];
+  } catch {
+    return [];
   }
 }
 

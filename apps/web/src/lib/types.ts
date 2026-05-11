@@ -33,6 +33,22 @@ export type Peer = {
   lastHandshakeAt?: string;
 };
 
+// PeerEvent is one row from the per-peer audit timeline. `diff` is
+// the raw JSON the controller wrote when the action happened — for
+// peer.update it's `{field: {from, to}}`, for peer.delete it's the
+// pre-delete snapshot, for peer.register it's the registration body.
+// The drawer renders the update shape specially and pretty-prints
+// the rest.
+export type PeerEvent = {
+  id: string;
+  actorType: 'user' | 'system' | 'api';
+  actorId?: string;
+  actorEmail?: string;
+  action: string;
+  diff?: Record<string, unknown>;
+  occurredAt: string;
+};
+
 export type AclRule = {
   id: string;
   action: 'allow' | 'deny';

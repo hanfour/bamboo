@@ -613,6 +613,116 @@ func TestRESTDeletePeer_CrossTenantIsolation(t *testing.T) {
 	}
 }
 
+// TestRESTGetPeerEvents_HappyPath registers a peer, mutates it
+// twice (rename + tag), then asserts /peers/{id}/events returns
+// both audit rows newest-first plus the auto-written peer.register.
+func TestRESTGetPeerEvents_HappyPath(t *testing.T) {
+	f := startFixture(t)
+
+	reg := postJSON(t, f.httpURL+"/api/v1/peers/register", map[string]any{
+		"hostname":           "events-peer",
+		"wireguardPublicKey": randomPubKey(t),
+		"tenantSlug":         f.tenantSlug,
+	})
+	var regOut struct {
+		Self struct{ ID string }
+	}
+	_ = json.Unmarshal(reg.body, &regOut)
+
+	// Two PATCHes → two peer.update rows.
+	for _, body := range []map[string]any{
+		{"hostname": "events-peer-renamed"},
+		{"tags": []string{"audit-test"}},
+	} {
+		resp := sendJSONWithTenant(t, http.MethodPatch, f.httpURL+"/api/v1/peers/"+regOut.Self.ID, f.tenantSlug, body)
+		if resp.status != http.StatusOK {
+			t.Fatalf("patch status=%d body=%s", resp.status, resp.body)
+		}
+	}
+
+	got := getJSON(t, f.httpURL+"/api/v1/peers/"+regOut.Self.ID+"/events", f.tenantSlug)
+	if got.status != http.StatusOK {
+		t.Fatalf("events status=%d body=%s", got.status, got.body)
+	}
+	var body struct {
+		Events []struct {
+			Action     string          `json:"action"`
+			ActorType  string          `json:"actorType"`
+			Diff       json.RawMessage `json:"diff"`
+			OccurredAt string          `json:"occurredAt"`
+		} `json:"events"`
+	}
+	if err := json.Unmarshal(got.body, &body); err != nil {
+		t.Fatalf("decode: %v; body=%s", err, got.body)
+	}
+	if len(body.Events) != 3 {
+		t.Fatalf("len(events) = %d, want 3 (register + 2 update); body=%s", len(body.Events), got.body)
+	}
+	wantOrder := []string{"peer.update", "peer.update", "peer.register"}
+	for i, w := range wantOrder {
+		if body.Events[i].Action != w {
+			t.Errorf("events[%d].Action = %q, want %q (newest-first)", i, body.Events[i].Action, w)
+		}
+	}
+	// peer.update diffs must carry the {from, to} shape the Web UI relies on.
+	if !strings.Contains(string(body.Events[0].Diff), `"from"`) || !strings.Contains(string(body.Events[0].Diff), `"to"`) {
+		t.Errorf("peer.update diff missing from/to keys: %s", body.Events[0].Diff)
+	}
+}
+
+// TestRESTGetPeerEvents_LimitClamped exercises the limit query
+// param: an oversized value is clamped, not rejected.
+func TestRESTGetPeerEvents_LimitClamped(t *testing.T) {
+	f := startFixture(t)
+	reg := postJSON(t, f.httpURL+"/api/v1/peers/register", map[string]any{
+		"hostname":           "limit-peer",
+		"wireguardPublicKey": randomPubKey(t),
+		"tenantSlug":         f.tenantSlug,
+	})
+	var regOut struct {
+		Self struct{ ID string }
+	}
+	_ = json.Unmarshal(reg.body, &regOut)
+
+	got := getJSON(t, f.httpURL+"/api/v1/peers/"+regOut.Self.ID+"/events?limit=999999", f.tenantSlug)
+	if got.status != http.StatusOK {
+		t.Errorf("limit=999999 should clamp, not error; got status=%d body=%s", got.status, got.body)
+	}
+}
+
+// TestRESTGetPeerEvents_CrossTenantIsolation registers a peer in
+// tenant A then asks tenant B for that peer's events. Must 404
+// without leaking that the resource exists elsewhere.
+func TestRESTGetPeerEvents_CrossTenantIsolation(t *testing.T) {
+	f := startFixture(t)
+	reg := postJSON(t, f.httpURL+"/api/v1/peers/register", map[string]any{
+		"hostname":           "iso-peer",
+		"wireguardPublicKey": randomPubKey(t),
+		"tenantSlug":         f.tenantSlug,
+	})
+	var regOut struct {
+		Self struct{ ID string }
+	}
+	_ = json.Unmarshal(reg.body, &regOut)
+
+	otherSlug := "e2e-other-" + regOut.Self.ID[:8]
+	t.Cleanup(func() { cleanupTenant(f.pool, otherSlug) })
+	got := getJSON(t, f.httpURL+"/api/v1/peers/"+regOut.Self.ID+"/events", otherSlug)
+	if got.status != http.StatusNotFound {
+		t.Errorf("cross-tenant events should 404; got status=%d body=%s", got.status, got.body)
+	}
+}
+
+// TestRESTGetPeerEvents_UnknownPeer covers a syntactically valid
+// uuid that doesn't exist — same 404 contract as cross-tenant.
+func TestRESTGetPeerEvents_UnknownPeer(t *testing.T) {
+	f := startFixture(t)
+	got := getJSON(t, f.httpURL+"/api/v1/peers/00000000-0000-0000-0000-000000000000/events", f.tenantSlug)
+	if got.status != http.StatusNotFound {
+		t.Errorf("unknown peer events should 404; got status=%d body=%s", got.status, got.body)
+	}
+}
+
 // TestRESTGetPeer_CrossTenantIsolation registers a peer in tenant A
 // then fetches the same id with X-Tenant-Slug: B and expects 404.
 // Returning the real peer would let an attacker probe peer existence
