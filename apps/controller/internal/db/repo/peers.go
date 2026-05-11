@@ -348,9 +348,8 @@ func (r *Peers) SetStatus(ctx context.Context, id uuid.UUID, status string) (int
 }
 
 // Delete removes a peer by id. peer_tags rows cascade via the FK
-// constraint (migration 00006). Returns the number of rows deleted;
-// 0 means the peer was already gone, which is treated as success by
-// the REST DELETE handler (idempotent).
+// constraint defined in migration 00001. Returns the number of rows
+// deleted; 0 means the peer was already gone.
 func (r *Peers) Delete(ctx context.Context, id uuid.UUID) (int64, error) {
 	tag, err := r.pool.Exec(ctx, `DELETE FROM peers WHERE id = $1`, id)
 	if err != nil {
@@ -376,12 +375,16 @@ func (r *Peers) Delete(ctx context.Context, id uuid.UUID) (int64, error) {
 // scoped descriptors and may be referenced by ACL policy text by
 // name; collecting them is a separate concern from peer membership.
 func (r *Peers) SetTags(ctx context.Context, id uuid.UUID, tags []string) ([]string, error) {
-	// Canonicalize: trim, drop empties, dedupe, sort.
+	// Canonicalize: trim, drop empties + over-long, dedupe, sort.
+	// The 64-char cap matches the typical max for ACL labels we've
+	// seen elsewhere; intentionally silent so a long entry gets
+	// dropped instead of failing the whole call (hostname rejects
+	// outright because there's only one of it per request).
 	seen := make(map[string]struct{}, len(tags))
 	clean := make([]string, 0, len(tags))
 	for _, t := range tags {
 		t = strings.TrimSpace(t)
-		if t == "" {
+		if t == "" || len(t) > 64 {
 			continue
 		}
 		if _, ok := seen[t]; ok {

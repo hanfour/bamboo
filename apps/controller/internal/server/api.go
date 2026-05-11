@@ -400,10 +400,14 @@ func (h *HTTPServer) apiPeerPatch(w http.ResponseWriter, r *http.Request, authn 
 // apiPeerDelete implements DELETE /api/v1/peers/{id}. peer_tags rows
 // cascade via FK; the audit row captures the deleted peer's
 // identifying attributes so the timeline still shows what was
-// removed after the row is gone. Idempotent: deleting an already-
-// missing peer returns 204 (matches the cross-tenant 404 contract —
-// a re-delete after a real delete shouldn't 404 here, but a delete
-// against another tenant must, otherwise it leaks existence).
+// removed after the row is gone.
+//
+// Missing peer / cross-tenant / bad uuid all collapse to 404 with
+// the same response shape. This is deliberately *not* idempotent
+// (a re-delete will 404, not 204): treating "already gone" as
+// success would let an outside caller distinguish "exists in
+// another tenant" from "doesn't exist anywhere" and probe
+// existence across tenants.
 func (h *HTTPServer) apiPeerDelete(w http.ResponseWriter, r *http.Request, authn *authnContext, tenant *repo.Tenant, idStr string) {
 	id, err := uuid.Parse(idStr)
 	if err != nil {
