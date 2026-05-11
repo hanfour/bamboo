@@ -30,7 +30,20 @@
     "offline": "離線",
     "policyRevision": "政策版本",
     "recentActivity": "最近活動",
-    "noActivity": "目前無活動。"
+    "activity": {
+      "empty": "尚無活動紀錄。",
+      "actor": {
+        "user": "使用者",
+        "system": "系統",
+        "api": "API"
+      },
+      "action": {
+        "peer.register": "註冊節點",
+        "peer.update": "更新節點",
+        "peer.delete": "刪除節點",
+        "policy.update": "更新政策"
+      }
+    }
   },
   "peers": {
     "title": "節點",
@@ -110,8 +123,7 @@
         "action": {
           "peer.register": "註冊節點",
           "peer.update": "更新節點",
-          "peer.delete": "刪除節點",
-          "peer.heartbeat": "心跳"
+          "peer.delete": "刪除節點"
         }
       }
     }

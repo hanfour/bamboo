@@ -120,6 +120,8 @@ func (h *HTTPServer) routeAPI(w http.ResponseWriter, r *http.Request) {
 		h.apiPolicy(w, r, tenant)
 	case "/api/v1/recommendations":
 		h.apiRecommendations(w, r, tenant)
+	case "/api/v1/activity":
+		h.apiActivity(w, r, tenant)
 	default:
 		http.NotFound(w, r)
 	}
@@ -457,18 +459,51 @@ func (h *HTTPServer) apiPeerDelete(w http.ResponseWriter, r *http.Request, authn
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// apiAuditEventJSON is the wire shape for a single timeline entry.
+// apiAuditEventJSON is the wire shape for a single audit-log entry.
+// Used by both the per-peer timeline (where ResourceType/ResourceID
+// are implied by the URL and omitted via omitempty) and the
+// tenant-wide /activity feed (where they're populated and let the
+// UI route to the right resource view).
+//
 // Diff is forwarded verbatim — the Web UI renders peer.update's
 // {field: {from, to}} structure specially and pretty-prints the
 // rest as JSON.
 type apiAuditEventJSON struct {
-	ID         string          `json:"id"`
-	ActorType  string          `json:"actorType"`
-	ActorID    string          `json:"actorId,omitempty"`
-	ActorEmail string          `json:"actorEmail,omitempty"`
-	Action     string          `json:"action"`
-	Diff       json.RawMessage `json:"diff,omitempty"`
-	OccurredAt time.Time       `json:"occurredAt"`
+	ID           string          `json:"id"`
+	ActorType    string          `json:"actorType"`
+	ActorID      string          `json:"actorId,omitempty"`
+	ActorEmail   string          `json:"actorEmail,omitempty"`
+	Action       string          `json:"action"`
+	ResourceType string          `json:"resourceType,omitempty"`
+	ResourceID   string          `json:"resourceId,omitempty"`
+	Diff         json.RawMessage `json:"diff,omitempty"`
+	OccurredAt   time.Time       `json:"occurredAt"`
+}
+
+// auditEventToJSON centralizes the AuditEvent → wire-shape mapping
+// so the per-peer timeline and the tenant-wide activity feed
+// produce identical row shapes. The per-peer caller doesn't include
+// resourceType/resourceId in the output today, but since
+// AuditEvent carries them, it costs nothing to forward — omitempty
+// handles the nil-ResourceID case for system events that aren't
+// tied to a resource.
+func auditEventToJSON(e *repo.AuditEvent) apiAuditEventJSON {
+	row := apiAuditEventJSON{
+		ID:           e.ID.String(),
+		ActorType:    e.ActorType,
+		ActorEmail:   e.ActorEmail,
+		Action:       e.Action,
+		ResourceType: e.ResourceType,
+		Diff:         e.Diff,
+		OccurredAt:   e.OccurredAt,
+	}
+	if e.ActorID != nil {
+		row.ActorID = e.ActorID.String()
+	}
+	if e.ResourceID != nil {
+		row.ResourceID = e.ResourceID.String()
+	}
+	return row
 }
 
 // apiPeerEvents implements GET /api/v1/peers/{id}/events. Returns
@@ -514,18 +549,31 @@ func (h *HTTPServer) apiPeerEvents(w http.ResponseWriter, r *http.Request, tenan
 
 	out := make([]apiAuditEventJSON, 0, len(events))
 	for _, e := range events {
-		row := apiAuditEventJSON{
-			ID:         e.ID.String(),
-			ActorType:  e.ActorType,
-			ActorEmail: e.ActorEmail,
-			Action:     e.Action,
-			Diff:       e.Diff,
-			OccurredAt: e.OccurredAt,
+		out = append(out, auditEventToJSON(e))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"events": out})
+}
+
+// apiActivity implements GET /api/v1/activity?limit=N. Tenant-wide
+// audit feed, newest first; powers the dashboard's recentActivity
+// section. Distinct from /peers/{id}/events because activity here
+// spans all resource types (peer, policy, pre_auth_key, ...), so
+// the wire shape includes resourceType + resourceId.
+func (h *HTTPServer) apiActivity(w http.ResponseWriter, r *http.Request, tenant *repo.Tenant) {
+	limit := 50
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			limit = n
 		}
-		if e.ActorID != nil {
-			row.ActorID = e.ActorID.String()
-		}
-		out = append(out, row)
+	}
+	events, err := h.audits.ListByTenant(r.Context(), tenant.ID, limit)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	out := make([]apiAuditEventJSON, 0, len(events))
+	for _, e := range events {
+		out = append(out, auditEventToJSON(e))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"events": out})
 }

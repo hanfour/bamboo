@@ -17,7 +17,7 @@
 
 import { cookies } from 'next/headers';
 
-import type { AclPolicy, AclRule, FetchResult, Peer, PeerEvent } from './types';
+import type { AclPolicy, AclRule, ActivityEvent, FetchResult, Peer, PeerEvent } from './types';
 
 const BASE = process.env.BAMBOO_API_URL ?? 'http://localhost:8081';
 const TENANT = process.env.BAMBOO_TENANT ?? 'default';
@@ -185,6 +185,18 @@ export async function fetchPeer(id: string): Promise<FetchResult<Peer>> {
   } catch (e) {
     return { kind: 'error', message: (e as Error).message };
   }
+}
+
+// fetchActivity returns the tenant-wide audit feed for the
+// dashboard. Errors collapse to an empty list — activity is a
+// dashboard side-section, not load-bearing, so a network blip
+// shouldn't break the rest of the page.
+export async function fetchActivity(limit = 20): Promise<ActivityEvent[]> {
+  const body = await get<{ events: ActivityEvent[] }>(
+    `/api/v1/activity?limit=${encodeURIComponent(String(limit))}`,
+    { events: [] },
+  );
+  return body.events ?? [];
 }
 
 // fetchPeerEvents returns the audit timeline for one peer. Errors

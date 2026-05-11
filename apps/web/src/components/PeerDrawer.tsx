@@ -594,12 +594,7 @@ function Timeline({ events }: { events: PeerEvent[] }) {
 // is intentional — when the controller ships a new audit kind, the
 // Web UI falls back to the raw event name until the locale catches
 // up.
-const KNOWN_TIMELINE_ACTIONS = new Set([
-  'peer.register',
-  'peer.update',
-  'peer.delete',
-  'peer.heartbeat',
-]);
+const KNOWN_TIMELINE_ACTIONS = new Set(['peer.register', 'peer.update', 'peer.delete']);
 
 const KNOWN_ACTOR_TYPES = new Set<PeerEvent['actorType']>(['user', 'system', 'api']);
 
