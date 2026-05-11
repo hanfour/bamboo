@@ -19,9 +19,16 @@ type Peers struct {
 
 // peerTagsSubquery returns the SQL fragment used by every Peer read
 // path to materialize the Tags slice without a second round-trip.
-// COALESCE keeps the scan target as a real (possibly empty) array
-// so callers don't have to nil-check.
-const peerTagsSubquery = `COALESCE((SELECT array_agg(tag ORDER BY tag) FROM peer_tags WHERE peer_id = peers.id), ARRAY[]::text[])`
+// The schema (migration 00001) has tags + peer_tags normalized: tag
+// values live in `tags(id, tenant_id, name)`, peer_tags is the
+// (peer_id, tag_id) join. We surface tag *names* — that's what the
+// UI and the ACL DSL (`tag:foo`) consume.
+const peerTagsSubquery = `COALESCE((
+    SELECT array_agg(t.name ORDER BY t.name)
+    FROM peer_tags pt
+    JOIN tags t ON t.id = pt.tag_id
+    WHERE pt.peer_id = peers.id
+), ARRAY[]::text[])`
 
 // NewPeers constructs a Peers repository.
 func NewPeers(pool *db.Pool) *Peers {
@@ -352,22 +359,24 @@ func (r *Peers) Delete(ctx context.Context, id uuid.UUID) (int64, error) {
 	return tag.RowsAffected(), nil
 }
 
-// SetTags replaces a peer's tag set atomically. The previous set is
-// deleted then the new tags inserted inside a single transaction so
-// a partial write can't leave the peer with a mix of old + new.
+// SetTags replaces a peer's tag set atomically. Tags are normalized
+// in the schema: tag *names* live in `tags(tenant_id, name)` and the
+// peer_tags join links peer_id → tag_id. SetTags:
 //
-// Tags are trimmed; empty strings (after trimming) are dropped.
-// Duplicates in the input slice collapse to a single row via ON
-// CONFLICT DO NOTHING — the table's PK guarantees uniqueness either
-// way, but this avoids a noisy error.
+//  1. canonicalizes the input (trim, drop empties, dedupe, sort);
+//  2. upserts each name into `tags` for the peer's tenant;
+//  3. replaces the peer_tags rows for this peer with the resolved
+//     tag_ids in a single transaction.
 //
-// Returns the canonicalized tag set the row now carries (sorted,
-// de-duplicated, trimmed) so callers can put it in the audit log
-// diff and the response without re-querying.
+// Returns the canonical tag-name set the row now carries, so
+// callers can audit-log a stable diff without re-querying.
+//
+// Note we keep orphan `tags` rows on purpose (no DELETE FROM tags
+// when the last peer with a tag is untagged). Tags are tenant-
+// scoped descriptors and may be referenced by ACL policy text by
+// name; collecting them is a separate concern from peer membership.
 func (r *Peers) SetTags(ctx context.Context, id uuid.UUID, tags []string) ([]string, error) {
-	// Canonicalize: trim, drop empties, dedupe, sort. We sort so
-	// audit-log diffs are stable across runs even when the caller
-	// passes tags in different orders.
+	// Canonicalize: trim, drop empties, dedupe, sort.
 	seen := make(map[string]struct{}, len(tags))
 	clean := make([]string, 0, len(tags))
 	for _, t := range tags {
@@ -389,14 +398,40 @@ func (r *Peers) SetTags(ctx context.Context, id uuid.UUID, tags []string) ([]str
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
+	// Need the peer's tenant_id to scope tag upserts. We could
+	// require callers to pass it, but the API layer already has
+	// the peer loaded and looking it up here keeps SetTags's
+	// signature minimal.
+	var tenantID uuid.UUID
+	if err := tx.QueryRow(ctx, `SELECT tenant_id FROM peers WHERE id = $1`, id).Scan(&tenantID); err != nil {
+		return nil, asNotFound(err)
+	}
+
+	// Resolve each tag name to a tag_id, creating the tags row when
+	// missing. The ON CONFLICT clause's DO UPDATE is a self-assign
+	// no-op that exists solely so RETURNING fires for existing rows;
+	// DO NOTHING would skip RETURNING and force a second SELECT.
+	tagIDs := make([]uuid.UUID, 0, len(clean))
+	for _, name := range clean {
+		var tagID uuid.UUID
+		if err := tx.QueryRow(ctx, `
+			INSERT INTO tags (tenant_id, name) VALUES ($1, $2)
+			ON CONFLICT (tenant_id, name) DO UPDATE SET name = EXCLUDED.name
+			RETURNING id
+		`, tenantID, name).Scan(&tagID); err != nil {
+			return nil, err
+		}
+		tagIDs = append(tagIDs, tagID)
+	}
+
 	if _, err := tx.Exec(ctx, `DELETE FROM peer_tags WHERE peer_id = $1`, id); err != nil {
 		return nil, err
 	}
-	for _, t := range clean {
+	for _, tagID := range tagIDs {
 		if _, err := tx.Exec(ctx, `
-			INSERT INTO peer_tags (peer_id, tag) VALUES ($1, $2)
-			ON CONFLICT (peer_id, tag) DO NOTHING
-		`, id, t); err != nil {
+			INSERT INTO peer_tags (peer_id, tag_id) VALUES ($1, $2)
+			ON CONFLICT (peer_id, tag_id) DO NOTHING
+		`, id, tagID); err != nil {
 			return nil, err
 		}
 	}
