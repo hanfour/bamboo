@@ -1,0 +1,13 @@
+[Unit]
+Description=Periodically dump bamboo WireGuard hub state
+
+[Timer]
+# Fire 5s after boot, then every 30s. Persistent=false because we
+# don't care about catching up on missed runs — only the latest
+# dump is useful.
+OnBootSec=5s
+OnUnitActiveSec=30s
+AccuracySec=1s
+
+[Install]
+WantedBy=timers.target

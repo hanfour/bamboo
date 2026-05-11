@@ -25,7 +25,56 @@ set -a; source .env; set +a
 
 CONTROLLER_LOCAL_HTTP="${CONTROLLER_LOCAL_HTTP:-http://localhost:8081}"
 
-# 1) Run migrations via the controller container itself. We need the
+# 1) Allow inter-peer forwarding when the host runs WireGuard as a
+# DERP-style hub (path-A / manual-WG dogfood). Without this, Ubuntu's
+# default FORWARD policy DROP silently breaks A↔hub↔B traffic between
+# tunnel peers. Idempotent: the duplicate-check skips when the rule
+# already exists. Persisted via iptables-persistent so reboots keep
+# it. No-op if the bamboo0 interface doesn't exist yet (controller-
+# only deploys); the rule attaches by interface name and is harmless
+# until WG is also configured.
+if command -v iptables >/dev/null 2>&1; then
+    if ! sudo iptables -C FORWARD -i bamboo0 -o bamboo0 -j ACCEPT 2>/dev/null; then
+        echo "==> adding iptables FORWARD rule for bamboo0 hub forwarding"
+        sudo iptables -I FORWARD 1 -i bamboo0 -o bamboo0 -j ACCEPT
+        if ! dpkg -s iptables-persistent >/dev/null 2>&1; then
+            echo "iptables-persistent iptables-persistent/autosave_v4 boolean true" \
+                | sudo debconf-set-selections
+            echo "iptables-persistent iptables-persistent/autosave_v6 boolean true" \
+                | sudo debconf-set-selections
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+                iptables-persistent >/dev/null
+        fi
+        sudo netfilter-persistent save >/dev/null
+    fi
+fi
+
+# 1b) Install the wg-state-reporter systemd timer. The controller
+# container can't reach the host's WireGuard netlink, so a host-side
+# timer dumps `wg show $IFACE` to /var/lib/bamboo/wg-state.txt every
+# 30s; the controller's wgsync reporter mirrors that into the peers
+# table so the UI's online / last-seen columns reflect real state.
+# Idempotent: install/upgrade the units, then enable+restart the
+# timer (which re-fires the oneshot service immediately).
+#
+# Skipped on non-systemd hosts (e.g. container test environments)
+# so the bootstrap remains usable for local smoke tests; the
+# controller's reporter just sees a missing state file and warns
+# once per tick.
+if command -v systemctl >/dev/null 2>&1; then
+    echo "==> installing wg-state-reporter systemd timer"
+    sudo install -d -m 0755 -o root -g root /var/lib/bamboo
+    sudo install -m 0755 wg-state-reporter.sh    /usr/local/sbin/wg-state-reporter.sh
+    sudo install -m 0644 wg-state-reporter.service /etc/systemd/system/wg-state-reporter.service
+    sudo install -m 0644 wg-state-reporter.timer   /etc/systemd/system/wg-state-reporter.timer
+    sudo systemctl daemon-reload
+    sudo systemctl enable --now wg-state-reporter.timer
+    sudo systemctl restart wg-state-reporter.service
+else
+    echo "==> systemctl not found; skipping wg-state-reporter install"
+fi
+
+# 2) Run migrations via the controller container itself. We need the
 # embedded migration files which live in the image; running migrate
 # in a one-shot container is the simplest path.
 echo "==> running migrations"
