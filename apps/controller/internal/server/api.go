@@ -104,6 +104,18 @@ func (h *HTTPServer) routeAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Tenant-scoped mutation endpoints. Sit between the /peers/{id}
+	// block (which handles its own method dispatch) and the GET-only
+	// block below.
+	if r.URL.Path == "/api/v1/preauth-keys" {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		h.apiCreatePreAuthKey(w, r, authn, tenant)
+		return
+	}
+
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -576,6 +588,96 @@ func (h *HTTPServer) apiActivity(w http.ResponseWriter, r *http.Request, tenant 
 		out = append(out, auditEventToJSON(e))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"events": out})
+}
+
+// apiCreatePreAuthKeyReq is the request shape for POST
+// /api/v1/preauth-keys. TTL is intentionally absent — the MVP
+// surface in the Web UI doesn't expose it; bootstrap script and
+// gRPC callers can still set ExpiresAt via the proto path.
+type apiCreatePreAuthKeyReq struct {
+	Description string `json:"description,omitempty"`
+	Reusable    bool   `json:"reusable,omitempty"`
+	Ephemeral   bool   `json:"ephemeral,omitempty"`
+}
+
+// apiPreAuthKeyJSON is the response shape. Secret is the plaintext
+// value the user types into a bamboo client; it's shown ONCE, here,
+// and never again — the DB stores only the bcrypt hash.
+type apiPreAuthKeyJSON struct {
+	ID          string    `json:"id"`
+	Description string    `json:"description,omitempty"`
+	Reusable    bool      `json:"reusable"`
+	Ephemeral   bool      `json:"ephemeral"`
+	CreatedAt   time.Time `json:"createdAt"`
+	Secret      string    `json:"secret"`
+}
+
+// apiCreatePreAuthKey implements POST /api/v1/preauth-keys. Mints a
+// new pre-auth key for the request tenant and returns the plaintext
+// secret so the Web UI can show it once. Mirrors the gRPC
+// CreatePreAuthKey handler in handlers/auth.go — the secret
+// generation + hash storage contract has to match because both
+// surfaces feed the same redeem path.
+func (h *HTTPServer) apiCreatePreAuthKey(w http.ResponseWriter, r *http.Request, authn *authnContext, tenant *repo.Tenant) {
+	var req apiCreatePreAuthKeyReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("decode body: %w", err))
+		return
+	}
+
+	id := uuid.New()
+	plaintext, hash, err := auth.GenerateSecret(id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("generate secret: %w", err))
+		return
+	}
+
+	created, err := h.keys.Create(r.Context(), &repo.PreAuthKey{
+		ID:          id,
+		TenantID:    tenant.ID,
+		Description: req.Description,
+		SecretHash:  hash,
+		Reusable:    req.Reusable,
+		Ephemeral:   req.Ephemeral,
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("insert key: %w", err))
+		return
+	}
+
+	// Audit row uses the same shape as the gRPC handler so the
+	// dashboard activity feed sees a uniform preauthkey.create
+	// regardless of which surface minted the key.
+	auditEv := &repo.AuditEvent{
+		TenantID:     &tenant.ID,
+		Action:       "preauthkey.create",
+		ResourceType: "pre_auth_key",
+		ResourceID:   &created.ID,
+		Diff: marshalDiff(map[string]any{
+			"description": created.Description,
+			"reusable":    created.Reusable,
+			"ephemeral":   created.Ephemeral,
+		}),
+	}
+	if authn != nil && authn.claims != nil {
+		auditEv.ActorType = "user"
+		uid := authn.claims.UserID
+		auditEv.ActorID = &uid
+	} else {
+		auditEv.ActorType = "system"
+	}
+	if err := h.audits.Insert(r.Context(), auditEv); err != nil {
+		slog.Warn("preauthkey audit insert failed", "key_id", created.ID, "err", err)
+	}
+
+	writeJSON(w, http.StatusOK, apiPreAuthKeyJSON{
+		ID:          created.ID.String(),
+		Description: created.Description,
+		Reusable:    created.Reusable,
+		Ephemeral:   created.Ephemeral,
+		CreatedAt:   created.CreatedAt,
+		Secret:      plaintext,
+	})
 }
 
 // writePeerAudit centralizes the actor + tenant + resource binding

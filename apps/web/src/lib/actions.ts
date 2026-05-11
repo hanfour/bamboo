@@ -18,6 +18,14 @@ const SESSION_COOKIE = 'bamboo_session';
 
 export type ActionResult = { ok: true } | { ok: false; error: string };
 
+// MintResult adds the minted secret on success. Used by
+// mintPreAuthKeyAction; the modal needs the plaintext to render the
+// install instructions immediately (the controller only returns it
+// once — it never appears on a subsequent GET).
+export type MintResult =
+  | { ok: true; secret: string; id: string; description: string }
+  | { ok: false; error: string };
+
 async function buildHeaders(): Promise<Record<string, string>> {
   const headers: Record<string, string> = {
     'X-Tenant-Slug': TENANT,
@@ -70,6 +78,46 @@ export async function setPeerStatusAction(
 
 export async function setPeerTagsAction(id: string, tags: string[]): Promise<ActionResult> {
   return patchPeer(id, { tags });
+}
+
+// mintPreAuthKeyAction creates a one-time-use (or reusable) pre-
+// auth key and returns the plaintext secret. The secret is only
+// available in this response — the controller hashes it before
+// storage, so the modal MUST render it immediately and the caller
+// must capture it before closing.
+export async function mintPreAuthKeyAction(input: {
+  description: string;
+  reusable: boolean;
+}): Promise<MintResult> {
+  try {
+    const res = await fetch(`${BASE}/api/v1/preauth-keys`, {
+      method: 'POST',
+      headers: await buildHeaders(),
+      body: JSON.stringify({
+        description: input.description.trim(),
+        reusable: input.reusable,
+        ephemeral: false,
+      }),
+      cache: 'no-store',
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      return { ok: false, error: `${res.status} ${text || res.statusText}` };
+    }
+    const body = (await res.json()) as {
+      id: string;
+      description?: string;
+      secret: string;
+    };
+    return {
+      ok: true,
+      id: body.id,
+      description: body.description ?? '',
+      secret: body.secret,
+    };
+  } catch (e) {
+    return { ok: false, error: (e as Error).message };
+  }
 }
 
 export async function deletePeerAction(id: string): Promise<ActionResult> {
