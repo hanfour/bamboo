@@ -156,13 +156,47 @@ docker compose logs -f --tail=200 relay
 
 ### Updating to a new image
 
+The compose file pins controller / web / relay to `:latest`, which
+tracks the most recent **release tag**, not main HEAD. Builds for
+`vX.Y.Z` tag pushes update `:latest`; main pushes only update
+`:main` and `:<short-sha>` (see `.github/workflows/images.yml`).
+Routine upgrades therefore mean "wait for a new release tag, then
+pull". To test main HEAD instead, override the image to `:main` —
+but `:latest` is the supported deploy target.
+
+`serve` does NOT auto-run migrations on boot, so an upgrade that
+introduces new schema columns needs an explicit `migrate up`
+between pulling the new image and recreating the controller.
+Otherwise the new controller will boot against an old schema and
+its first read query against the new columns will fail.
+
+The full upgrade flow:
+
 ```bash
-docker compose pull
-docker compose up -d
+cd /opt/bamboo/infra/full
+
+# (Recommended) snapshot the DB so a failed migration can roll back.
+docker compose exec -T postgres pg_dump -U bamboo bamboo \
+  | gzip > "/home/ubuntu/bamboo-pre-$(date +%Y%m%d-%H%M).sql.gz"
+
+# Pull the new images. This does not restart anything yet.
+docker compose pull controller web relay
+
+# Apply any pending migrations using the new controller image. The
+# old controller stays up against the same DB during this step —
+# additive migrations (the only kind we ship) are safe for the old
+# controller's read paths.
+docker compose run --rm controller migrate status   # confirm what's Pending
+docker compose run --rm controller migrate up
+
+# Recreate controller + web with the new images. ~5s downtime.
+docker compose up -d controller web relay
+docker compose ps                                    # all services Up
 ```
 
-Migrations run idempotently on every controller boot — no separate
-migrate step needed for upgrades.
+If something looks wrong after `migrate up` but before recreate,
+roll the schema back with `docker compose run --rm controller migrate down`
+and re-pull the previous image tag.
 
 ### Backing up Postgres
 
