@@ -237,10 +237,10 @@ func TestReconcile_ReadsAndAppliesFile(t *testing.T) {
 		t.Fatalf("syncCalls = %d, want 2", len(store.syncCalls))
 	}
 	if store.syncCalls[0].Status != "online" {
-		t.Errorf("setCalls[0] (recent handshake) status = %s, want online", store.syncCalls[0].Status)
+		t.Errorf("syncCalls[0] (recent handshake) status = %s, want online", store.syncCalls[0].Status)
 	}
 	if store.syncCalls[1].Status != "offline" {
-		t.Errorf("setCalls[1] (never handshook) status = %s, want offline", store.syncCalls[1].Status)
+		t.Errorf("syncCalls[1] (never handshook) status = %s, want offline", store.syncCalls[1].Status)
 	}
 }
 
