@@ -115,12 +115,16 @@ func TestPeers_EndpointsRoundtrip(t *testing.T) {
 	}
 }
 
-// TestPeers_SetStatusByPubKey covers the wgsync reporter's primary
-// write path: pubkey-keyed status update with GREATEST guard on
-// last_seen_at. Verifies (a) the update lands on the right row,
-// (b) rowsAffected is returned for the caller's drift detection,
-// (c) GREATEST keeps a fresher existing timestamp.
-func TestPeers_SetStatusByPubKey(t *testing.T) {
+// TestPeers_SyncWGState covers the wgsync reporter's primary write
+// path: pubkey-keyed snapshot update with GREATEST guard on the two
+// timestamp columns and COALESCE guard on wg_endpoint. Verifies
+//
+//	(a) the update lands on the right row;
+//	(b) rowsAffected is returned for the caller's drift detection;
+//	(c) GREATEST keeps a fresher existing timestamp;
+//	(d) COALESCE preserves a previously-observed endpoint when the
+//	    next dump shows "(none)" (reporter passes empty string).
+func TestPeers_SyncWGState(t *testing.T) {
 	pool := requireDB(t)
 	tenants := repo.NewTenants(pool)
 	peers := repo.NewPeers(pool)
@@ -128,8 +132,8 @@ func TestPeers_SetStatusByPubKey(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	slug := fmt.Sprintf("setstat-%s", uuid.NewString()[:8])
-	tenant, err := tenants.GetOrCreate(ctx, slug, "set-status test", "100.64.0.0/24")
+	slug := fmt.Sprintf("syncwg-%s", uuid.NewString()[:8])
+	tenant, err := tenants.GetOrCreate(ctx, slug, "sync-wg test", "100.64.0.0/24")
 	if err != nil {
 		t.Fatalf("GetOrCreate tenant: %v", err)
 	}
@@ -149,11 +153,17 @@ func TestPeers_SetStatusByPubKey(t *testing.T) {
 		t.Fatalf("Insert: %v", err)
 	}
 
-	// Match: should flip to online and update last_seen_at.
 	freshTS := time.Now().UTC().Truncate(time.Second)
-	n, err := peers.SetStatusByPubKey(ctx, pubKey, "online", freshTS)
+	n, err := peers.SyncWGState(ctx, repo.WGSyncState{
+		PubKey:        pubKey,
+		Status:        "online",
+		LastHandshake: freshTS,
+		Endpoint:      "203.0.113.7:51820",
+		RxBytes:       12345,
+		TxBytes:       67890,
+	})
 	if err != nil {
-		t.Fatalf("SetStatusByPubKey match: %v", err)
+		t.Fatalf("SyncWGState match: %v", err)
 	}
 	if n != 1 {
 		t.Errorf("rowsAffected on match = %d, want 1", n)
@@ -168,22 +178,48 @@ func TestPeers_SetStatusByPubKey(t *testing.T) {
 	if got.LastSeenAt == nil || !got.LastSeenAt.Equal(freshTS) {
 		t.Errorf("last_seen_at = %v, want %v", got.LastSeenAt, freshTS)
 	}
+	if got.LastHandshakeAt == nil || !got.LastHandshakeAt.Equal(freshTS) {
+		t.Errorf("last_handshake_at = %v, want %v", got.LastHandshakeAt, freshTS)
+	}
+	if got.WGEndpoint == nil || *got.WGEndpoint != "203.0.113.7:51820" {
+		t.Errorf("wg_endpoint = %v, want 203.0.113.7:51820", got.WGEndpoint)
+	}
+	if got.RxBytes != 12345 || got.TxBytes != 67890 {
+		t.Errorf("bytes = rx=%d tx=%d, want rx=12345 tx=67890", got.RxBytes, got.TxBytes)
+	}
 
-	// GREATEST guard: an older timestamp must not roll back.
+	// GREATEST guard: an older handshake must not roll back, and an
+	// empty endpoint must not erase the previously-observed value.
 	older := freshTS.Add(-1 * time.Hour)
-	if _, err := peers.SetStatusByPubKey(ctx, pubKey, "offline", older); err != nil {
-		t.Fatalf("SetStatusByPubKey older: %v", err)
+	if _, err := peers.SyncWGState(ctx, repo.WGSyncState{
+		PubKey:        pubKey,
+		Status:        "offline",
+		LastHandshake: older,
+		Endpoint:      "", // simulates wg dump "(none)"
+		RxBytes:       99999,
+		TxBytes:       11111,
+	}); err != nil {
+		t.Fatalf("SyncWGState older: %v", err)
 	}
 	got2, _ := peers.GetByID(ctx, inserted.ID)
 	if got2.LastSeenAt == nil || !got2.LastSeenAt.Equal(freshTS) {
-		t.Errorf("GREATEST failed: last_seen_at rolled back to %v (want stay at %v)", got2.LastSeenAt, freshTS)
+		t.Errorf("GREATEST failed: last_seen_at rolled back to %v (want %v)", got2.LastSeenAt, freshTS)
+	}
+	if got2.LastHandshakeAt == nil || !got2.LastHandshakeAt.Equal(freshTS) {
+		t.Errorf("GREATEST failed: last_handshake_at rolled back to %v (want %v)", got2.LastHandshakeAt, freshTS)
+	}
+	if got2.WGEndpoint == nil || *got2.WGEndpoint != "203.0.113.7:51820" {
+		t.Errorf("COALESCE failed: wg_endpoint = %v (want stay at 203.0.113.7:51820)", got2.WGEndpoint)
+	}
+	if got2.RxBytes != 99999 || got2.TxBytes != 11111 {
+		t.Errorf("bytes should overwrite, got rx=%d tx=%d", got2.RxBytes, got2.TxBytes)
 	}
 
 	// Miss: unknown pubkey returns 0 rows, no error (used by the
 	// reporter's drift-detection log).
-	n, err = peers.SetStatusByPubKey(ctx, randomB64(t), "online", freshTS)
+	n, err = peers.SyncWGState(ctx, repo.WGSyncState{PubKey: randomB64(t), Status: "online", LastHandshake: freshTS})
 	if err != nil {
-		t.Fatalf("SetStatusByPubKey miss: %v", err)
+		t.Fatalf("SyncWGState miss: %v", err)
 	}
 	if n != 0 {
 		t.Errorf("rowsAffected on miss = %d, want 0", n)

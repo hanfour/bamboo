@@ -34,8 +34,12 @@ type ApiPeer = {
   status: 'online' | 'offline' | 'disabled';
   wireguardPublicKey?: string;
   endpoints?: string[];
+  wgEndpoint?: string;
+  rxBytes?: number;
+  txBytes?: number;
   createdAt: string;
   lastSeenAt?: string;
+  lastHandshakeAt?: string;
 };
 
 function apiPeerToPeer(p: ApiPeer): Peer {
@@ -50,8 +54,12 @@ function apiPeerToPeer(p: ApiPeer): Peer {
     status: p.status,
     wireguardPublicKey: p.wireguardPublicKey,
     endpoints: p.endpoints ?? [],
+    wgEndpoint: p.wgEndpoint,
+    rxBytes: p.rxBytes ?? 0,
+    txBytes: p.txBytes ?? 0,
     createdAt: p.createdAt,
     lastSeenAt: p.lastSeenAt,
+    lastHandshakeAt: p.lastHandshakeAt,
   };
 }
 

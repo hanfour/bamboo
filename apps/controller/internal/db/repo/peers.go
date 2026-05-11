@@ -34,10 +34,18 @@ type Peer struct {
 	// Endpoints are host:port candidates for direct connection,
 	// populated by the client via STUN discovery (or LAN heuristics).
 	// Empty until the peer first reports them.
-	Endpoints  []string
-	CreatedAt  time.Time
-	UpdatedAt  time.Time
-	LastSeenAt *time.Time
+	Endpoints []string
+	// WGEndpoint is the host:port the hub currently sees this peer
+	// dial from, written by the wg-state reporter. NULL until the
+	// reporter observes a non-"(none)" endpoint. Distinct from
+	// Endpoints, which is what the *peer itself* advertises.
+	WGEndpoint      *string
+	RxBytes         int64
+	TxBytes         int64
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
+	LastSeenAt      *time.Time
+	LastHandshakeAt *time.Time // strictly the WG handshake time; NULL = never handshook
 }
 
 // Insert creates a new peer. Returns the persisted row.
@@ -53,11 +61,13 @@ func (r *Peers) Insert(ctx context.Context, p *Peer) (*Peer, error) {
 		) VALUES ($1, $2, $3, $4, $5::inet, $6, $7, $8, $9)
 		RETURNING id, tenant_id, user_id, hostname, wireguard_public_key,
 		          host(ip), os, client_version, status, endpoints,
-		          created_at, updated_at, last_seen_at
+		          wg_endpoint, rx_bytes, tx_bytes,
+		          created_at, updated_at, last_seen_at, last_handshake_at
 	`, p.TenantID, p.UserID, p.Hostname, p.WireGuardPublicKey, p.IP, p.OS, p.ClientVersion, p.Status, endpoints).Scan(
 		&out.ID, &out.TenantID, &out.UserID, &out.Hostname, &out.WireGuardPublicKey,
 		&out.IP, &out.OS, &out.ClientVersion, &out.Status, &out.Endpoints,
-		&out.CreatedAt, &out.UpdatedAt, &out.LastSeenAt,
+		&out.WGEndpoint, &out.RxBytes, &out.TxBytes,
+		&out.CreatedAt, &out.UpdatedAt, &out.LastSeenAt, &out.LastHandshakeAt,
 	)
 	if err != nil {
 		return nil, err
@@ -71,13 +81,15 @@ func (r *Peers) GetByID(ctx context.Context, id uuid.UUID) (*Peer, error) {
 	err := r.pool.QueryRow(ctx, `
 		SELECT id, tenant_id, user_id, hostname, wireguard_public_key,
 		       host(ip), os, client_version, status, endpoints,
-		       created_at, updated_at, last_seen_at
+		       wg_endpoint, rx_bytes, tx_bytes,
+		       created_at, updated_at, last_seen_at, last_handshake_at
 		FROM peers
 		WHERE id = $1
 	`, id).Scan(
 		&p.ID, &p.TenantID, &p.UserID, &p.Hostname, &p.WireGuardPublicKey,
 		&p.IP, &p.OS, &p.ClientVersion, &p.Status, &p.Endpoints,
-		&p.CreatedAt, &p.UpdatedAt, &p.LastSeenAt,
+		&p.WGEndpoint, &p.RxBytes, &p.TxBytes,
+		&p.CreatedAt, &p.UpdatedAt, &p.LastSeenAt, &p.LastHandshakeAt,
 	)
 	if err != nil {
 		return nil, asNotFound(err)
@@ -108,13 +120,15 @@ func (r *Peers) FindByPubKey(ctx context.Context, tenantID uuid.UUID, pubKey str
 	err := r.pool.QueryRow(ctx, `
 		SELECT id, tenant_id, user_id, hostname, wireguard_public_key,
 		       host(ip), os, client_version, status, endpoints,
-		       created_at, updated_at, last_seen_at
+		       wg_endpoint, rx_bytes, tx_bytes,
+		       created_at, updated_at, last_seen_at, last_handshake_at
 		FROM peers
 		WHERE tenant_id = $1 AND wireguard_public_key = $2
 	`, tenantID, pubKey).Scan(
 		&p.ID, &p.TenantID, &p.UserID, &p.Hostname, &p.WireGuardPublicKey,
 		&p.IP, &p.OS, &p.ClientVersion, &p.Status, &p.Endpoints,
-		&p.CreatedAt, &p.UpdatedAt, &p.LastSeenAt,
+		&p.WGEndpoint, &p.RxBytes, &p.TxBytes,
+		&p.CreatedAt, &p.UpdatedAt, &p.LastSeenAt, &p.LastHandshakeAt,
 	)
 	if err != nil {
 		return nil, asNotFound(err)
@@ -127,7 +141,8 @@ func (r *Peers) ListByTenant(ctx context.Context, tenantID uuid.UUID) ([]*Peer, 
 	rows, err := r.pool.Query(ctx, `
 		SELECT id, tenant_id, user_id, hostname, wireguard_public_key,
 		       host(ip), os, client_version, status, endpoints,
-		       created_at, updated_at, last_seen_at
+		       wg_endpoint, rx_bytes, tx_bytes,
+		       created_at, updated_at, last_seen_at, last_handshake_at
 		FROM peers
 		WHERE tenant_id = $1
 		ORDER BY ip
@@ -143,7 +158,8 @@ func (r *Peers) ListByTenant(ctx context.Context, tenantID uuid.UUID) ([]*Peer, 
 		if err := rows.Scan(
 			&p.ID, &p.TenantID, &p.UserID, &p.Hostname, &p.WireGuardPublicKey,
 			&p.IP, &p.OS, &p.ClientVersion, &p.Status, &p.Endpoints,
-			&p.CreatedAt, &p.UpdatedAt, &p.LastSeenAt,
+			&p.WGEndpoint, &p.RxBytes, &p.TxBytes,
+			&p.CreatedAt, &p.UpdatedAt, &p.LastSeenAt, &p.LastHandshakeAt,
 		); err != nil {
 			return nil, err
 		}
@@ -174,34 +190,60 @@ func (r *Peers) UpdateEndpoints(ctx context.Context, id uuid.UUID, endpoints []s
 	return tag.RowsAffected() > 0, nil
 }
 
-// SetStatusByPubKey writes status (and bumps last_seen_at when the
-// proposed value is newer) for the peer with the given WireGuard
-// public key. Used by the wg-state reporter to mirror cryptokey-
-// routing state into the DB without clobbering a fresher
-// last_seen_at already written by client Heartbeat.
-// lastSeen.IsZero() is passed as NULL so GREATEST keeps the
-// existing value.
+// WGSyncState is the per-peer snapshot the wg-state reporter feeds
+// into SyncWGState. It mirrors the subset of `wg show <iface> dump`
+// the controller persists: liveness (Status / LastHandshake) plus
+// the cosmetic-but-useful counters (Endpoint / RxBytes / TxBytes).
+type WGSyncState struct {
+	PubKey        string
+	Status        string
+	LastHandshake time.Time // zero = no handshake observed; existing column value is kept
+	Endpoint      string    // "" = wg dump says "(none)"; existing column value is kept
+	RxBytes       int64
+	TxBytes       int64
+}
+
+// SyncWGState mirrors one peer's state from the host's wg dump into
+// the peers row identified by pubkey. Used by the wg-state reporter.
 //
-// pubkey is treated as globally unique here, which is enforced by
-// the peers_pubkey_global_unique index (migration 00004): WG
-// cryptokey routing operates on pubkey alone, so two tenants
-// sharing a pubkey is operationally meaningless.
+//   - status is overwritten outright (it's a derived attribute the
+//     reporter computes from the handshake age).
+//   - last_seen_at and last_handshake_at use GREATEST so a stale
+//     dump (clock skew, parallel write from REST Heartbeat) cannot
+//     roll the timestamp backwards.
+//   - wg_endpoint uses COALESCE: empty Endpoint (meaning "(none)" in
+//     the dump) preserves the previously-observed endpoint instead
+//     of erasing it, so the UI doesn't blink to "—" on every
+//     interface flap.
+//   - rx_bytes / tx_bytes overwrite outright. The wg counters are
+//     monotonic within an interface lifetime but reset when the
+//     interface restarts; storing the current snapshot is the
+//     simplest faithful representation.
 //
-// Returns the number of rows updated. The reporter uses 0 as a
-// signal that a pubkey is in the wg dump but not in the DB
-// (e.g. a manually-added peer that never registered via REST).
-func (r *Peers) SetStatusByPubKey(ctx context.Context, pubKey, status string, lastSeen time.Time) (int64, error) {
-	var ts any
-	if !lastSeen.IsZero() {
-		ts = lastSeen.UTC()
+// pubkey is treated as globally unique here, enforced by
+// peers_pubkey_global_unique (migration 00004). Returns the number
+// of rows updated; the reporter uses 0 as a signal that a pubkey is
+// in the wg dump but not in the DB.
+func (r *Peers) SyncWGState(ctx context.Context, s WGSyncState) (int64, error) {
+	var handshakeArg any
+	if !s.LastHandshake.IsZero() {
+		handshakeArg = s.LastHandshake.UTC()
+	}
+	var endpointArg any
+	if s.Endpoint != "" {
+		endpointArg = s.Endpoint
 	}
 	tag, err := r.pool.Exec(ctx, `
 		UPDATE peers
-		   SET status       = $1,
-		       last_seen_at = GREATEST(last_seen_at, $2::timestamptz),
-		       updated_at   = now()
-		 WHERE wireguard_public_key = $3
-	`, status, ts, pubKey)
+		   SET status            = $1,
+		       last_seen_at      = GREATEST(last_seen_at, $2::timestamptz),
+		       last_handshake_at = GREATEST(last_handshake_at, $2::timestamptz),
+		       wg_endpoint       = COALESCE($3, wg_endpoint),
+		       rx_bytes          = $4,
+		       tx_bytes          = $5,
+		       updated_at        = now()
+		 WHERE wireguard_public_key = $6
+	`, s.Status, handshakeArg, endpointArg, s.RxBytes, s.TxBytes, s.PubKey)
 	if err != nil {
 		return 0, err
 	}

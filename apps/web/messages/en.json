@@ -56,7 +56,8 @@
       "sections": {
         "basic": "Basic info",
         "wireguard": "WireGuard",
-        "endpoints": "Endpoints",
+        "endpoints": "Reported endpoints",
+        "connection": "Connection",
         "timestamps": "Timestamps",
         "actions": "Actions"
       },
@@ -67,6 +68,10 @@
         "clientVersion": "Client version",
         "tags": "Tags",
         "publicKey": "Public key",
+        "wgEndpoint": "Current endpoint",
+        "rxBytes": "Received",
+        "txBytes": "Sent",
+        "lastHandshake": "Last handshake",
         "createdAt": "Created at",
         "lastSeen": "Last seen"
       },
@@ -78,7 +83,8 @@
       },
       "empty": {
         "endpoints": "No endpoints reported yet",
-        "tags": "No tags"
+        "tags": "No tags",
+        "noHandshake": "No handshake yet"
       }
     }
   },

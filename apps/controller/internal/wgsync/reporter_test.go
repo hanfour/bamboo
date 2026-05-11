@@ -11,29 +11,25 @@ import (
 	"sort"
 	"testing"
 	"time"
+
+	"github.com/hanfour/bamboo/apps/controller/internal/db/repo"
 )
 
-type setStatusCall struct {
-	pubKey   string
-	status   string
-	lastSeen time.Time
-}
-
 type fakePeerStore struct {
-	setCalls   []setStatusCall
+	syncCalls  []repo.WGSyncState
 	keptOff    []string // last argument passed to MarkOfflineExcept
 	rowsPerKey map[string]int64
 	setErr     error
 	markErr    error
 }
 
-func (f *fakePeerStore) SetStatusByPubKey(_ context.Context, pubKey, status string, lastSeen time.Time) (int64, error) {
-	f.setCalls = append(f.setCalls, setStatusCall{pubKey: pubKey, status: status, lastSeen: lastSeen})
+func (f *fakePeerStore) SyncWGState(_ context.Context, s repo.WGSyncState) (int64, error) {
+	f.syncCalls = append(f.syncCalls, s)
 	if f.setErr != nil {
 		return 0, f.setErr
 	}
 	if f.rowsPerKey != nil {
-		return f.rowsPerKey[pubKey], nil
+		return f.rowsPerKey[s.PubKey], nil
 	}
 	return 1, nil
 }
@@ -62,8 +58,8 @@ func TestApplyStates_OnlineWhenInsideWindow(t *testing.T) {
 	if err := r.applyStates(context.Background(), states); err != nil {
 		t.Fatalf("applyStates: %v", err)
 	}
-	if len(store.setCalls) != 1 || store.setCalls[0].status != "online" {
-		t.Errorf("setCalls = %#v, want one online", store.setCalls)
+	if len(store.syncCalls) != 1 || store.syncCalls[0].Status != "online" {
+		t.Errorf("syncCalls = %#v, want one online", store.syncCalls)
 	}
 }
 
@@ -78,8 +74,8 @@ func TestApplyStates_OfflineWhenStaleHandshake(t *testing.T) {
 	if err := r.applyStates(context.Background(), states); err != nil {
 		t.Fatalf("applyStates: %v", err)
 	}
-	if store.setCalls[0].status != "offline" {
-		t.Errorf("status = %s, want offline", store.setCalls[0].status)
+	if store.syncCalls[0].Status != "offline" {
+		t.Errorf("status = %s, want offline", store.syncCalls[0].Status)
 	}
 }
 
@@ -94,8 +90,8 @@ func TestApplyStates_OfflineWhenNeverHandshook(t *testing.T) {
 	if err := r.applyStates(context.Background(), states); err != nil {
 		t.Fatalf("applyStates: %v", err)
 	}
-	if store.setCalls[0].status != "offline" {
-		t.Errorf("never-handshook peer should be offline, got %s", store.setCalls[0].status)
+	if store.syncCalls[0].Status != "offline" {
+		t.Errorf("never-handshook peer should be offline, got %s", store.syncCalls[0].Status)
 	}
 }
 
@@ -111,8 +107,8 @@ func TestApplyStates_BoundaryExactlyAtWindow(t *testing.T) {
 	if err := r.applyStates(context.Background(), states); err != nil {
 		t.Fatalf("applyStates: %v", err)
 	}
-	if store.setCalls[0].status != "offline" {
-		t.Errorf("at-boundary peer should be offline, got %s", store.setCalls[0].status)
+	if store.syncCalls[0].Status != "offline" {
+		t.Errorf("at-boundary peer should be offline, got %s", store.syncCalls[0].Status)
 	}
 }
 
@@ -148,8 +144,8 @@ func TestApplyStates_EmptyDumpSkipsZombieSweep(t *testing.T) {
 	if err := r.applyStates(context.Background(), nil); err != nil {
 		t.Fatalf("applyStates: %v", err)
 	}
-	if len(store.setCalls) != 0 {
-		t.Errorf("setCalls = %d, want 0", len(store.setCalls))
+	if len(store.syncCalls) != 0 {
+		t.Errorf("syncCalls = %d, want 0", len(store.syncCalls))
 	}
 	// keptOff is empty (or nil) — repo treats this as "skip the
 	// sweep" so the fake's len-0 record is the right signal.
@@ -237,14 +233,14 @@ func TestReconcile_ReadsAndAppliesFile(t *testing.T) {
 	if err := r.reconcile(context.Background()); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
-	if len(store.setCalls) != 2 {
-		t.Fatalf("setCalls = %d, want 2", len(store.setCalls))
+	if len(store.syncCalls) != 2 {
+		t.Fatalf("syncCalls = %d, want 2", len(store.syncCalls))
 	}
-	if store.setCalls[0].status != "online" {
-		t.Errorf("setCalls[0] (recent handshake) status = %s, want online", store.setCalls[0].status)
+	if store.syncCalls[0].Status != "online" {
+		t.Errorf("setCalls[0] (recent handshake) status = %s, want online", store.syncCalls[0].Status)
 	}
-	if store.setCalls[1].status != "offline" {
-		t.Errorf("setCalls[1] (never handshook) status = %s, want offline", store.setCalls[1].status)
+	if store.syncCalls[1].Status != "offline" {
+		t.Errorf("setCalls[1] (never handshook) status = %s, want offline", store.syncCalls[1].Status)
 	}
 }
 

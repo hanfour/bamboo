@@ -8,6 +8,8 @@ import (
 	"log/slog"
 	"os"
 	"time"
+
+	"github.com/hanfour/bamboo/apps/controller/internal/db/repo"
 )
 
 // Statuses written by the reporter. Match the values the rest of
@@ -23,11 +25,11 @@ const (
 // interface so reporter_test.go can drive it without a database;
 // *repo.Peers satisfies it in production.
 //
-// SetStatusByPubKey returns the number of rows updated; the reporter
+// SyncWGState returns the number of rows updated; the reporter
 // uses 0 to detect "pubkey in wg dump but not in DB" — typically a
 // peer manually `wg set`d on the host that never registered via REST.
 type PeerStore interface {
-	SetStatusByPubKey(ctx context.Context, pubKey, status string, lastSeen time.Time) (int64, error)
+	SyncWGState(ctx context.Context, state repo.WGSyncState) (int64, error)
 	MarkOfflineExcept(ctx context.Context, pubkeys []string) error
 }
 
@@ -137,9 +139,16 @@ func (r *Reporter) applyStates(ctx context.Context, states []PeerState) error {
 		if !s.LatestHandshake.IsZero() && now.Sub(s.LatestHandshake) < r.onlineWindow {
 			status = statusOnline
 		}
-		n, err := r.peers.SetStatusByPubKey(ctx, s.PublicKey, status, s.LatestHandshake)
+		n, err := r.peers.SyncWGState(ctx, repo.WGSyncState{
+			PubKey:        s.PublicKey,
+			Status:        status,
+			LastHandshake: s.LatestHandshake,
+			Endpoint:      s.Endpoint,
+			RxBytes:       s.RxBytes,
+			TxBytes:       s.TxBytes,
+		})
 		if err != nil {
-			return fmt.Errorf("set status pubkey=%s: %w", s.PublicKey, err)
+			return fmt.Errorf("sync wg state pubkey=%s: %w", s.PublicKey, err)
 		}
 		if n == 0 {
 			// Pubkey is in the wg dump but no DB row matches.
