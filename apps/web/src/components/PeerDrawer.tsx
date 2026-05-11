@@ -10,7 +10,7 @@ import {
   setPeerStatusAction,
   setPeerTagsAction,
 } from '@/lib/actions';
-import type { Peer, PeerEvent } from '@/lib/types';
+import type { FetchResult, Peer, PeerEvent } from '@/lib/types';
 
 // CSS selector for elements that participate in tab order. Used by
 // the focus-trap useEffect to enumerate stops inside the drawer.
@@ -20,7 +20,15 @@ const focusableSelector =
   'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
 type Props = {
-  peer: Peer | null;
+  // peerResult is null when nothing is selected (drawer closed) and
+  // a FetchResult otherwise. The three FetchResult variants drive
+  // three distinct render states inside the drawer body:
+  //   - kind='ok'       → full peer detail (DrawerBody)
+  //   - kind='notFound' → peer deleted / cross-tenant / bad uuid
+  //   - kind='error'    → controller unreachable / 5xx — distinct
+  //     from notFound so the user doesn't read "node was deleted"
+  //     when the real problem is a network outage.
+  peerResult: FetchResult<Peer> | null;
   events: PeerEvent[];
   open: boolean;
   onClose: () => void;
@@ -35,7 +43,8 @@ type Props = {
 // forward and link-sharing both work; `peer` is null when the id
 // resolved to 404 (deleted peer or stale link), and the drawer
 // renders a not-found state in that case.
-export function PeerDrawer({ peer, events, open, onClose, onDeleted }: Props) {
+export function PeerDrawer({ peerResult, events, open, onClose, onDeleted }: Props) {
+  const peer = peerResult?.kind === 'ok' ? peerResult.value : null;
   const t = useTranslations('peers.drawer');
   const tStatus = useTranslations('peers.status');
   const panelRef = useRef<HTMLDivElement>(null);
@@ -130,13 +139,7 @@ export function PeerDrawer({ peer, events, open, onClose, onDeleted }: Props) {
       >
         <DrawerHeader peer={peer} statusLabel={peer ? tStatus(peer.status) : ''} onClose={onClose} closeLabel={t('close')} />
         <div className="flex-1 overflow-y-auto px-6 py-4">
-          {peer ? (
-            // key forces the body to remount on peer-change so the
-            // inline edit / confirm state resets between selections.
-            <DrawerBody key={peer.id} peer={peer} events={events} onDeleted={onDeleted} />
-          ) : (
-            <NotFoundState message={t('notFound')} />
-          )}
+          {renderBody(peerResult, events, onDeleted, t)}
         </div>
       </div>
     </div>
@@ -679,10 +682,55 @@ function formatRelative(iso: string): string {
   return `${Math.round(s / 86_400)}d`;
 }
 
-function NotFoundState({ message }: { message: string }) {
+// renderBody picks the right body variant for the four states the
+// drawer can be in: nothing selected (renders nothing, drawer is
+// slid off-screen anyway), peer loaded, peer not found, fetch
+// errored. Split out so the JSX in the main component stays flat.
+function renderBody(
+  peerResult: FetchResult<Peer> | null,
+  events: PeerEvent[],
+  onDeleted: () => void,
+  t: ReturnType<typeof useTranslations>,
+) {
+  if (peerResult === null) return null;
+  switch (peerResult.kind) {
+    case 'ok':
+      // key forces the body to remount on peer-change so the
+      // inline edit / confirm state resets between selections.
+      return <DrawerBody key={peerResult.value.id} peer={peerResult.value} events={events} onDeleted={onDeleted} />;
+    case 'notFound':
+      return <CenteredMessage tone="muted" message={t('notFound')} />;
+    case 'error':
+      return (
+        <CenteredMessage
+          tone="error"
+          message={t('fetchError')}
+          detail={peerResult.message}
+        />
+      );
+  }
+}
+
+// CenteredMessage is the shared layout for the drawer's two fallback
+// states (not-found, fetch-error). Tone toggles between the muted
+// gray of "expected miss" and the red of "something is wrong".
+function CenteredMessage({
+  tone,
+  message,
+  detail,
+}: {
+  tone: 'muted' | 'error';
+  message: string;
+  detail?: string;
+}) {
+  const colorMain =
+    tone === 'error' ? 'text-red-700 dark:text-red-300' : 'text-zinc-500 dark:text-zinc-400';
+  const colorDetail =
+    tone === 'error' ? 'text-red-600 dark:text-red-400' : 'text-zinc-400 dark:text-zinc-500';
   return (
-    <div className="flex h-full items-center justify-center">
-      <p className="text-center text-sm text-zinc-500 dark:text-zinc-400">{message}</p>
+    <div className="flex h-full flex-col items-center justify-center gap-2 text-center">
+      <p className={`text-sm ${colorMain}`}>{message}</p>
+      {detail && <p className={`max-w-xs break-words text-xs ${colorDetail}`}>{detail}</p>}
     </div>
   );
 }

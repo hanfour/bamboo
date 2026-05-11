@@ -3,6 +3,7 @@
 import { useTranslations } from 'next-intl';
 import { PeersView } from '@/components/PeersView';
 import { fetchPeer, fetchPeerEvents, fetchPeers } from '@/lib/api';
+import type { FetchResult, Peer, PeerEvent } from '@/lib/types';
 
 type SearchParams = { selected?: string };
 
@@ -34,9 +35,9 @@ function Peers({
   selectedEvents,
   selectedId,
 }: {
-  peers: Awaited<ReturnType<typeof fetchPeers>>;
-  selectedPeer: Awaited<ReturnType<typeof fetchPeer>>;
-  selectedEvents: Awaited<ReturnType<typeof fetchPeerEvents>>;
+  peers: Peer[];
+  selectedPeer: FetchResult<Peer> | null;
+  selectedEvents: PeerEvent[];
   selectedId?: string;
 }) {
   const t = useTranslations('peers');

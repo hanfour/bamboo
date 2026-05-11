@@ -33,6 +33,21 @@ export type Peer = {
   lastHandshakeAt?: string;
 };
 
+// FetchResult is a tri-state discriminated union for read paths
+// where "couldn't reach the controller" needs to be distinguished
+// from "controller said 404". The previous `T | null` pattern
+// collapsed both into the same UI state ("not found"), which lies
+// to the user when the real problem is a network outage.
+//
+// 'notFound' covers: missing id, bad uuid, peer in another tenant
+// (all three intentionally indistinguishable on the wire per the
+// cross-tenant probe-protection contract).
+// 'error' covers: network failure, controller 5xx, malformed JSON.
+export type FetchResult<T> =
+  | { kind: 'ok'; value: T }
+  | { kind: 'notFound' }
+  | { kind: 'error'; message: string };
+
 // PeerEvent is one row from the per-peer audit timeline. `diff` is
 // the raw JSON the controller wrote when the action happened — for
 // peer.update it's `{field: {from, to}}`, for peer.delete it's the
