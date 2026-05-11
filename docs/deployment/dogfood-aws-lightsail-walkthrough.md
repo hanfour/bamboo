@@ -145,9 +145,13 @@ cd bamboo/infra/full
 cat > .env <<EOF
 DOMAIN=bamboo.<your-domain>
 RELAY_DOMAIN=relay.<your-domain>
+# BAMBOO_SESSION_SECRET 是 HMAC 簽 JWT 用的，可以是任何字串。
+# POSTGRES_PASSWORD / CLICKHOUSE_PASSWORD 會被嵌進 DATABASE_URL /
+# CLICKHOUSE_URL，必須是 URL-safe；用 -hex 避免 -base64 偶爾產出
+# '/' 撞到 URL parser。
 BAMBOO_SESSION_SECRET=$(openssl rand -base64 48 | tr -d '\n')
-POSTGRES_PASSWORD=$(openssl rand -base64 24 | tr -d '\n')
-CLICKHOUSE_PASSWORD=$(openssl rand -base64 24 | tr -d '\n')
+POSTGRES_PASSWORD=$(openssl rand -hex 24)
+CLICKHOUSE_PASSWORD=$(openssl rand -hex 24)
 OIDC_GOOGLE_CLIENT_ID=
 OIDC_GOOGLE_CLIENT_SECRET=
 OIDC_GITHUB_CLIENT_ID=
