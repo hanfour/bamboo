@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -69,22 +70,37 @@ func (h *HTTPServer) routeAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// /api/v1/peers/{id} accepts GET / PATCH / DELETE. Handled here
-	// before the GET-only block so the mutation methods are routed
-	// without a 405. The reserved sub-paths (register / heartbeat /
-	// watch) are exact-matched in the early switch above and never
-	// reach this prefix check.
-	if rest, ok := strings.CutPrefix(r.URL.Path, "/api/v1/peers/"); ok && rest != "" && !strings.Contains(rest, "/") {
-		switch r.Method {
-		case http.MethodGet:
-			h.apiPeer(w, r, tenant, rest)
-		case http.MethodPatch:
-			h.apiPeerPatch(w, r, authn, tenant, rest)
-		case http.MethodDelete:
-			h.apiPeerDelete(w, r, authn, tenant, rest)
-		default:
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	// /api/v1/peers/{id} accepts GET / PATCH / DELETE; the
+	// /api/v1/peers/{id}/events sub-path is a read-only timeline.
+	// Both are routed here before the GET-only block below.
+	// The reserved sub-paths (register / heartbeat / watch) are
+	// exact-matched in the early switch above and never reach this
+	// prefix check.
+	if rest, ok := strings.CutPrefix(r.URL.Path, "/api/v1/peers/"); ok && rest != "" {
+		// "{id}/events" — the only two-segment shape supported.
+		if id, found := strings.CutSuffix(rest, "/events"); found && id != "" && !strings.Contains(id, "/") {
+			if r.Method != http.MethodGet {
+				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+				return
+			}
+			h.apiPeerEvents(w, r, tenant, id)
+			return
 		}
+		// "{id}" — single peer GET/PATCH/DELETE.
+		if !strings.Contains(rest, "/") {
+			switch r.Method {
+			case http.MethodGet:
+				h.apiPeer(w, r, tenant, rest)
+			case http.MethodPatch:
+				h.apiPeerPatch(w, r, authn, tenant, rest)
+			case http.MethodDelete:
+				h.apiPeerDelete(w, r, authn, tenant, rest)
+			default:
+				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			}
+			return
+		}
+		http.NotFound(w, r)
 		return
 	}
 
@@ -439,6 +455,79 @@ func (h *HTTPServer) apiPeerDelete(w http.ResponseWriter, r *http.Request, authn
 		"tags":               current.Tags,
 	})
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// apiAuditEventJSON is the wire shape for a single timeline entry.
+// Diff is forwarded verbatim — the Web UI renders peer.update's
+// {field: {from, to}} structure specially and pretty-prints the
+// rest as JSON.
+type apiAuditEventJSON struct {
+	ID         string          `json:"id"`
+	ActorType  string          `json:"actorType"`
+	ActorID    string          `json:"actorId,omitempty"`
+	ActorEmail string          `json:"actorEmail,omitempty"`
+	Action     string          `json:"action"`
+	Diff       json.RawMessage `json:"diff,omitempty"`
+	OccurredAt time.Time       `json:"occurredAt"`
+}
+
+// apiPeerEvents implements GET /api/v1/peers/{id}/events. Returns
+// the most recent audit_log rows targeting this peer, newest first.
+// Tenant scoping mirrors apiPeer / apiPeerPatch — a peer in another
+// tenant collapses to 404 before we even look at the audit table,
+// so events for that peer never leak across tenants.
+func (h *HTTPServer) apiPeerEvents(w http.ResponseWriter, r *http.Request, tenant *repo.Tenant, idStr string) {
+	id, err := uuid.Parse(idStr)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	// Verify the peer exists in this tenant first. Skipping this
+	// check would let a caller fish for events targeting a peer
+	// they shouldn't see — the audit row carries tenant_id, but
+	// the ResourceID alone (a uuid) isn't tenant-scoped on its own.
+	p, err := h.peers.GetByID(r.Context(), id)
+	if errors.Is(err, repo.ErrNotFound) {
+		http.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if p.TenantID != tenant.ID {
+		http.NotFound(w, r)
+		return
+	}
+
+	limit := 50
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	events, err := h.audits.ListByResource(r.Context(), tenant.ID, "peer", id, limit)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+
+	out := make([]apiAuditEventJSON, 0, len(events))
+	for _, e := range events {
+		row := apiAuditEventJSON{
+			ID:         e.ID.String(),
+			ActorType:  e.ActorType,
+			ActorEmail: e.ActorEmail,
+			Action:     e.Action,
+			Diff:       e.Diff,
+			OccurredAt: e.OccurredAt,
+		}
+		if e.ActorID != nil {
+			row.ActorID = e.ActorID.String()
+		}
+		out = append(out, row)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"events": out})
 }
 
 // writePeerAudit centralizes the actor + tenant + resource binding

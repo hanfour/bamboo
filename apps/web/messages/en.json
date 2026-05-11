@@ -59,7 +59,8 @@
         "endpoints": "Reported endpoints",
         "connection": "Connection",
         "timestamps": "Timestamps",
-        "actions": "Actions"
+        "actions": "Actions",
+        "timeline": "Activity"
       },
       "fields": {
         "hostname": "Hostname",
@@ -96,7 +97,21 @@
       "empty": {
         "endpoints": "No endpoints reported yet",
         "tags": "No tags",
-        "noHandshake": "No handshake yet"
+        "noHandshake": "No handshake yet",
+        "timeline": "No activity yet"
+      },
+      "timeline": {
+        "actor": {
+          "user": "User",
+          "system": "System",
+          "api": "API"
+        },
+        "action": {
+          "peer.register": "Registered",
+          "peer.update": "Updated",
+          "peer.delete": "Deleted",
+          "peer.heartbeat": "Heartbeat"
+        }
       }
     }
   },
