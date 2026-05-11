@@ -49,7 +49,38 @@
       "offline": "Offline",
       "disabled": "Disabled"
     },
-    "empty": "No peers yet. Run bamboo up on a machine to register the first peer."
+    "empty": "No peers yet. Run bamboo up on a machine to register the first peer.",
+    "drawer": {
+      "close": "Close",
+      "notFound": "Peer not found. It may have been deleted, or the URL contains a stale id.",
+      "sections": {
+        "basic": "Basic info",
+        "wireguard": "WireGuard",
+        "endpoints": "Endpoints",
+        "timestamps": "Timestamps",
+        "actions": "Actions"
+      },
+      "fields": {
+        "hostname": "Hostname",
+        "ip": "IP",
+        "os": "OS",
+        "clientVersion": "Client version",
+        "tags": "Tags",
+        "publicKey": "Public key",
+        "createdAt": "Created at",
+        "lastSeen": "Last seen"
+      },
+      "actions": {
+        "disable": "Disable peer",
+        "rename": "Rename",
+        "delete": "Delete peer",
+        "comingSoon": "Coming soon"
+      },
+      "empty": {
+        "endpoints": "No endpoints reported yet",
+        "tags": "No tags"
+      }
+    }
   },
   "acl": {
     "title": "Access Policy",

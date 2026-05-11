@@ -1,15 +1,34 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import { useTranslations } from 'next-intl';
-import { PeerTable } from '@/components/PeerTable';
-import { fetchPeers } from '@/lib/api';
+import { PeersView } from '@/components/PeersView';
+import { fetchPeer, fetchPeers } from '@/lib/api';
 
-export default async function PeersPage() {
-  const peers = await fetchPeers();
-  return <Peers peers={peers} />;
+type SearchParams = { selected?: string };
+
+export default async function PeersPage({
+  searchParams,
+}: {
+  // Next 15 makes searchParams a Promise in async server components.
+  searchParams: Promise<SearchParams>;
+}) {
+  const { selected } = await searchParams;
+  const [peers, selectedPeer] = await Promise.all([
+    fetchPeers(),
+    selected ? fetchPeer(selected) : Promise.resolve(null),
+  ]);
+  return <Peers peers={peers} selectedPeer={selectedPeer} selectedId={selected} />;
 }
 
-function Peers({ peers }: { peers: Awaited<ReturnType<typeof fetchPeers>> }) {
+function Peers({
+  peers,
+  selectedPeer,
+  selectedId,
+}: {
+  peers: Awaited<ReturnType<typeof fetchPeers>>;
+  selectedPeer: Awaited<ReturnType<typeof fetchPeer>>;
+  selectedId?: string;
+}) {
   const t = useTranslations('peers');
   return (
     <div className="space-y-6">
@@ -22,7 +41,7 @@ function Peers({ peers }: { peers: Awaited<ReturnType<typeof fetchPeers>> }) {
           {t('addPeer')}
         </button>
       </header>
-      <PeerTable peers={peers} />
+      <PeersView peers={peers} selectedPeer={selectedPeer} selectedId={selectedId} />
     </div>
   );
 }

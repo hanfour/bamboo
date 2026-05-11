@@ -32,8 +32,28 @@ type ApiPeer = {
   os: string;
   clientVersion: string;
   status: 'online' | 'offline' | 'disabled';
+  wireguardPublicKey?: string;
+  endpoints?: string[];
+  createdAt: string;
   lastSeenAt?: string;
 };
+
+function apiPeerToPeer(p: ApiPeer): Peer {
+  return {
+    id: p.id,
+    tenantId: p.tenantId,
+    hostname: p.hostname,
+    ip: p.ip,
+    tags: p.tags ?? [],
+    os: p.os,
+    clientVersion: p.clientVersion,
+    status: p.status,
+    wireguardPublicKey: p.wireguardPublicKey,
+    endpoints: p.endpoints ?? [],
+    createdAt: p.createdAt,
+    lastSeenAt: p.lastSeenAt,
+  };
+}
 
 type ApiPolicyRule = {
   id: string;
@@ -130,17 +150,25 @@ export async function fetchMe(): Promise<ApiMe> {
 
 export async function fetchPeers(): Promise<Peer[]> {
   const body = await get<{ peers: ApiPeer[] }>('/api/v1/peers', { peers: [] });
-  return body.peers.map((p) => ({
-    id: p.id,
-    tenantId: p.tenantId,
-    hostname: p.hostname,
-    ip: p.ip,
-    tags: p.tags ?? [],
-    os: p.os,
-    clientVersion: p.clientVersion,
-    status: p.status,
-    lastSeenAt: p.lastSeenAt,
-  }));
+  return body.peers.map(apiPeerToPeer);
+}
+
+// fetchPeer returns a single peer or null. The controller responds 404
+// for missing ids, ids that don't parse as uuid, and peers in a
+// different tenant — all three collapse to null so the drawer renders
+// the same "not found" state in every case.
+export async function fetchPeer(id: string): Promise<Peer | null> {
+  try {
+    const res = await fetch(`${BASE}/api/v1/peers/${encodeURIComponent(id)}`, {
+      headers: await buildHeaders(),
+      cache: 'no-store',
+    });
+    if (!res.ok) return null;
+    const p = (await res.json()) as ApiPeer;
+    return apiPeerToPeer(p);
+  } catch {
+    return null;
+  }
 }
 
 export async function fetchPolicy(): Promise<AclPolicy> {

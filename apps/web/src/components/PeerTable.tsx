@@ -1,11 +1,17 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+'use client';
+
 import { useTranslations } from 'next-intl';
 import type { Peer } from '@/lib/types';
 
-type Props = { peers: Peer[] };
+type Props = {
+  peers: Peer[];
+  selectedId?: string;
+  onSelect: (id: string) => void;
+};
 
-export function PeerTable({ peers }: Props) {
+export function PeerTable({ peers, selectedId, onSelect }: Props) {
   const t = useTranslations('peers');
 
   if (peers.length === 0) {
@@ -30,33 +36,51 @@ export function PeerTable({ peers }: Props) {
           </tr>
         </thead>
         <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800">
-          {peers.map((p) => (
-            <tr key={p.id} className="text-zinc-700 dark:text-zinc-300">
-              <td className="px-4 py-3 font-medium text-zinc-900 dark:text-zinc-100">
-                {p.hostname}
-              </td>
-              <td className="px-4 py-3 font-mono text-xs">{p.ip}</td>
-              <td className="px-4 py-3">
-                <div className="flex flex-wrap gap-1">
-                  {p.tags.map((tag) => (
-                    <span
-                      key={tag}
-                      className="rounded bg-zinc-100 px-2 py-0.5 text-xs text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
-                    >
-                      {tag}
-                    </span>
-                  ))}
-                </div>
-              </td>
-              <td className="px-4 py-3 text-xs text-zinc-500 dark:text-zinc-400">{p.os}</td>
-              <td className="px-4 py-3">
-                <StatusBadge status={p.status} label={t(`status.${p.status}`)} />
-              </td>
-              <td className="px-4 py-3 text-xs text-zinc-500 dark:text-zinc-400">
-                {p.lastSeenAt ? formatRelative(p.lastSeenAt) : '—'}
-              </td>
-            </tr>
-          ))}
+          {peers.map((p) => {
+            const isSelected = p.id === selectedId;
+            return (
+              <tr
+                key={p.id}
+                onClick={() => onSelect(p.id)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    onSelect(p.id);
+                  }
+                }}
+                tabIndex={0}
+                role="button"
+                aria-pressed={isSelected}
+                className={`cursor-pointer text-zinc-700 transition-colors hover:bg-zinc-50 focus:bg-zinc-100 focus:outline-none dark:text-zinc-300 dark:hover:bg-zinc-900 dark:focus:bg-zinc-800 ${
+                  isSelected ? 'bg-bamboo-50 dark:bg-bamboo-900/20' : ''
+                }`}
+              >
+                <td className="px-4 py-3 font-medium text-zinc-900 dark:text-zinc-100">
+                  {p.hostname}
+                </td>
+                <td className="px-4 py-3 font-mono text-xs">{p.ip}</td>
+                <td className="px-4 py-3">
+                  <div className="flex flex-wrap gap-1">
+                    {p.tags.map((tag) => (
+                      <span
+                        key={tag}
+                        className="rounded bg-zinc-100 px-2 py-0.5 text-xs text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
+                      >
+                        {tag}
+                      </span>
+                    ))}
+                  </div>
+                </td>
+                <td className="px-4 py-3 text-xs text-zinc-500 dark:text-zinc-400">{p.os}</td>
+                <td className="px-4 py-3">
+                  <StatusBadge status={p.status} label={t(`status.${p.status}`)} />
+                </td>
+                <td className="px-4 py-3 text-xs text-zinc-500 dark:text-zinc-400">
+                  {p.lastSeenAt ? formatRelative(p.lastSeenAt) : '—'}
+                </td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
     </div>

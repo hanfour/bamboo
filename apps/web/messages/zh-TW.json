@@ -49,7 +49,38 @@
       "offline": "離線",
       "disabled": "已停用"
     },
-    "empty": "尚無節點。在機器上執行 bamboo up 即可註冊第一個節點。"
+    "empty": "尚無節點。在機器上執行 bamboo up 即可註冊第一個節點。",
+    "drawer": {
+      "close": "關閉",
+      "notFound": "找不到節點。可能已刪除，或網址中的 ID 不正確。",
+      "sections": {
+        "basic": "基本資訊",
+        "wireguard": "WireGuard",
+        "endpoints": "連線端點",
+        "timestamps": "時間",
+        "actions": "操作"
+      },
+      "fields": {
+        "hostname": "主機名稱",
+        "ip": "IP",
+        "os": "作業系統",
+        "clientVersion": "用戶端版本",
+        "tags": "標籤",
+        "publicKey": "公鑰",
+        "createdAt": "建立時間",
+        "lastSeen": "最後上線"
+      },
+      "actions": {
+        "disable": "停用節點",
+        "rename": "重新命名",
+        "delete": "刪除節點",
+        "comingSoon": "即將推出"
+      },
+      "empty": {
+        "endpoints": "尚未回報端點",
+        "tags": "無標籤"
+      }
+    }
   },
   "acl": {
     "title": "存取政策",
