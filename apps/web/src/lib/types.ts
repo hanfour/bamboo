@@ -48,6 +48,23 @@ export type FetchResult<T> =
   | { kind: 'notFound' }
   | { kind: 'error'; message: string };
 
+// ActivityEvent is one row from the tenant-wide audit feed
+// (`/api/v1/activity`). Same shape as PeerEvent but carries
+// resourceType/resourceId because activity spans peer.* / policy.*
+// / etc. The dashboard renders these to disambiguate which
+// resource each event targets.
+export type ActivityEvent = {
+  id: string;
+  actorType: 'user' | 'system' | 'api';
+  actorId?: string;
+  actorEmail?: string;
+  action: string;
+  resourceType?: string;
+  resourceId?: string;
+  diff?: Record<string, unknown>;
+  occurredAt: string;
+};
+
 // PeerEvent is one row from the per-peer audit timeline. `diff` is
 // the raw JSON the controller wrote when the action happened — for
 // peer.update it's `{field: {from, to}}`, for peer.delete it's the

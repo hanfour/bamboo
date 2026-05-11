@@ -63,17 +63,26 @@ func (r *AuditLogs) Insert(ctx context.Context, e *AuditEvent) error {
 	return err
 }
 
-// ListByTenant returns the most recent events for a tenant, newest first.
+// ListByTenant returns the most recent events for a tenant, newest
+// first, joined against users so user-actor events surface an email.
+// Powers the dashboard's tenant-wide activity feed; mirrors the
+// JOIN shape used by ListByResource so callers get the same
+// AuditEvent.ActorEmail contract.
 func (r *AuditLogs) ListByTenant(ctx context.Context, tenantID uuid.UUID, limit int) ([]*AuditEvent, error) {
 	if limit <= 0 || limit > 1000 {
 		limit = 100
 	}
 	rows, err := r.pool.Query(ctx, `
-		SELECT id, tenant_id, actor_id, actor_type, action,
-		       resource_type, resource_id, diff, host(ip_address), user_agent, occurred_at
-		FROM audit_log
-		WHERE tenant_id = $1
-		ORDER BY occurred_at DESC
+		SELECT a.id, a.tenant_id, a.actor_id, a.actor_type, a.action,
+		       a.resource_type, a.resource_id, a.diff,
+		       host(a.ip_address), a.user_agent, a.occurred_at,
+		       COALESCE(u.email, '')
+		FROM audit_log a
+		LEFT JOIN users u
+		       ON u.id = a.actor_id
+		      AND a.actor_type = 'user'
+		WHERE a.tenant_id = $1
+		ORDER BY a.occurred_at DESC
 		LIMIT $2
 	`, tenantID, limit)
 	if err != nil {
@@ -89,6 +98,7 @@ func (r *AuditLogs) ListByTenant(ctx context.Context, tenantID uuid.UUID, limit 
 		if err := rows.Scan(
 			&e.ID, &e.TenantID, &e.ActorID, &e.ActorType, &e.Action,
 			&e.ResourceType, &e.ResourceID, &diff, &ip, &e.UserAgent, &e.OccurredAt,
+			&e.ActorEmail,
 		); err != nil {
 			return nil, err
 		}

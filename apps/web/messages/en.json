@@ -30,7 +30,22 @@
     "offline": "Offline",
     "policyRevision": "Policy revision",
     "recentActivity": "Recent activity",
-    "noActivity": "No activity yet."
+    "noActivity": "No activity yet.",
+    "activity": {
+      "empty": "No activity yet.",
+      "actor": {
+        "user": "User",
+        "system": "System",
+        "api": "API"
+      },
+      "action": {
+        "peer.register": "Registered",
+        "peer.update": "Updated",
+        "peer.delete": "Deleted",
+        "peer.heartbeat": "Heartbeat",
+        "policy.update": "Policy updated"
+      }
+    }
   },
   "peers": {
     "title": "Peers",

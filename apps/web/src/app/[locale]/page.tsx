@@ -1,17 +1,20 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import { useTranslations } from 'next-intl';
-import { fetchOverview } from '@/lib/api';
+import { fetchActivity, fetchOverview } from '@/lib/api';
+import { ActivityFeed } from '@/components/ActivityFeed';
 
 export default async function DashboardPage() {
-  const overview = await fetchOverview();
-  return <Dashboard overview={overview} />;
+  const [overview, activity] = await Promise.all([fetchOverview(), fetchActivity(20)]);
+  return <Dashboard overview={overview} activity={activity} />;
 }
 
 function Dashboard({
   overview,
+  activity,
 }: {
   overview: Awaited<ReturnType<typeof fetchOverview>>;
+  activity: Awaited<ReturnType<typeof fetchActivity>>;
 }) {
   const t = useTranslations('dashboard');
 
@@ -38,9 +41,7 @@ function Dashboard({
         <h2 className="text-sm font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
           {t('recentActivity')}
         </h2>
-        <p className="text-sm text-zinc-500 dark:text-zinc-400">
-          {t('noActivity')}
-        </p>
+        <ActivityFeed events={activity} />
       </section>
     </div>
   );
