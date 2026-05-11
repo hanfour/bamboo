@@ -506,9 +506,7 @@ function Timeline({ events }: { events: PeerEvent[] }) {
             </span>
           </div>
           <div className="mt-0.5 text-xs text-zinc-500 dark:text-zinc-400">
-            {e.actorType === 'user' && e.actorEmail
-              ? e.actorEmail
-              : t(`timeline.actor.${e.actorType}`)}
+            {actorLabel(t, e)}
           </div>
           {e.diff && <DiffRender action={e.action} diff={e.diff} />}
         </li>
@@ -517,13 +515,41 @@ function Timeline({ events }: { events: PeerEvent[] }) {
   );
 }
 
+// Whitelists of audit action / actor type strings that have a
+// matching messages-JSON entry. next-intl 3.x throws on missing
+// keys by default (no onError handler is configured in this app),
+// so calling t() with an unknown suffix would crash the Timeline
+// for that event. Keeping these in sync with messages/{en,zh-TW}.json
+// is intentional — when the controller ships a new audit kind, the
+// Web UI falls back to the raw event name until the locale catches
+// up.
+const KNOWN_TIMELINE_ACTIONS = new Set([
+  'peer.register',
+  'peer.update',
+  'peer.delete',
+  'peer.heartbeat',
+]);
+
+const KNOWN_ACTOR_TYPES = new Set<PeerEvent['actorType']>(['user', 'system', 'api']);
+
 function actionLabel(t: ReturnType<typeof useTranslations>, action: string): string {
-  // Known actions get a localized label; unknown actions fall back
-  // to the raw event name so we don't lose information when the
-  // controller adds a new audit kind ahead of the Web UI catching up.
-  const key = `timeline.action.${action}`;
-  const localized = t(key);
-  return localized === key ? action : localized;
+  if (KNOWN_TIMELINE_ACTIONS.has(action)) {
+    // The runtime cast is safe because we just checked the key is
+    // present in messages JSON; next-intl's typed-key generic would
+    // require a wider refactor of the messages typegen.
+    return t(`timeline.action.${action}` as never);
+  }
+  return action;
+}
+
+function actorLabel(t: ReturnType<typeof useTranslations>, e: PeerEvent): string {
+  if (e.actorType === 'user' && e.actorEmail) {
+    return e.actorEmail;
+  }
+  if (KNOWN_ACTOR_TYPES.has(e.actorType)) {
+    return t(`timeline.actor.${e.actorType}` as never);
+  }
+  return e.actorType;
 }
 
 function DiffRender({ action, diff }: { action: string; diff: Record<string, unknown> }) {
