@@ -18,8 +18,19 @@ export type Peer = {
   status: PeerStatus;
   wireguardPublicKey?: string;
   endpoints: string[];
+  // wgEndpoint is the host:port the hub currently sees this peer
+  // dial from (written by the wg-state reporter). Absent until the
+  // reporter observes a non-"(none)" endpoint. Distinct from
+  // `endpoints`, which is what the peer itself advertises.
+  wgEndpoint?: string;
+  rxBytes: number;
+  txBytes: number;
   createdAt: string; // ISO timestamp
   lastSeenAt?: string; // ISO timestamp
+  // lastHandshakeAt is strictly the WG handshake timestamp from
+  // the reporter; absent = the peer has never handshook (UI shows
+  // "尚未握手").
+  lastHandshakeAt?: string;
 };
 
 export type AclRule = {

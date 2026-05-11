@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/hanfour/bamboo/apps/controller/internal/db/repo"
 )
 
 // TestRESTRegister_HappyPath drives /api/v1/peers/register through the
@@ -350,6 +352,68 @@ func TestRESTGetPeer_HappyPath(t *testing.T) {
 	}
 	if p.CreatedAt == "" {
 		t.Error("createdAt is empty")
+	}
+}
+
+// TestRESTGetPeer_ReflectsWGSyncState writes a wgsync snapshot
+// directly through the repo (skipping the host wg dump) then
+// asserts the GET endpoint surfaces wg_endpoint / rx_bytes /
+// tx_bytes / last_handshake_at on the wire. The reporter itself
+// only runs against a real WireGuard interface, so an e2e of the
+// full host→file→reporter→DB pipeline isn't possible here.
+func TestRESTGetPeer_ReflectsWGSyncState(t *testing.T) {
+	f := startFixture(t)
+
+	pub := randomPubKey(t)
+	reg := postJSON(t, f.httpURL+"/api/v1/peers/register", map[string]any{
+		"hostname":           "rest-wgsync",
+		"wireguardPublicKey": pub,
+		"tenantSlug":         f.tenantSlug,
+	})
+	if reg.status != http.StatusOK {
+		t.Fatalf("register status=%d body=%s", reg.status, reg.body)
+	}
+	var regOut struct {
+		Self struct {
+			ID string `json:"id"`
+		} `json:"self"`
+	}
+	_ = json.Unmarshal(reg.body, &regOut)
+
+	peers := repo.NewPeers(f.pool)
+	handshake := time.Now().UTC().Truncate(time.Second)
+	if _, err := peers.SyncWGState(context.Background(), repo.WGSyncState{
+		PubKey:        pub,
+		Status:        "online",
+		LastHandshake: handshake,
+		Endpoint:      "198.51.100.42:51820",
+		RxBytes:       4096,
+		TxBytes:       8192,
+	}); err != nil {
+		t.Fatalf("SyncWGState: %v", err)
+	}
+
+	got := getJSON(t, f.httpURL+"/api/v1/peers/"+regOut.Self.ID, f.tenantSlug)
+	if got.status != http.StatusOK {
+		t.Fatalf("get status=%d body=%s", got.status, got.body)
+	}
+	var p struct {
+		WGEndpoint      *string `json:"wgEndpoint"`
+		RxBytes         int64   `json:"rxBytes"`
+		TxBytes         int64   `json:"txBytes"`
+		LastHandshakeAt *string `json:"lastHandshakeAt"`
+	}
+	if err := json.Unmarshal(got.body, &p); err != nil {
+		t.Fatalf("decode: %v; body=%s", err, got.body)
+	}
+	if p.WGEndpoint == nil || *p.WGEndpoint != "198.51.100.42:51820" {
+		t.Errorf("wgEndpoint = %v, want 198.51.100.42:51820", p.WGEndpoint)
+	}
+	if p.RxBytes != 4096 || p.TxBytes != 8192 {
+		t.Errorf("bytes rx=%d tx=%d, want rx=4096 tx=8192", p.RxBytes, p.TxBytes)
+	}
+	if p.LastHandshakeAt == nil || *p.LastHandshakeAt == "" {
+		t.Errorf("lastHandshakeAt missing")
 	}
 }
 

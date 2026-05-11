@@ -205,8 +205,12 @@ type apiPeerJSON struct {
 	Status             string     `json:"status"`
 	WireGuardPublicKey string     `json:"wireguardPublicKey,omitempty"`
 	Endpoints          []string   `json:"endpoints"`
+	WGEndpoint         *string    `json:"wgEndpoint,omitempty"`
+	RxBytes            int64      `json:"rxBytes"`
+	TxBytes            int64      `json:"txBytes"`
 	CreatedAt          time.Time  `json:"createdAt"`
 	LastSeenAt         *time.Time `json:"lastSeenAt,omitempty"`
+	LastHandshakeAt    *time.Time `json:"lastHandshakeAt,omitempty"`
 }
 
 func peerToJSON(p *repo.Peer) apiPeerJSON {
@@ -225,8 +229,12 @@ func peerToJSON(p *repo.Peer) apiPeerJSON {
 		Status:             p.Status,
 		WireGuardPublicKey: p.WireGuardPublicKey,
 		Endpoints:          endpoints,
+		WGEndpoint:         p.WGEndpoint,
+		RxBytes:            p.RxBytes,
+		TxBytes:            p.TxBytes,
 		CreatedAt:          p.CreatedAt,
 		LastSeenAt:         p.LastSeenAt,
+		LastHandshakeAt:    p.LastHandshakeAt,
 	}
 }
 

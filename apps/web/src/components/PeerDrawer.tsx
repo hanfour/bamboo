@@ -144,6 +144,23 @@ function DrawerBody({ peer }: { peer: Peer }) {
         />
       </Section>
 
+      <Section title={t('sections.connection')}>
+        {peer.lastHandshakeAt ? (
+          <>
+            <Field
+              label={t('fields.wgEndpoint')}
+              value={peer.wgEndpoint ?? '—'}
+              mono={Boolean(peer.wgEndpoint)}
+            />
+            <Field label={t('fields.rxBytes')} value={formatBytes(peer.rxBytes)} />
+            <Field label={t('fields.txBytes')} value={formatBytes(peer.txBytes)} />
+            <Field label={t('fields.lastHandshake')} value={formatTimestamp(peer.lastHandshakeAt)} />
+          </>
+        ) : (
+          <p className="text-sm text-zinc-500 dark:text-zinc-400">{t('empty.noHandshake')}</p>
+        )}
+      </Section>
+
       <Section title={t('sections.endpoints')}>
         {peer.endpoints.length === 0 ? (
           <p className="text-sm text-zinc-500 dark:text-zinc-400">{t('empty.endpoints')}</p>
@@ -254,4 +271,22 @@ function formatTimestamp(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return '—';
   return d.toISOString().replace('T', ' ').replace(/\..+$/, ' UTC');
+}
+
+// formatBytes turns raw byte counts into a binary-prefixed string
+// (KiB / MiB / GiB). We use binary because wg's counters are exact
+// integers; rendering them with SI prefixes would imply rounding.
+function formatBytes(n: number): string {
+  if (!Number.isFinite(n) || n < 0) return '—';
+  if (n < 1024) return `${n} B`;
+  const units = ['KiB', 'MiB', 'GiB', 'TiB'];
+  let value = n / 1024;
+  let unit = units[0];
+  for (let i = 1; i < units.length && value >= 1024; i += 1) {
+    value /= 1024;
+    unit = units[i];
+  }
+  // 1 decimal place is enough to distinguish 1.2 from 1.3 MiB without
+  // implying spurious precision.
+  return `${value.toFixed(1)} ${unit}`;
 }

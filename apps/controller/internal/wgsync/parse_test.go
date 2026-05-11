@@ -29,9 +29,46 @@ func TestParseDump_RealVPSOutput(t *testing.T) {
 	if got := peers[0].LatestHandshake.Unix(); got != 1746876000 {
 		t.Errorf("peers[0].LatestHandshake.Unix() = %d, want 1746876000", got)
 	}
+	if peers[0].Endpoint != "1.2.3.4:64903" {
+		t.Errorf("peers[0].Endpoint = %q, want 1.2.3.4:64903", peers[0].Endpoint)
+	}
+	if peers[0].RxBytes != 1196112 || peers[0].TxBytes != 52340224 {
+		t.Errorf("peers[0] bytes = rx=%d tx=%d, want rx=1196112 tx=52340224",
+			peers[0].RxBytes, peers[0].TxBytes)
+	}
 	// Last peer never handshook (sec=0); handshake time must be zero.
 	if !peers[2].LatestHandshake.IsZero() {
 		t.Errorf("peers[2].LatestHandshake = %v, want zero", peers[2].LatestHandshake)
+	}
+}
+
+// TestParseDump_EndpointNoneMapsToEmpty asserts that a peer whose
+// wg dump shows "(none)" for the endpoint surfaces as an empty
+// string in PeerState — the repo turns that into a COALESCE'd
+// no-op so a stale dump cannot erase a previously-observed endpoint.
+func TestParseDump_EndpointNoneMapsToEmpty(t *testing.T) {
+	body := "PRIV\tPUB\t51820\toff\n" +
+		"keyZ=\t(none)\t(none)\t100.64.0.9/32\t0\t0\t0\t25\n"
+	peers, err := ParseDump(strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("ParseDump: %v", err)
+	}
+	if len(peers) != 1 {
+		t.Fatalf("len(peers) = %d, want 1", len(peers))
+	}
+	if peers[0].Endpoint != "" {
+		t.Errorf("peers[0].Endpoint = %q, want empty (mapped from (none))", peers[0].Endpoint)
+	}
+}
+
+// TestParseDump_MalformedBytes covers a non-numeric rx_bytes column.
+// tx_bytes goes through the same parse path so one assertion is enough.
+func TestParseDump_MalformedBytes(t *testing.T) {
+	body := "PRIV\tPUB\t51820\toff\n" +
+		"keyA=\t(none)\t1.2.3.4:1\t100.64.0.2/32\t1746876000\tnotanumber\t100\t25\n"
+	_, err := ParseDump(strings.NewReader(body))
+	if err == nil {
+		t.Fatal("ParseDump: want error for non-numeric rx_bytes, got nil")
 	}
 }
 
