@@ -57,13 +57,7 @@ function ResourcePill({ type, id }: { type: string; id?: string }) {
 // messages JSON entries. Mirrors the pattern in PeerDrawer.tsx:
 // next-intl 3.x throws on missing keys, so we must avoid calling
 // t() with an unknown suffix or the whole feed crashes.
-const KNOWN_ACTIONS = new Set([
-  'peer.register',
-  'peer.update',
-  'peer.delete',
-  'peer.heartbeat',
-  'policy.update',
-]);
+const KNOWN_ACTIONS = new Set(['peer.register', 'peer.update', 'peer.delete', 'policy.update']);
 const KNOWN_ACTORS = new Set<ActivityEvent['actorType']>(['user', 'system', 'api']);
 
 function actionLabel(t: ReturnType<typeof useTranslations>, action: string): string {

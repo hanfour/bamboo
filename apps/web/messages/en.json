@@ -30,7 +30,6 @@
     "offline": "Offline",
     "policyRevision": "Policy revision",
     "recentActivity": "Recent activity",
-    "noActivity": "No activity yet.",
     "activity": {
       "empty": "No activity yet.",
       "actor": {
@@ -42,7 +41,6 @@
         "peer.register": "Registered",
         "peer.update": "Updated",
         "peer.delete": "Deleted",
-        "peer.heartbeat": "Heartbeat",
         "policy.update": "Policy updated"
       }
     }
@@ -125,8 +123,7 @@
         "action": {
           "peer.register": "Registered",
           "peer.update": "Updated",
-          "peer.delete": "Deleted",
-          "peer.heartbeat": "Heartbeat"
+          "peer.delete": "Deleted"
         }
       }
     }
