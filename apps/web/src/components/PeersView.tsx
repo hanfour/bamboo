@@ -4,13 +4,13 @@
 
 import { useCallback } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import type { Peer, PeerEvent } from '@/lib/types';
+import type { FetchResult, Peer, PeerEvent } from '@/lib/types';
 import { PeerTable } from './PeerTable';
 import { PeerDrawer } from './PeerDrawer';
 
 type Props = {
   peers: Peer[];
-  selectedPeer: Peer | null;
+  selectedPeer: FetchResult<Peer> | null;
   selectedEvents: PeerEvent[];
   selectedId?: string;
 };
@@ -44,7 +44,7 @@ export function PeersView({ peers, selectedPeer, selectedEvents, selectedId }: P
     <>
       <PeerTable peers={peers} selectedId={selectedId} onSelect={(id) => setSelected(id)} />
       <PeerDrawer
-        peer={selectedPeer}
+        peerResult={selectedPeer}
         events={selectedEvents}
         open={open}
         onClose={() => setSelected(null)}

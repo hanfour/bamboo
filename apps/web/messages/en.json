@@ -53,6 +53,7 @@
     "drawer": {
       "close": "Close",
       "notFound": "Peer not found. It may have been deleted, or the URL contains a stale id.",
+      "fetchError": "Failed to load peer details. Try refreshing the page in a moment.",
       "sections": {
         "basic": "Basic info",
         "wireguard": "WireGuard",

@@ -17,7 +17,7 @@
 
 import { cookies } from 'next/headers';
 
-import type { AclPolicy, AclRule, Peer, PeerEvent } from './types';
+import type { AclPolicy, AclRule, FetchResult, Peer, PeerEvent } from './types';
 
 const BASE = process.env.BAMBOO_API_URL ?? 'http://localhost:8081';
 const TENANT = process.env.BAMBOO_TENANT ?? 'default';
@@ -161,21 +161,29 @@ export async function fetchPeers(): Promise<Peer[]> {
   return body.peers.map(apiPeerToPeer);
 }
 
-// fetchPeer returns a single peer or null. The controller responds 404
-// for missing ids, ids that don't parse as uuid, and peers in a
-// different tenant — all three collapse to null so the drawer renders
-// the same "not found" state in every case.
-export async function fetchPeer(id: string): Promise<Peer | null> {
+// fetchPeer returns a FetchResult so the drawer can distinguish
+// "controller said 404" (peer doesn't exist or is in another
+// tenant — both collapse to notFound by the probe-protection
+// contract) from "couldn't reach the controller" (network /
+// 5xx / malformed JSON). The latter renders an error state so
+// the user knows a refresh might help, not a "peer was deleted"
+// message that lies about the cause.
+export async function fetchPeer(id: string): Promise<FetchResult<Peer>> {
   try {
     const res = await fetch(`${BASE}/api/v1/peers/${encodeURIComponent(id)}`, {
       headers: await buildHeaders(),
       cache: 'no-store',
     });
-    if (!res.ok) return null;
+    if (res.status === 404) {
+      return { kind: 'notFound' };
+    }
+    if (!res.ok) {
+      return { kind: 'error', message: `controller responded ${res.status}` };
+    }
     const p = (await res.json()) as ApiPeer;
-    return apiPeerToPeer(p);
-  } catch {
-    return null;
+    return { kind: 'ok', value: apiPeerToPeer(p) };
+  } catch (e) {
+    return { kind: 'error', message: (e as Error).message };
   }
 }
 
