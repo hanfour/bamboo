@@ -291,11 +291,144 @@ func TestRESTWatch_StreamsRegisteredPeer(t *testing.T) {
 	}
 }
 
+// TestRESTGetPeer_HappyPath registers a peer then fetches it via
+// GET /api/v1/peers/{id} and asserts the JSON shape includes the
+// drawer-relevant fields (pubkey / endpoints / createdAt).
+func TestRESTGetPeer_HappyPath(t *testing.T) {
+	f := startFixture(t)
+
+	pub := randomPubKey(t)
+	reg := postJSON(t, f.httpURL+"/api/v1/peers/register", map[string]any{
+		"hostname":           "rest-get-peer",
+		"wireguardPublicKey": pub,
+		"os":                 "darwin",
+		"clientVersion":      "0.0.2",
+		"tenantSlug":         f.tenantSlug,
+		"endpoints":          []string{"203.0.113.7:51820"},
+	})
+	if reg.status != http.StatusOK {
+		t.Fatalf("register status=%d body=%s", reg.status, reg.body)
+	}
+	var regOut struct {
+		Self struct {
+			ID string `json:"id"`
+		} `json:"self"`
+	}
+	_ = json.Unmarshal(reg.body, &regOut)
+	if regOut.Self.ID == "" {
+		t.Fatal("register did not return self.id")
+	}
+
+	got := getJSON(t, f.httpURL+"/api/v1/peers/"+regOut.Self.ID, f.tenantSlug)
+	if got.status != http.StatusOK {
+		t.Fatalf("get status=%d body=%s", got.status, got.body)
+	}
+
+	var p struct {
+		ID                 string   `json:"id"`
+		Hostname           string   `json:"hostname"`
+		IP                 string   `json:"ip"`
+		WireGuardPublicKey string   `json:"wireguardPublicKey"`
+		Endpoints          []string `json:"endpoints"`
+		CreatedAt          string   `json:"createdAt"`
+		Status             string   `json:"status"`
+	}
+	if err := json.Unmarshal(got.body, &p); err != nil {
+		t.Fatalf("decode: %v; body=%s", err, got.body)
+	}
+	if p.ID != regOut.Self.ID {
+		t.Errorf("id = %q, want %q", p.ID, regOut.Self.ID)
+	}
+	if p.Hostname != "rest-get-peer" {
+		t.Errorf("hostname = %q, want rest-get-peer", p.Hostname)
+	}
+	if p.WireGuardPublicKey != pub {
+		t.Errorf("wireguardPublicKey = %q, want %q", p.WireGuardPublicKey, pub)
+	}
+	if len(p.Endpoints) != 1 || p.Endpoints[0] != "203.0.113.7:51820" {
+		t.Errorf("endpoints = %v, want [203.0.113.7:51820]", p.Endpoints)
+	}
+	if p.CreatedAt == "" {
+		t.Error("createdAt is empty")
+	}
+}
+
+// TestRESTGetPeer_NotFound returns 404 for a syntactically valid
+// uuid that does not exist.
+func TestRESTGetPeer_NotFound(t *testing.T) {
+	f := startFixture(t)
+	got := getJSON(t, f.httpURL+"/api/v1/peers/00000000-0000-0000-0000-000000000000", f.tenantSlug)
+	if got.status != http.StatusNotFound {
+		t.Errorf("status = %d, want 404; body=%s", got.status, got.body)
+	}
+}
+
+// TestRESTGetPeer_BadUUID returns 404 for a non-uuid id segment.
+// Returning 404 (not 400) keeps the response indistinguishable from
+// "exists but wrong tenant", which is the property the cross-tenant
+// test below depends on.
+func TestRESTGetPeer_BadUUID(t *testing.T) {
+	f := startFixture(t)
+	got := getJSON(t, f.httpURL+"/api/v1/peers/not-a-uuid", f.tenantSlug)
+	if got.status != http.StatusNotFound {
+		t.Errorf("status = %d, want 404; body=%s", got.status, got.body)
+	}
+}
+
+// TestRESTGetPeer_CrossTenantIsolation registers a peer in tenant A
+// then fetches the same id with X-Tenant-Slug: B and expects 404.
+// Returning the real peer would let an attacker probe peer existence
+// across tenants — the same trade-off applies to non-existent ids.
+func TestRESTGetPeer_CrossTenantIsolation(t *testing.T) {
+	f := startFixture(t)
+
+	reg := postJSON(t, f.httpURL+"/api/v1/peers/register", map[string]any{
+		"hostname":           "tenant-a-peer",
+		"wireguardPublicKey": randomPubKey(t),
+		"tenantSlug":         f.tenantSlug,
+	})
+	if reg.status != http.StatusOK {
+		t.Fatalf("register status=%d body=%s", reg.status, reg.body)
+	}
+	var regOut struct {
+		Self struct {
+			ID string `json:"id"`
+		} `json:"self"`
+	}
+	_ = json.Unmarshal(reg.body, &regOut)
+
+	otherSlug := "e2e-other-" + regOut.Self.ID[:8]
+	t.Cleanup(func() { cleanupTenant(f.pool, otherSlug) })
+
+	got := getJSON(t, f.httpURL+"/api/v1/peers/"+regOut.Self.ID, otherSlug)
+	if got.status != http.StatusNotFound {
+		t.Errorf("cross-tenant fetch should 404; got status=%d body=%s", got.status, got.body)
+	}
+}
+
 // jsonResponse bundles an HTTP response status + body for the small
 // post-and-decode tests above.
 type jsonResponse struct {
 	status int
 	body   []byte
+}
+
+// getJSON GETs a URL with the X-Tenant-Slug header set, matching the
+// REST API's dev-fallback tenant resolution.
+func getJSON(t *testing.T, url, tenantSlug string) jsonResponse {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		t.Fatalf("build GET %s: %v", url, err)
+	}
+	req.Header.Set("X-Tenant-Slug", tenantSlug)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET %s: %v", url, err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	return jsonResponse{status: resp.StatusCode, body: body}
 }
 
 func postJSON(t *testing.T, url string, payload any) jsonResponse {

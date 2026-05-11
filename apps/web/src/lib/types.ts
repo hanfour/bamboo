@@ -16,6 +16,9 @@ export type Peer = {
   os: string;
   clientVersion: string;
   status: PeerStatus;
+  wireguardPublicKey?: string;
+  endpoints: string[];
+  createdAt: string; // ISO timestamp
   lastSeenAt?: string; // ISO timestamp
 };
 

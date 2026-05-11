@@ -84,6 +84,14 @@ func (h *HTTPServer) routeAPI(w http.ResponseWriter, r *http.Request) {
 	case "/api/v1/recommendations":
 		h.apiRecommendations(w, r, tenant)
 	default:
+		// /api/v1/peers/{id} for single-peer fetch. The mutation
+		// and stream sub-paths (register / heartbeat / watch) are
+		// already short-circuited above, so any remaining
+		// /api/v1/peers/* segment is the {id} form.
+		if rest, ok := strings.CutPrefix(r.URL.Path, "/api/v1/peers/"); ok && rest != "" && !strings.Contains(rest, "/") {
+			h.apiPeer(w, r, tenant, rest)
+			return
+		}
 		http.NotFound(w, r)
 	}
 }
@@ -187,15 +195,39 @@ func (h *HTTPServer) apiMe(w http.ResponseWriter, r *http.Request, authn *authnC
 
 // apiPeerJSON is the wire shape for the peers endpoint.
 type apiPeerJSON struct {
-	ID            string     `json:"id"`
-	TenantID      string     `json:"tenantId"`
-	Hostname      string     `json:"hostname"`
-	IP            string     `json:"ip"`
-	Tags          []string   `json:"tags"`
-	OS            string     `json:"os"`
-	ClientVersion string     `json:"clientVersion"`
-	Status        string     `json:"status"`
-	LastSeenAt    *time.Time `json:"lastSeenAt,omitempty"`
+	ID                 string     `json:"id"`
+	TenantID           string     `json:"tenantId"`
+	Hostname           string     `json:"hostname"`
+	IP                 string     `json:"ip"`
+	Tags               []string   `json:"tags"`
+	OS                 string     `json:"os"`
+	ClientVersion      string     `json:"clientVersion"`
+	Status             string     `json:"status"`
+	WireGuardPublicKey string     `json:"wireguardPublicKey,omitempty"`
+	Endpoints          []string   `json:"endpoints"`
+	CreatedAt          time.Time  `json:"createdAt"`
+	LastSeenAt         *time.Time `json:"lastSeenAt,omitempty"`
+}
+
+func peerToJSON(p *repo.Peer) apiPeerJSON {
+	endpoints := p.Endpoints
+	if endpoints == nil {
+		endpoints = []string{}
+	}
+	return apiPeerJSON{
+		ID:                 p.ID.String(),
+		TenantID:           p.TenantID.String(),
+		Hostname:           p.Hostname,
+		IP:                 p.IP,
+		Tags:               []string{}, // populated once peer_tags wiring lands
+		OS:                 p.OS,
+		ClientVersion:      p.ClientVersion,
+		Status:             p.Status,
+		WireGuardPublicKey: p.WireGuardPublicKey,
+		Endpoints:          endpoints,
+		CreatedAt:          p.CreatedAt,
+		LastSeenAt:         p.LastSeenAt,
+	}
 }
 
 func (h *HTTPServer) apiPeers(w http.ResponseWriter, r *http.Request, tenant *repo.Tenant) {
@@ -206,19 +238,34 @@ func (h *HTTPServer) apiPeers(w http.ResponseWriter, r *http.Request, tenant *re
 	}
 	out := make([]apiPeerJSON, 0, len(peers))
 	for _, p := range peers {
-		out = append(out, apiPeerJSON{
-			ID:            p.ID.String(),
-			TenantID:      p.TenantID.String(),
-			Hostname:      p.Hostname,
-			IP:            p.IP,
-			Tags:          []string{}, // populated once peer_tags wiring lands
-			OS:            p.OS,
-			ClientVersion: p.ClientVersion,
-			Status:        p.Status,
-			LastSeenAt:    p.LastSeenAt,
-		})
+		out = append(out, peerToJSON(p))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"peers": out})
+}
+
+// apiPeer returns a single peer by id, scoped to the request tenant.
+// A peer whose tenant does not match is reported as 404 so callers
+// cannot probe peer existence across tenants.
+func (h *HTTPServer) apiPeer(w http.ResponseWriter, r *http.Request, tenant *repo.Tenant, idStr string) {
+	id, err := uuid.Parse(idStr)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	p, err := h.peers.GetByID(r.Context(), id)
+	if errors.Is(err, repo.ErrNotFound) {
+		http.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if p.TenantID != tenant.ID {
+		http.NotFound(w, r)
+		return
+	}
+	writeJSON(w, http.StatusOK, peerToJSON(p))
 }
 
 type apiACLRuleJSON struct {
