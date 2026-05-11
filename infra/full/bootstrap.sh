@@ -56,14 +56,23 @@ fi
 # table so the UI's online / last-seen columns reflect real state.
 # Idempotent: install/upgrade the units, then enable+restart the
 # timer (which re-fires the oneshot service immediately).
-echo "==> installing wg-state-reporter systemd timer"
-sudo install -d -m 0755 -o root -g root /var/lib/bamboo
-sudo install -m 0755 wg-state-reporter.sh    /usr/local/sbin/wg-state-reporter.sh
-sudo install -m 0644 wg-state-reporter.service /etc/systemd/system/wg-state-reporter.service
-sudo install -m 0644 wg-state-reporter.timer   /etc/systemd/system/wg-state-reporter.timer
-sudo systemctl daemon-reload
-sudo systemctl enable --now wg-state-reporter.timer
-sudo systemctl restart wg-state-reporter.service
+#
+# Skipped on non-systemd hosts (e.g. container test environments)
+# so the bootstrap remains usable for local smoke tests; the
+# controller's reporter just sees a missing state file and warns
+# once per tick.
+if command -v systemctl >/dev/null 2>&1; then
+    echo "==> installing wg-state-reporter systemd timer"
+    sudo install -d -m 0755 -o root -g root /var/lib/bamboo
+    sudo install -m 0755 wg-state-reporter.sh    /usr/local/sbin/wg-state-reporter.sh
+    sudo install -m 0644 wg-state-reporter.service /etc/systemd/system/wg-state-reporter.service
+    sudo install -m 0644 wg-state-reporter.timer   /etc/systemd/system/wg-state-reporter.timer
+    sudo systemctl daemon-reload
+    sudo systemctl enable --now wg-state-reporter.timer
+    sudo systemctl restart wg-state-reporter.service
+else
+    echo "==> systemctl not found; skipping wg-state-reporter install"
+fi
 
 # 2) Run migrations via the controller container itself. We need the
 # embedded migration files which live in the image; running migrate

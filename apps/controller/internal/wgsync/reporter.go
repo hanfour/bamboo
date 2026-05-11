@@ -22,8 +22,12 @@ const (
 // PeerStore is the repo subset the reporter calls. Defined as an
 // interface so reporter_test.go can drive it without a database;
 // *repo.Peers satisfies it in production.
+//
+// SetStatusByPubKey returns the number of rows updated; the reporter
+// uses 0 to detect "pubkey in wg dump but not in DB" — typically a
+// peer manually `wg set`d on the host that never registered via REST.
 type PeerStore interface {
-	SetStatusByPubKey(ctx context.Context, pubKey, status string, lastSeen time.Time) error
+	SetStatusByPubKey(ctx context.Context, pubKey, status string, lastSeen time.Time) (int64, error)
 	MarkOfflineExcept(ctx context.Context, pubkeys []string) error
 }
 
@@ -133,14 +137,25 @@ func (r *Reporter) applyStates(ctx context.Context, states []PeerState) error {
 		if !s.LatestHandshake.IsZero() && now.Sub(s.LatestHandshake) < r.onlineWindow {
 			status = statusOnline
 		}
-		if err := r.peers.SetStatusByPubKey(ctx, s.PublicKey, status, s.LatestHandshake); err != nil {
+		n, err := r.peers.SetStatusByPubKey(ctx, s.PublicKey, status, s.LatestHandshake)
+		if err != nil {
 			return fmt.Errorf("set status pubkey=%s: %w", s.PublicKey, err)
+		}
+		if n == 0 {
+			// Pubkey is in the wg dump but no DB row matches.
+			// Usually means a peer was added directly with
+			// `wg set ... peer ...` on the host without going
+			// through the REST register flow. Harmless; log so
+			// operators can spot drift.
+			slog.Debug("wgsync: pubkey in wg dump has no peers row", "pubkey", s.PublicKey)
 		}
 	}
 	// Peers in the DB whose pubkey is no longer in the wg dump are
 	// zombies (e.g. removed via `wg set ... peer ... remove`). Mark
 	// them offline rather than deleting the row, per the design
-	// decision to keep history.
+	// decision to keep history. The repo treats an empty pubkeys
+	// list as "skip the sweep" so a transient empty dump doesn't
+	// flip every peer offline at once.
 	if err := r.peers.MarkOfflineExcept(ctx, pubkeys); err != nil {
 		return fmt.Errorf("mark zombies offline: %w", err)
 	}

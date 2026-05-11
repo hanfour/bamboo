@@ -175,41 +175,56 @@ func (r *Peers) UpdateEndpoints(ctx context.Context, id uuid.UUID, endpoints []s
 }
 
 // SetStatusByPubKey writes status (and bumps last_seen_at when the
-// proposed value is newer) for a peer keyed by WireGuard public
-// key. Used by the wg-state reporter to mirror cryptokey-routing
-// state into the DB without clobbering a fresher last_seen_at
-// already written by client Heartbeat. lastSeen.IsZero() is
-// passed through as NULL so GREATEST keeps the existing value.
+// proposed value is newer) for the peer with the given WireGuard
+// public key. Used by the wg-state reporter to mirror cryptokey-
+// routing state into the DB without clobbering a fresher
+// last_seen_at already written by client Heartbeat.
+// lastSeen.IsZero() is passed as NULL so GREATEST keeps the
+// existing value.
 //
-// No-op when no peer matches the pubkey.
-func (r *Peers) SetStatusByPubKey(ctx context.Context, pubKey, status string, lastSeen time.Time) error {
+// pubkey is treated as globally unique here, which is enforced by
+// the peers_pubkey_global_unique index (migration 00004): WG
+// cryptokey routing operates on pubkey alone, so two tenants
+// sharing a pubkey is operationally meaningless.
+//
+// Returns the number of rows updated. The reporter uses 0 as a
+// signal that a pubkey is in the wg dump but not in the DB
+// (e.g. a manually-added peer that never registered via REST).
+func (r *Peers) SetStatusByPubKey(ctx context.Context, pubKey, status string, lastSeen time.Time) (int64, error) {
 	var ts any
 	if !lastSeen.IsZero() {
 		ts = lastSeen.UTC()
 	}
-	_, err := r.pool.Exec(ctx, `
+	tag, err := r.pool.Exec(ctx, `
 		UPDATE peers
 		   SET status       = $1,
 		       last_seen_at = GREATEST(last_seen_at, $2::timestamptz),
 		       updated_at   = now()
 		 WHERE wireguard_public_key = $3
 	`, status, ts, pubKey)
-	return err
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
 }
 
 // MarkOfflineExcept sets status='offline' on every peer whose
 // pubkey is NOT in keepPubKeys. last_seen_at is preserved so the
 // UI can still show "last seen N hours ago" for retired peers.
-// Empty keepPubKeys marks every peer offline.
+//
+// An empty keepPubKeys is treated as "skip the sweep this round"
+// rather than "mark every peer offline". The wg-state reporter can
+// briefly observe an empty dump (interface flap, host-script
+// transient error, controller starting before WG is configured)
+// and we don't want one empty observation to flip every peer
+// offline simultaneously. The next non-empty tick catches up.
+//
+// Callers that genuinely want to mark all peers offline should
+// use a separate API; none exists today because there's no
+// production need.
 func (r *Peers) MarkOfflineExcept(ctx context.Context, keepPubKeys []string) error {
 	if len(keepPubKeys) == 0 {
-		_, err := r.pool.Exec(ctx, `
-			UPDATE peers
-			   SET status     = 'offline',
-			       updated_at = now()
-			 WHERE status <> 'offline'
-		`)
-		return err
+		return nil
 	}
 	_, err := r.pool.Exec(ctx, `
 		UPDATE peers

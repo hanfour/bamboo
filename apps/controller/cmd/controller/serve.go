@@ -81,8 +81,8 @@ func runServe(_ *cobra.Command, _ []string) error {
 	// rather than a once-set 'online' that never decays. Empty
 	// StatePath disables the reporter for dev deploys.
 	if cfg.WGSync.StatePath != "" {
-		interval, _ := time.ParseDuration(cfg.WGSync.Interval)
-		win, _ := time.ParseDuration(cfg.WGSync.OnlineWindow)
+		interval := parseDurationWithWarn("BAMBOO_WG_SYNC_INTERVAL", cfg.WGSync.Interval)
+		win := parseDurationWithWarn("BAMBOO_WG_ONLINE_WINDOW", cfg.WGSync.OnlineWindow)
 		reporter := wgsync.New(wgsync.Config{
 			Peers:        repo.NewPeers(pool),
 			StatePath:    cfg.WGSync.StatePath,
@@ -102,6 +102,23 @@ func runServe(_ *cobra.Command, _ []string) error {
 		"http_addr", cfg.Server.HTTPAddr,
 	)
 	return srv.Run(ctx)
+}
+
+// parseDurationWithWarn returns the parsed duration, or zero (so the
+// downstream caller falls back to its own default) when raw is empty
+// or unparseable. Logs a warn for unparseable input so operators
+// don't get a silent fall-through.
+func parseDurationWithWarn(envName, raw string) time.Duration {
+	if raw == "" {
+		return 0
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil {
+		slog.Warn("wgsync: ignoring unparseable duration; using default",
+			"env", envName, "value", raw, "err", err)
+		return 0
+	}
+	return d
 }
 
 func configureLogger(jsonOutput bool) {
