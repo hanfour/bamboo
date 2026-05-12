@@ -105,3 +105,26 @@ func ParseSecret(plaintext string) (uuid.UUID, error) {
 func VerifyHash(plaintext, storedHash string) error {
 	return bcrypt.CompareHashAndPassword([]byte(storedHash), []byte(plaintext))
 }
+
+// ParseInviteToken extracts the embedded invitation id from a
+// presented invite token. Mirrors ParseSecret but checks the
+// InviteSecretPrefix ("bki_") instead of SecretPrefix ("bka_") so a
+// PreAuthKey secret presented as an invite (or vice versa) is
+// rejected as ErrMalformedSecret rather than mis-resolved.
+func ParseInviteToken(plaintext string) (uuid.UUID, error) {
+	rest, ok := strings.CutPrefix(plaintext, InviteSecretPrefix)
+	if !ok {
+		return uuid.Nil, ErrMalformedSecret
+	}
+	encodedID, _, ok := strings.Cut(rest, "_")
+	if !ok {
+		return uuid.Nil, ErrMalformedSecret
+	}
+	idBytes, err := b32.DecodeString(strings.ToUpper(encodedID))
+	if err != nil || len(idBytes) != 16 {
+		return uuid.Nil, ErrMalformedSecret
+	}
+	var id uuid.UUID
+	copy(id[:], idBytes)
+	return id, nil
+}
