@@ -2,7 +2,7 @@
 
 'use client';
 
-import { useEffect, useRef, useState, useTransition } from 'react';
+import { useRef, useState, useTransition } from 'react';
 import { useTranslations } from 'next-intl';
 import {
   deletePeerAction,
@@ -10,14 +10,8 @@ import {
   setPeerStatusAction,
   setPeerTagsAction,
 } from '@/lib/actions';
+import { useDialogA11y } from '@/hooks/useDialogA11y';
 import type { FetchResult, Peer, PeerEvent } from '@/lib/types';
-
-// CSS selector for elements that participate in tab order. Used by
-// the focus-trap useEffect to enumerate stops inside the drawer.
-// Mirrors the common modal-a11y recipe; excludes [tabindex="-1"]
-// which is the conventional "programmatic-focus-only" marker.
-const focusableSelector =
-  'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
 type Props = {
   // peerResult is null when nothing is selected (drawer closed) and
@@ -49,73 +43,11 @@ export function PeerDrawer({ peerResult, events, open, onClose, onDeleted }: Pro
   const tStatus = useTranslations('peers.status');
   const panelRef = useRef<HTMLDivElement>(null);
 
-  // a11y: focus management — capture the focus that was on the page
-  // when we open, move focus into the drawer's first interactive
-  // element (the close button), and restore the original focus on
-  // close. Deferred to a microtask so the slide-in transition has
-  // started and the panel is reachable.
-  useEffect(() => {
-    if (!open) return;
-    const previousFocus = document.activeElement as HTMLElement | null;
-    const id = window.setTimeout(() => {
-      const first = panelRef.current?.querySelector<HTMLElement>(focusableSelector);
-      first?.focus();
-    }, 0);
-    return () => {
-      window.clearTimeout(id);
-      // Restore focus only when the element is still attached. If the
-      // user navigated away or the row got removed (e.g. delete), the
-      // browser picks a sensible fallback rather than us forcing one.
-      if (previousFocus && document.contains(previousFocus)) {
-        previousFocus.focus();
-      }
-    };
-  }, [open]);
-
-  // a11y: body scroll lock. Without this the table behind the drawer
-  // scrolls when the wheel/trackpad fires, which is jarring on
-  // touchpads where horizontal swipe is also vertical scroll. Stash
-  // the previous overflow so we don't clobber a value set by some
-  // other component or stylesheet.
-  useEffect(() => {
-    if (!open) return;
-    const prev = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    return () => {
-      document.body.style.overflow = prev;
-    };
-  }, [open]);
-
-  // ESC closes; Tab / Shift+Tab wraps focus within the drawer (focus
-  // trap). The wrap is implemented by intercepting Tab at the edges
-  // — keeps the implementation small (no extra sentinel divs).
-  useEffect(() => {
-    if (!open) return;
-    function onKey(e: KeyboardEvent) {
-      if (e.key === 'Escape') {
-        onClose();
-        return;
-      }
-      if (e.key !== 'Tab') return;
-      const panel = panelRef.current;
-      if (!panel) return;
-      const focusables = Array.from(
-        panel.querySelectorAll<HTMLElement>(focusableSelector),
-      ).filter((el) => !el.hasAttribute('disabled') && el.tabIndex !== -1);
-      if (focusables.length === 0) return;
-      const first = focusables[0];
-      const last = focusables[focusables.length - 1];
-      if (e.shiftKey && document.activeElement === first) {
-        e.preventDefault();
-        last.focus();
-      } else if (!e.shiftKey && document.activeElement === last) {
-        e.preventDefault();
-        first.focus();
-      }
-    }
-    document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
-  }, [open, onClose]);
+  // Focus management + body scroll lock + ESC + Tab trap. See
+  // hooks/useDialogA11y.ts for the implementation; the drawer
+  // opts into trapTab=true because its role='dialog' aria-modal
+  // contract promises focus stays inside.
+  useDialogA11y({ open, onClose, panelRef, trapTab: true });
 
   return (
     <div
