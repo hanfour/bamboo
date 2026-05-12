@@ -2,12 +2,19 @@
 
 import { useTranslations } from 'next-intl';
 import { PreAuthKeyTable } from '@/components/PreAuthKeyTable';
+import { FetchErrorState } from '@/components/FetchErrorState';
 import { fetchPreAuthKeys } from '@/lib/api';
 import type { PreAuthKey } from '@/lib/types';
 
 export default async function PreAuthKeysPage() {
   const keys = await fetchPreAuthKeys();
-  return <PreAuthKeysView keys={keys} />;
+  // Pre-auth-key management is admin-only: in prod mode a non-admin
+  // user hitting this page should see "you need admin", not an empty
+  // table.
+  if (keys.kind !== 'ok') {
+    return <FetchErrorState kind={keys.kind} />;
+  }
+  return <PreAuthKeysView keys={keys.value} />;
 }
 
 function PreAuthKeysView({ keys }: { keys: PreAuthKey[] }) {

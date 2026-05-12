@@ -33,19 +33,28 @@ export type Peer = {
   lastHandshakeAt?: string;
 };
 
-// FetchResult is a tri-state discriminated union for read paths
-// where "couldn't reach the controller" needs to be distinguished
-// from "controller said 404". The previous `T | null` pattern
-// collapsed both into the same UI state ("not found"), which lies
-// to the user when the real problem is a network outage.
+// FetchResult is a discriminated union for read paths so the UI can
+// distinguish "controller said 404", "you're not signed in", "you
+// don't have permission", and "couldn't reach the controller" from
+// each other. Collapsing every error into a single empty-state lies
+// to the user when the real problem is auth or a network outage.
 //
-// 'notFound' covers: missing id, bad uuid, peer in another tenant
-// (all three intentionally indistinguishable on the wire per the
-// cross-tenant probe-protection contract).
-// 'error' covers: network failure, controller 5xx, malformed JSON.
+// Variants:
+//   'notFound'      — 404: missing id, bad uuid, peer in another
+//                     tenant (all three intentionally indistinguishable
+//                     per the cross-tenant probe-protection contract).
+//   'unauthorized'  — 401: no session cookie / invalid JWT. Render a
+//                     sign-in prompt; do NOT auto-redirect (avoids
+//                     redirect loops + lets the user keep their place).
+//   'forbidden'     — 403: authenticated but missing role (today:
+//                     not is_admin). Render a "needs admin" notice.
+//   'error'         — network failure, controller 5xx, malformed JSON.
+//                     Render a retry hint.
 export type FetchResult<T> =
   | { kind: 'ok'; value: T }
   | { kind: 'notFound' }
+  | { kind: 'unauthorized' }
+  | { kind: 'forbidden' }
   | { kind: 'error'; message: string };
 
 // PreAuthKey is one row from /api/v1/preauth-keys (list shape;

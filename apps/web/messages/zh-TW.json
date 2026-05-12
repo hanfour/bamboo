@@ -206,5 +206,25 @@
     "ago": "{value} 前",
     "never": "從未",
     "loading": "載入中…"
+  },
+  "fetchError": {
+    "unauthorized": {
+      "title": "請先登入",
+      "body": "這個頁面需要已驗證的登入。請使用租戶設定的身份提供者登入。",
+      "signIn": "登入"
+    },
+    "forbidden": {
+      "title": "需要管理員權限",
+      "body": "你的帳號沒有檢視這個頁面的權限。請聯絡租戶管理員授權。"
+    },
+    "unreachable": {
+      "title": "無法連線到 controller",
+      "body": "Controller 沒有回應。請檢查連線後重試。",
+      "retry": "重試"
+    },
+    "notFound": {
+      "title": "找不到資料",
+      "body": "資源已不存在，或網址已失效。"
+    }
   }
 }

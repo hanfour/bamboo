@@ -1,22 +1,38 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import { useTranslations } from 'next-intl';
-import { fetchPolicy, fetchRecommendations } from '@/lib/api';
+import { fetchPolicy, fetchRecommendations, type ApiRecommendation } from '@/lib/api';
+import type { AclPolicy } from '@/lib/types';
+import { FetchErrorState } from '@/components/FetchErrorState';
 
 export default async function AclPage() {
   const [policy, recommendations] = await Promise.all([
     fetchPolicy(),
     fetchRecommendations(),
   ]);
-  return <Acl policy={policy} recommendations={recommendations} />;
+
+  // The ACL page is the policy editor. Policy is load-bearing; if we
+  // can't load it we surface the failure rather than render the empty
+  // placeholder that lies about there being no policy. Recommendations
+  // are advisory — failing to load them just hides the section.
+  if (policy.kind !== 'ok') {
+    return <FetchErrorState kind={policy.kind} />;
+  }
+
+  return (
+    <Acl
+      policy={policy.value}
+      recommendations={recommendations.kind === 'ok' ? recommendations.value : []}
+    />
+  );
 }
 
 function Acl({
   policy,
   recommendations,
 }: {
-  policy: Awaited<ReturnType<typeof fetchPolicy>>;
-  recommendations: Awaited<ReturnType<typeof fetchRecommendations>>;
+  policy: AclPolicy;
+  recommendations: ApiRecommendation[];
 }) {
   const t = useTranslations('acl');
 

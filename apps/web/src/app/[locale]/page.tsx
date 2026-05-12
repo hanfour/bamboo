@@ -1,20 +1,38 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import { useTranslations } from 'next-intl';
-import { fetchActivity, fetchOverview } from '@/lib/api';
+import { fetchActivity, fetchOverview, type ApiOverview } from '@/lib/api';
+import type { ActivityEvent } from '@/lib/types';
 import { ActivityFeed } from '@/components/ActivityFeed';
+import { FetchErrorState } from '@/components/FetchErrorState';
 
 export default async function DashboardPage() {
   const [overview, activity] = await Promise.all([fetchOverview(), fetchActivity(20)]);
-  return <Dashboard overview={overview} activity={activity} />;
+
+  // The dashboard's primary signal is the overview card stack; if
+  // that fetch fails we surface the auth/network state explicitly
+  // rather than rendering zeroed-out cards that look like a healthy
+  // empty tenant. Activity is a side-section — if only it failed we
+  // could degrade by hiding it, but in practice both reads go through
+  // the same controller so they tend to fail together.
+  if (overview.kind !== 'ok') {
+    return <FetchErrorState kind={overview.kind} />;
+  }
+
+  return (
+    <Dashboard
+      overview={overview.value}
+      activity={activity.kind === 'ok' ? activity.value : []}
+    />
+  );
 }
 
 function Dashboard({
   overview,
   activity,
 }: {
-  overview: Awaited<ReturnType<typeof fetchOverview>>;
-  activity: Awaited<ReturnType<typeof fetchActivity>>;
+  overview: ApiOverview;
+  activity: ActivityEvent[];
 }) {
   const t = useTranslations('dashboard');
 

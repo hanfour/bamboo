@@ -3,9 +3,12 @@
 // Server-side fetch helpers for the controller's /api/v1/* endpoints.
 //
 // All functions are intended to run in React Server Components: they
-// hit the controller directly and return strongly-typed shapes. Errors
-// are caught and rendered as empty state so a single 500 from the
-// controller does not break the page.
+// hit the controller directly and return strongly-typed FetchResult
+// shapes so pages can render the right state for each outcome (ok,
+// notFound, unauthorized, forbidden, error). The legacy pattern of
+// "collapse every failure into a fallback object" lies to the user
+// when the cause is auth or a network outage — see lib/types.ts for
+// the variants the renderer must handle.
 //
 // Auth precedence mirrors the controller's middleware (server/api.go):
 //
@@ -13,7 +16,8 @@
 //      through to the controller. This is the production path once a
 //      Google / GitHub login has happened.
 //   2. X-Tenant-Slug header pinned to the BAMBOO_TENANT env var. This
-//      is the dev fallback when no session cookie is present yet.
+//      is the dev fallback when no session cookie is present yet — the
+//      controller honors it only when BAMBOO_REQUIRE_AUTH is unset.
 
 import { cookies } from 'next/headers';
 
@@ -132,136 +136,113 @@ async function buildHeaders(): Promise<Record<string, string>> {
   return headers;
 }
 
-async function get<T>(path: string, fallback: T): Promise<T> {
+// fetchResult is the canonical read-path helper: every fetcher in this
+// file routes through it so the UI surface for auth + network errors
+// is uniform. 401 / 403 / 404 / 5xx / network failure each map to a
+// distinct FetchResult variant; the caller decides how to render.
+async function fetchResult<T>(path: string): Promise<FetchResult<T>> {
   try {
     const res = await fetch(`${BASE}${path}`, {
       headers: await buildHeaders(),
       cache: 'no-store',
     });
-    if (!res.ok) return fallback;
-    return (await res.json()) as T;
-  } catch {
-    return fallback;
-  }
-}
-
-export async function fetchOverview(): Promise<ApiOverview> {
-  return get<ApiOverview>('/api/v1/overview', {
-    tenantId: '',
-    totalPeers: 0,
-    onlinePeers: 0,
-    offlinePeers: 0,
-    policyRevision: 0,
-    recommendationCount: 0,
-  });
-}
-
-export async function fetchMe(): Promise<ApiMe> {
-  return get<ApiMe>('/api/v1/me', {
-    authenticated: false,
-    tenantId: '',
-    tenantSlug: TENANT,
-  });
-}
-
-export async function fetchPeers(): Promise<Peer[]> {
-  const body = await get<{ peers: ApiPeer[] }>('/api/v1/peers', { peers: [] });
-  return body.peers.map(apiPeerToPeer);
-}
-
-// fetchPeer returns a FetchResult so the drawer can distinguish
-// "controller said 404" (peer doesn't exist or is in another
-// tenant — both collapse to notFound by the probe-protection
-// contract) from "couldn't reach the controller" (network /
-// 5xx / malformed JSON). The latter renders an error state so
-// the user knows a refresh might help, not a "peer was deleted"
-// message that lies about the cause.
-export async function fetchPeer(id: string): Promise<FetchResult<Peer>> {
-  try {
-    const res = await fetch(`${BASE}/api/v1/peers/${encodeURIComponent(id)}`, {
-      headers: await buildHeaders(),
-      cache: 'no-store',
-    });
-    if (res.status === 404) {
-      return { kind: 'notFound' };
-    }
+    if (res.status === 401) return { kind: 'unauthorized' };
+    if (res.status === 403) return { kind: 'forbidden' };
+    if (res.status === 404) return { kind: 'notFound' };
     if (!res.ok) {
       return { kind: 'error', message: `controller responded ${res.status}` };
     }
-    const p = (await res.json()) as ApiPeer;
-    return { kind: 'ok', value: apiPeerToPeer(p) };
+    const value = (await res.json()) as T;
+    return { kind: 'ok', value };
   } catch (e) {
     return { kind: 'error', message: (e as Error).message };
   }
 }
 
-// fetchPreAuthKeys returns the tenant's pre-auth keys, newest
-// first. Errors collapse to an empty list — the management page
-// renders an explicit empty state, never a misleading 404.
-export async function fetchPreAuthKeys(): Promise<PreAuthKey[]> {
-  const body = await get<{ keys: PreAuthKey[] }>('/api/v1/preauth-keys', { keys: [] });
-  return body.keys ?? [];
+export async function fetchOverview(): Promise<FetchResult<ApiOverview>> {
+  return fetchResult<ApiOverview>('/api/v1/overview');
 }
 
-// fetchActivity returns the tenant-wide audit feed for the
-// dashboard. Errors collapse to an empty list — activity is a
-// dashboard side-section, not load-bearing, so a network blip
-// shouldn't break the rest of the page.
-export async function fetchActivity(limit = 20): Promise<ActivityEvent[]> {
-  const body = await get<{ events: ActivityEvent[] }>(
+// fetchMe deliberately stays "shape-stable" because the header reads
+// it for every page render and treats every failure as "unauthenticated".
+// Internally it still uses fetchResult so a 5xx surfaces in the log,
+// but the public return type collapses to ApiMe with authenticated=false.
+export async function fetchMe(): Promise<ApiMe> {
+  const r = await fetchResult<ApiMe>('/api/v1/me');
+  if (r.kind === 'ok') return r.value;
+  return { authenticated: false, tenantId: '', tenantSlug: TENANT };
+}
+
+export async function fetchPeers(): Promise<FetchResult<Peer[]>> {
+  const r = await fetchResult<{ peers: ApiPeer[] }>('/api/v1/peers');
+  if (r.kind !== 'ok') return r;
+  return { kind: 'ok', value: r.value.peers.map(apiPeerToPeer) };
+}
+
+// fetchPeer is the per-id read used by the drawer; same variants as
+// the list paths, with notFound carrying its existing UX meaning
+// (probe-protection: peer in another tenant looks identical to a
+// truly missing one).
+export async function fetchPeer(id: string): Promise<FetchResult<Peer>> {
+  const r = await fetchResult<ApiPeer>(`/api/v1/peers/${encodeURIComponent(id)}`);
+  if (r.kind !== 'ok') return r;
+  return { kind: 'ok', value: apiPeerToPeer(r.value) };
+}
+
+export async function fetchPreAuthKeys(): Promise<FetchResult<PreAuthKey[]>> {
+  const r = await fetchResult<{ keys: PreAuthKey[] }>('/api/v1/preauth-keys');
+  if (r.kind !== 'ok') return r;
+  return { kind: 'ok', value: r.value.keys ?? [] };
+}
+
+export async function fetchActivity(limit = 20): Promise<FetchResult<ActivityEvent[]>> {
+  const r = await fetchResult<{ events: ActivityEvent[] }>(
     `/api/v1/activity?limit=${encodeURIComponent(String(limit))}`,
-    { events: [] },
   );
-  return body.events ?? [];
+  if (r.kind !== 'ok') return r;
+  return { kind: 'ok', value: r.value.events ?? [] };
 }
 
-// fetchPeerEvents returns the audit timeline for one peer. Errors
-// (network, 404, malformed JSON) collapse to an empty list so the
-// drawer renders a clean empty state — the table + drawer's primary
-// data already came from fetchPeer; the timeline is a side-channel
-// nice-to-have, not load-bearing.
+// fetchPeerEvents is a side-channel for the drawer's timeline tab —
+// it does NOT block the drawer's primary render (which comes from
+// fetchPeer). On error we collapse to an empty list so the timeline
+// renders an empty-state without breaking the drawer; the primary
+// peer fetch is what surfaces auth / network problems to the user.
 export async function fetchPeerEvents(id: string): Promise<PeerEvent[]> {
-  try {
-    const res = await fetch(`${BASE}/api/v1/peers/${encodeURIComponent(id)}/events`, {
-      headers: await buildHeaders(),
-      cache: 'no-store',
-    });
-    if (!res.ok) return [];
-    const body = (await res.json()) as { events: PeerEvent[] };
-    return body.events ?? [];
-  } catch {
-    return [];
-  }
+  const r = await fetchResult<{ events: PeerEvent[] }>(
+    `/api/v1/peers/${encodeURIComponent(id)}/events`,
+  );
+  if (r.kind !== 'ok') return [];
+  return r.value.events ?? [];
 }
 
-export async function fetchPolicy(): Promise<AclPolicy> {
-  const body = await get<ApiPolicy>('/api/v1/policy', {
-    tenantId: '',
-    revision: 0,
-    hclSource: '',
-    rules: [],
-  });
-  const rules: AclRule[] = body.rules.map((r) => ({
-    id: r.id,
-    action: r.action,
-    description: r.description,
-    sources: r.sources,
-    destinations: r.destinations,
+export async function fetchPolicy(): Promise<FetchResult<AclPolicy>> {
+  const r = await fetchResult<ApiPolicy>('/api/v1/policy');
+  if (r.kind !== 'ok') return r;
+  const rules: AclRule[] = r.value.rules.map((rule) => ({
+    id: rule.id,
+    action: rule.action,
+    description: rule.description,
+    sources: rule.sources,
+    destinations: rule.destinations,
   }));
   return {
-    revision: body.revision,
-    hclSource: body.hclSource,
-    rules,
-    updatedAt: body.updatedAt ?? new Date(0).toISOString(),
+    kind: 'ok',
+    value: {
+      revision: r.value.revision,
+      hclSource: r.value.hclSource,
+      rules,
+      updatedAt: r.value.updatedAt ?? new Date(0).toISOString(),
+    },
   };
 }
 
-export async function fetchRecommendations(): Promise<ApiRecommendation[]> {
-  const body = await get<{ recommendations: ApiRecommendation[] }>(
+export async function fetchRecommendations(): Promise<FetchResult<ApiRecommendation[]>> {
+  const r = await fetchResult<{ recommendations: ApiRecommendation[] }>(
     '/api/v1/recommendations',
-    { recommendations: [] },
   );
-  return body.recommendations;
+  if (r.kind !== 'ok') return r;
+  return { kind: 'ok', value: r.value.recommendations ?? [] };
 }
 
 export type { ApiMe, ApiOverview, ApiRecommendation };

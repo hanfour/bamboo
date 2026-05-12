@@ -3,6 +3,7 @@
 import { useTranslations } from 'next-intl';
 import { NewPeerButton } from '@/components/NewPeerButton';
 import { PeersView } from '@/components/PeersView';
+import { FetchErrorState } from '@/components/FetchErrorState';
 import { Link } from '@/i18n/routing';
 import { fetchMe, fetchPeer, fetchPeerEvents, fetchPeers } from '@/lib/api';
 import type { FetchResult, Peer, PeerEvent } from '@/lib/types';
@@ -22,9 +23,18 @@ export default async function PeersPage({
     selected ? fetchPeerEvents(selected) : Promise.resolve([]),
     fetchMe(),
   ]);
+
+  // The peer table is the page's primary purpose. If we can't load it
+  // we surface the auth / network state instead of an empty table that
+  // would lie about there being no peers. The selectedPeer drawer state
+  // already handles its own variants downstream (see PeerDrawer).
+  if (peers.kind !== 'ok') {
+    return <FetchErrorState kind={peers.kind} />;
+  }
+
   return (
     <Peers
-      peers={peers}
+      peers={peers.value}
       selectedPeer={selectedPeer}
       selectedEvents={selectedEvents}
       selectedId={selected}
