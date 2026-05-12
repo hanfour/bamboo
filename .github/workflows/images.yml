@@ -25,6 +25,12 @@ permissions:
   contents: read
   packages: write
 
+env:
+  # See ci.yml for the rationale. Opt into Node 24 ahead of
+  # GitHub's forced switch (2026-06-02) and Node 20 removal
+  # (2026-09-16) without bumping every individual action version.
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 jobs:
   controller:
     name: controller image
