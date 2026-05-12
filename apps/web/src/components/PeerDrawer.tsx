@@ -134,7 +134,7 @@ function DrawerBody({
   return (
     <div className="space-y-6">
       {error && (
-        <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-900/50 dark:bg-red-950/40 dark:text-red-300">
+        <div className="rounded-md border border-red-300 px-3 py-2 text-sm text-red-700 dark:border-red-900/50 dark:text-red-400">
           {t('errorPrefix')} {error}
         </div>
       )}
@@ -152,7 +152,7 @@ function DrawerBody({
           label={t('fields.publicKey')}
           value={
             peer.wireguardPublicKey ? (
-              <code className="block break-all rounded bg-zinc-100 px-2 py-1 font-mono text-xs text-zinc-800 dark:bg-zinc-900 dark:text-zinc-200">
+              <code className="block break-all rounded border border-zinc-200 px-2 py-1 font-mono text-xs text-zinc-700 dark:border-zinc-800 dark:text-zinc-300">
                 {peer.wireguardPublicKey}
               </code>
             ) : (
@@ -187,7 +187,7 @@ function DrawerBody({
             {peer.endpoints.map((ep) => (
               <li
                 key={ep}
-                className="rounded bg-zinc-100 px-2 py-1 font-mono text-xs text-zinc-800 dark:bg-zinc-900 dark:text-zinc-200"
+                className="rounded border border-zinc-200 px-2 py-1 font-mono text-xs text-zinc-700 dark:border-zinc-800 dark:text-zinc-300"
               >
                 {ep}
               </li>
@@ -269,7 +269,7 @@ function HostnameField({ peer, onError }: { peer: Peer; onError: (msg: string | 
               type="button"
               onClick={save}
               disabled={pending}
-              className="rounded border border-bamboo-600 bg-bamboo-600 px-2 text-xs font-medium text-white hover:bg-bamboo-700 disabled:opacity-50"
+              className="rounded border border-zinc-900 bg-zinc-900 px-2 text-xs font-medium text-white transition-colors hover:bg-zinc-700 disabled:opacity-50 dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
             >
               {t('inline.save')}
             </button>
@@ -280,7 +280,7 @@ function HostnameField({ peer, onError }: { peer: Peer; onError: (msg: string | 
                 setDraft(peer.hostname);
               }}
               disabled={pending}
-              className="rounded border border-zinc-300 px-2 text-xs text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
+              className="rounded border border-zinc-300 px-2 text-xs text-zinc-700 transition-colors hover:border-zinc-400 hover:text-zinc-900 dark:border-zinc-700 dark:text-zinc-300 dark:hover:border-zinc-600 dark:hover:text-zinc-100"
             >
               {t('inline.cancel')}
             </button>
@@ -371,7 +371,7 @@ function TagsField({ peer, onError }: { peer: Peer; onError: (msg: string | null
               peer.tags.map((tag) => (
                 <span
                   key={tag}
-                  className="rounded bg-zinc-100 px-2 py-0.5 text-xs text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
+                  className="rounded border border-zinc-200 px-2 py-0.5 text-xs text-zinc-600 dark:border-zinc-700 dark:text-zinc-400"
                 >
                   {tag}
                 </span>
@@ -408,7 +408,7 @@ function DisableToggle({ peer, onError }: { peer: Peer; onError: (msg: string | 
           else onError(res.error);
         });
       }}
-      className="w-full rounded-md border border-zinc-200 px-3 py-1.5 text-left text-sm text-zinc-700 hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-900"
+      className="w-full rounded-md border border-zinc-300 px-3 py-1.5 text-left text-sm text-zinc-700 transition-colors hover:border-zinc-400 hover:text-zinc-900 disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:border-zinc-600 dark:hover:text-zinc-100"
     >
       {pending ? t('inline.working') : label}
     </button>
@@ -452,7 +452,7 @@ function DeleteButton({
                 }
               });
             }}
-            className="flex-1 rounded-md border border-red-600 bg-red-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-red-700 disabled:opacity-50"
+            className="flex-1 rounded-md border border-red-300 px-3 py-1.5 text-sm font-medium text-red-700 transition-colors hover:border-red-400 hover:bg-red-50 disabled:opacity-50 dark:border-red-900/50 dark:text-red-400 dark:hover:bg-red-950/40"
           >
             {pending ? t('inline.working') : t('actions.confirmYes')}
           </button>
@@ -460,7 +460,7 @@ function DeleteButton({
             type="button"
             disabled={pending}
             onClick={() => setConfirming(false)}
-            className="flex-1 rounded-md border border-zinc-200 px-3 py-1.5 text-sm text-zinc-700 hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-900"
+            className="flex-1 rounded-md border border-zinc-300 px-3 py-1.5 text-sm text-zinc-700 transition-colors hover:border-zinc-400 hover:text-zinc-900 disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:border-zinc-600 dark:hover:text-zinc-100"
           >
             {t('actions.confirmCancel')}
           </button>
@@ -473,7 +473,7 @@ function DeleteButton({
     <button
       type="button"
       onClick={() => setConfirming(true)}
-      className="w-full rounded-md border border-red-200 px-3 py-1.5 text-left text-sm text-red-700 hover:bg-red-50 dark:border-red-900/50 dark:text-red-400 dark:hover:bg-red-950/40"
+      className="w-full rounded-md border border-zinc-300 px-3 py-1.5 text-left text-sm text-zinc-700 transition-colors hover:border-red-300 hover:text-red-700 dark:border-zinc-700 dark:text-zinc-300 dark:hover:border-red-900/50 dark:hover:text-red-400"
     >
       {t('actions.delete')}
     </button>
@@ -563,11 +563,11 @@ function DiffRender({ action, diff }: { action: string; diff: Record<string, unk
           return (
             <li key={key} className="flex flex-wrap items-baseline gap-1">
               <span className="font-medium text-zinc-600 dark:text-zinc-400">{key}:</span>
-              <code className="rounded bg-zinc-100 px-1 font-mono text-zinc-700 dark:bg-zinc-900 dark:text-zinc-300">
+              <code className="rounded border border-zinc-200 px-1 font-mono text-zinc-500 line-through decoration-zinc-300 dark:border-zinc-800 dark:text-zinc-500">
                 {formatDiffValue(ft.from)}
               </code>
               <span className="text-zinc-400">→</span>
-              <code className="rounded bg-bamboo-50 px-1 font-mono text-bamboo-800 dark:bg-bamboo-900/30 dark:text-bamboo-200">
+              <code className="rounded border border-bamboo-300 px-1 font-mono text-bamboo-700 dark:border-bamboo-700 dark:text-bamboo-300">
                 {formatDiffValue(ft.to)}
               </code>
             </li>
@@ -582,7 +582,7 @@ function DiffRender({ action, diff }: { action: string; diff: Record<string, unk
       {Object.entries(diff).map(([key, val]) => (
         <li key={key} className="flex flex-wrap items-baseline gap-1">
           <span className="text-zinc-500 dark:text-zinc-400">{key}:</span>
-          <code className="rounded bg-zinc-100 px-1 font-mono text-zinc-700 dark:bg-zinc-900 dark:text-zinc-300">
+          <code className="rounded border border-zinc-200 px-1 font-mono text-zinc-700 dark:border-zinc-800 dark:text-zinc-300">
             {formatDiffValue(val)}
           </code>
         </li>
@@ -694,12 +694,20 @@ function Field({
 }
 
 function StatusBadge({ status, label }: { status: Peer['status']; label: string }) {
-  const tone = {
-    online: 'bg-bamboo-100 text-bamboo-800 dark:bg-bamboo-900/40 dark:text-bamboo-300',
-    offline: 'bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400',
-    disabled: 'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300',
+  // Same dot+label pattern as PeerTable — keep both surfaces visually
+  // identical. bamboo-500 solid dot for online (alive), zinc-400 solid
+  // for offline, hollow zinc dot for disabled.
+  const dot = {
+    online: 'bg-bamboo-500',
+    offline: 'bg-zinc-400 dark:bg-zinc-500',
+    disabled: 'border border-zinc-400 bg-transparent dark:border-zinc-500',
   }[status];
-  return <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${tone}`}>{label}</span>;
+  return (
+    <span className="inline-flex items-center gap-2 text-xs text-zinc-700 dark:text-zinc-300">
+      <span aria-hidden className={`h-1.5 w-1.5 rounded-full ${dot}`} />
+      {label}
+    </span>
+  );
 }
 
 function formatTimestamp(iso: string): string {
