@@ -22,22 +22,23 @@ import (
 // surface remains the canonical API; REST is a SSR-friendly read-only
 // projection in Phase 1.
 type HTTPServer struct {
-	addr      string
-	srv       *http.Server
-	providers map[string]auth.OIDCProvider
-	tenants   *repo.Tenants
-	users     *repo.Users
-	peers     *repo.Peers
-	policies  *repo.Policies
-	relays    *repo.Relays
-	audits    *repo.AuditLogs
-	keys      *repo.PreAuthKeys
-	traces    *clickhouse.Traces
-	anomalies *clickhouse.Anomalies
-	coord     *handlers.CoordinatorHandler
-	secret    []byte
-	baseURL   string
-	ttl       time.Duration
+	addr        string
+	srv         *http.Server
+	providers   map[string]auth.OIDCProvider
+	tenants     *repo.Tenants
+	users       *repo.Users
+	peers       *repo.Peers
+	policies    *repo.Policies
+	relays      *repo.Relays
+	audits      *repo.AuditLogs
+	keys        *repo.PreAuthKeys
+	traces      *clickhouse.Traces
+	anomalies   *clickhouse.Anomalies
+	coord       *handlers.CoordinatorHandler
+	secret      []byte
+	baseURL     string
+	ttl         time.Duration
+	requireAuth bool
 }
 
 // NewHTTPServer constructs the OIDC + REST HTTP frontend. ch may be nil
@@ -114,6 +115,17 @@ func withCORS(next http.Handler) http.Handler {
 // without binding a real port. Production callers should use Run.
 func (h *HTTPServer) Handler() http.Handler {
 	return h.srv.Handler
+}
+
+// SetRequireAuth flips the server into prod-mode auth. When enabled,
+// REST /api/v1/* endpoints reject unauthenticated requests with 401
+// instead of falling back to the X-Tenant-Slug header. Peer-id-only
+// paths (/peers/register, /peers/heartbeat, /peers/watch) and
+// /api/v1/me are exempt so client onboarding and the Web's signed-out
+// landing state still work. Callers wire this from
+// cfg.Auth.RequireAuth (env: BAMBOO_REQUIRE_AUTH).
+func (h *HTTPServer) SetRequireAuth(require bool) {
+	h.requireAuth = require
 }
 
 // Run blocks until ctx is canceled or the listener errors.

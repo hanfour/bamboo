@@ -64,6 +64,17 @@ func (h *HTTPServer) routeAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Prod-mode gate. /api/v1/me is exempt so the Web can render its
+	// signed-out landing state without seeing a 401; everything else
+	// requires a valid JWT once require_auth is on. Peer-id-only paths
+	// (/peers/register, /peers/heartbeat, /peers/watch) short-circuited
+	// before this block, so this check covers only the read+admin REST
+	// surface.
+	if h.requireAuth && authn.claims == nil && r.URL.Path != "/api/v1/me" {
+		writeError(w, http.StatusUnauthorized, errors.New("authentication required"))
+		return
+	}
+
 	tenant, err := h.resolveTenant(r, authn)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)

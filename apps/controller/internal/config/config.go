@@ -65,8 +65,19 @@ type AuthConfig struct {
 	SessionSecret string `yaml:"session_secret"`
 	// SessionTTL controls how long an issued session remains valid.
 	// Defaults to 24h if empty.
-	SessionTTL string        `yaml:"session_ttl"`
-	OIDC       OIDCProviders `yaml:"oidc"`
+	SessionTTL string `yaml:"session_ttl"`
+	// RequireAuth, when true, switches the controller into prod-mode
+	// auth: REST /api/v1/* endpoints require a valid session JWT
+	// (Authorization bearer or bamboo_session cookie). The X-Tenant-Slug
+	// header is no longer accepted as a credential and the implicit
+	// "default" tenant fallback is disabled. /api/v1/me still responds
+	// so the Web UI can render an unauthenticated landing state, and
+	// the peer-id-only paths (/peers/register, /peers/heartbeat,
+	// /peers/watch) keep their existing pre-auth-key + peer_id flows.
+	// Defaults to false so `make local-up` and existing dev workflows
+	// keep working unchanged.
+	RequireAuth bool          `yaml:"require_auth"`
+	OIDC        OIDCProviders `yaml:"oidc"`
 }
 
 // OIDCProviders bundles per-provider credentials.
@@ -163,6 +174,11 @@ func (c *Config) applyEnvOverrides() {
 	}
 	if v := os.Getenv("BAMBOO_SESSION_SECRET"); v != "" {
 		c.Auth.SessionSecret = v
+	}
+	if v := os.Getenv("BAMBOO_REQUIRE_AUTH"); v != "" {
+		// Any value other than "true" / "1" disables prod mode; this
+		// avoids accidental enables from leftover empty exports.
+		c.Auth.RequireAuth = v == "true" || v == "1"
 	}
 	if v := os.Getenv("BAMBOO_BASE_URL"); v != "" {
 		c.Auth.OIDC.BaseURL = v

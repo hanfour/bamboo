@@ -21,6 +21,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/hanfour/bamboo/apps/controller/internal/auth"
 	"github.com/hanfour/bamboo/apps/controller/internal/db"
+	"github.com/hanfour/bamboo/apps/controller/internal/db/repo"
 	"github.com/hanfour/bamboo/apps/controller/internal/events"
 	"github.com/hanfour/bamboo/apps/controller/internal/handlers"
 	"github.com/hanfour/bamboo/apps/controller/internal/server"
@@ -45,6 +46,7 @@ type fixture struct {
 	tenantSlug string // unique per test, prevents cross-test interference
 	httpURL    string // base URL of the in-process HTTP fixture
 	httpSrv    *httptest.Server
+	httpAPI    *server.HTTPServer // for per-test config knobs (e.g. SetRequireAuth)
 }
 
 // startFixture brings up an in-process controller against a real Postgres
@@ -91,7 +93,8 @@ func startFixture(t *testing.T) *fixture {
 		t.Fatalf("dial: %v", err)
 	}
 
-	httpSrv := httptest.NewServer(buildHTTPMux(pool, coord))
+	handler, httpAPI := buildHTTPMux(pool, coord)
+	httpSrv := httptest.NewServer(handler)
 
 	f := &fixture{
 		addr:       lis.Addr().String(),
@@ -104,6 +107,7 @@ func startFixture(t *testing.T) *fixture {
 		tenantSlug: fmt.Sprintf("e2e-%s", uuid.NewString()[:8]),
 		httpURL:    httpSrv.URL,
 		httpSrv:    httpSrv,
+		httpAPI:    httpAPI,
 	}
 
 	t.Cleanup(func() {
@@ -135,7 +139,9 @@ func buildGRPCFixture(pool *db.Pool) (*grpc.Server, *handlers.CoordinatorHandler
 
 // buildHTTPMux returns the controller's HTTP routes (auth + REST API)
 // wired against the same coordinator handler the gRPC server uses.
-func buildHTTPMux(pool *db.Pool, coord *handlers.CoordinatorHandler) http.Handler {
+// The *server.HTTPServer is exposed so per-test config knobs (e.g.
+// SetRequireAuth) can be toggled without reconstructing the fixture.
+func buildHTTPMux(pool *db.Pool, coord *handlers.CoordinatorHandler) (http.Handler, *server.HTTPServer) {
 	secret := []byte("e2e-secret-with-at-least-32-bytes-padding")
 	httpSrv := server.NewHTTPServer(
 		"127.0.0.1:0",
@@ -147,7 +153,52 @@ func buildHTTPMux(pool *db.Pool, coord *handlers.CoordinatorHandler) http.Handle
 		1*time.Hour,
 		coord,
 	)
-	return httpSrv.Handler()
+	return httpSrv.Handler(), httpSrv
+}
+
+// enableRequireAuth flips the fixture into prod-mode auth so the next
+// HTTP request that lacks a JWT (and isn't on the /api/v1/me allowlist
+// or the peer-id-only paths) returns 401.
+func (f *fixture) enableRequireAuth() {
+	f.httpAPI.SetRequireAuth(true)
+}
+
+// mintJWT creates a user in the fixture's tenant and returns a session
+// token signed with the fixture's known secret. Used by tests that need
+// to exercise authenticated REST flows under SetRequireAuth.
+func (f *fixture) mintJWT(t *testing.T, isAdmin bool) string {
+	t.Helper()
+	ctx := context.Background()
+	tenants := repo.NewTenants(f.pool)
+	tenant, err := tenants.GetOrCreate(ctx, f.tenantSlug, "Default Tenant", "100.64.0.0/24")
+	if err != nil {
+		t.Fatalf("get tenant: %v", err)
+	}
+	users := repo.NewUsers(f.pool)
+	user, err := users.UpsertOIDC(ctx, &repo.User{
+		TenantID:     tenant.ID,
+		Email:        fmt.Sprintf("test-%s@example.com", uuid.NewString()[:8]),
+		DisplayName:  "Test User",
+		OIDCProvider: "test",
+		OIDCSubject:  uuid.NewString(),
+	})
+	if err != nil {
+		t.Fatalf("UpsertOIDC: %v", err)
+	}
+	if isAdmin {
+		if _, err := f.pool.Exec(ctx, `UPDATE users SET is_admin=true WHERE id=$1`, user.ID); err != nil {
+			t.Fatalf("set is_admin: %v", err)
+		}
+	}
+	tok, err := auth.IssueSessionToken(
+		[]byte("e2e-secret-with-at-least-32-bytes-padding"),
+		auth.SessionClaims{UserID: user.ID, TenantID: tenant.ID},
+		1*time.Hour,
+	)
+	if err != nil {
+		t.Fatalf("IssueSessionToken: %v", err)
+	}
+	return tok
 }
 
 // outgoingCtx returns a ctx that carries the fixture's tenant slug as gRPC
