@@ -203,6 +203,27 @@
     },
     "empty": "No access policy is configured. New tenants start with allow-all; tighten before going to production."
   },
+  "settings": {
+    "title": "Settings",
+    "subtitle": "Manage tenant and account settings.",
+    "tenant": {
+      "title": "Tenant",
+      "id": "Tenant ID",
+      "slug": "Slug"
+    },
+    "account": {
+      "title": "Account",
+      "email": "Email",
+      "role": "Role",
+      "admin": "Admin",
+      "member": "Member"
+    },
+    "preAuthKeysCard": {
+      "title": "Pre-auth keys",
+      "description": "Mint and revoke the keys that new devices paste into their bamboo client on first connection.",
+      "link": "Go to Pre-auth keys"
+    }
+  },
   "common": {
     "ago": "{value} ago",
     "never": "Never",
