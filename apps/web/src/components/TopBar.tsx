@@ -4,6 +4,7 @@ import { getTranslations } from 'next-intl/server';
 
 import { Link } from '@/i18n/routing';
 import { fetchMe } from '@/lib/api';
+import { HamburgerButton } from './HamburgerButton';
 
 const CONTROLLER_BASE = process.env.BAMBOO_API_URL ?? 'http://localhost:8081';
 
@@ -25,7 +26,10 @@ export async function TopBar() {
   return (
     <header className="sticky top-0 z-30 h-14 border-b border-zinc-200 bg-white/95 backdrop-blur supports-[backdrop-filter]:bg-white/80 dark:border-zinc-800 dark:bg-zinc-950/95 dark:supports-[backdrop-filter]:bg-zinc-950/80">
       <div className="flex h-full items-center justify-between px-6">
-        <Brand />
+        <div className="flex items-center gap-3">
+          <HamburgerButton />
+          <Brand />
+        </div>
         <div className="flex items-center gap-3 text-sm">
           {me.authenticated && me.email ? (
             <UserPill

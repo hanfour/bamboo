@@ -8,6 +8,7 @@ import { Saira_Stencil_One } from 'next/font/google';
 import { routing } from '@/i18n/routing';
 import { TopBar } from '@/components/TopBar';
 import { Sidebar } from '@/components/Sidebar';
+import { ChromeShell } from '@/components/ChromeShell';
 import '../globals.css';
 
 // Saira Stencil One — loaded only for the wordmark via the
@@ -46,15 +47,14 @@ export default async function LocaleLayout({
     <html lang={locale} className={wordmarkFont.variable}>
       <body className="min-h-screen antialiased">
         <NextIntlClientProvider messages={messages}>
-          {/* Google-Account-style chrome: thin top bar across the
-              width, persistent left sidebar below it for primary nav.
-              Sidebar is hidden under md; a hamburger drawer is a
-              planned follow-up. */}
-          <TopBar />
-          <div className="flex">
-            <Sidebar />
-            <main className="min-w-0 flex-1 px-6 py-8">{children}</main>
-          </div>
+          {/* Google-Account-style chrome: thin top bar + persistent
+              left sidebar on lg+, slide-in drawer below lg. The
+              ChromeShell client wrapper holds the drawer open state
+              so the HamburgerButton in TopBar can toggle the Sidebar
+              even though they're separate component subtrees. */}
+          <ChromeShell topBar={<TopBar />} sidebar={<Sidebar />}>
+            {children}
+          </ChromeShell>
         </NextIntlClientProvider>
       </body>
     </html>

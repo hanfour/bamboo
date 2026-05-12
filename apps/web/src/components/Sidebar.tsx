@@ -4,20 +4,27 @@
 
 import { useTranslations } from 'next-intl';
 import { Link, usePathname } from '@/i18n/routing';
+import { useDrawer } from './ChromeShell';
 
-// Sidebar is the persistent left navigation rail.
+// Sidebar is the persistent left navigation rail on lg+ viewports and
+// a slide-in drawer below lg.
 //
 // Design target: Google Account / Workspace Admin / GCP Console — a
 // vertical rail with line-icon + label items, where the active item
 // shows as a filled pill (bamboo-100 bg + bamboo-700 text). No
-// underlines (those would echo Tailscale's horizontal-tab chrome).
+// underlines (those would echo Tailscale's horizontal-tab chrome,
+// rejected as too similar).
 //
-// Client component so it can use usePathname for the active state.
-// Hidden on small viewports for now; a hamburger drawer is a planned
-// follow-up but not blocking on the chrome rebuild.
+// Responsive behavior:
+//   - lg+ (≥1024): always-visible static rail inside the flex flow.
+//     Takes 240px of main-axis space.
+//   - <lg: fixed-position drawer that slides in from the left with a
+//     backdrop. Drawer open state lives in ChromeShell context; the
+//     HamburgerButton in TopBar toggles it.
 export function Sidebar() {
   const t = useTranslations('nav');
   const pathname = usePathname();
+  const { open, setOpen } = useDrawer();
 
   const items: Array<{
     href: '/' | '/peers' | '/preauth-keys' | '/acl';
@@ -31,41 +38,68 @@ export function Sidebar() {
   ];
 
   return (
-    <aside className="sticky top-14 hidden h-[calc(100vh-3.5rem)] w-60 shrink-0 overflow-y-auto border-r border-zinc-200 px-3 py-4 md:block dark:border-zinc-800">
-      <nav>
-        <ul className="space-y-1">
-          {items.map((it) => {
-            const active = isActive(pathname, it.href);
-            return (
-              <li key={it.href}>
-                <Link
-                  href={it.href}
-                  aria-current={active ? 'page' : undefined}
-                  className={[
-                    'flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors',
-                    active
-                      ? 'bg-bamboo-100 font-medium text-bamboo-700 dark:bg-bamboo-900/30 dark:text-bamboo-300'
-                      : 'text-zinc-700 hover:bg-bamboo-50 hover:text-zinc-900 dark:text-zinc-300 dark:hover:bg-bamboo-900/20 dark:hover:text-zinc-100',
-                  ].join(' ')}
-                >
-                  <span
-                    aria-hidden
-                    className={
+    <>
+      {/* Backdrop — only rendered under lg, and pointer-events toggle
+          tracks the drawer open state. fade-in animation rather than
+          appear/disappear. */}
+      <div
+        aria-hidden
+        onClick={() => setOpen(false)}
+        className={[
+          'fixed inset-x-0 bottom-0 top-14 z-20 bg-zinc-900/40 transition-opacity lg:hidden',
+          open ? 'opacity-100' : 'pointer-events-none opacity-0',
+        ].join(' ')}
+      />
+      <aside
+        id="primary-sidebar"
+        className={[
+          // Shared chrome
+          'h-[calc(100vh-3.5rem)] w-60 shrink-0 overflow-y-auto border-r border-zinc-200 px-3 py-4 dark:border-zinc-800',
+          // <lg: fixed drawer that slides in from the left. bg-bamboo-50
+          // is the page bg so it visually continues the surface; the
+          // backdrop's tint provides the panel separation.
+          'fixed left-0 top-14 z-30 bg-bamboo-50 transition-transform dark:bg-zinc-950',
+          open ? 'translate-x-0' : '-translate-x-full',
+          // lg+: static rail inside flex flow. translate-x-0 wins at
+          // this breakpoint regardless of `open`.
+          'lg:sticky lg:top-14 lg:z-0 lg:translate-x-0 lg:bg-transparent dark:lg:bg-transparent',
+        ].join(' ')}
+      >
+        <nav>
+          <ul className="space-y-1">
+            {items.map((it) => {
+              const active = isActive(pathname, it.href);
+              return (
+                <li key={it.href}>
+                  <Link
+                    href={it.href}
+                    aria-current={active ? 'page' : undefined}
+                    className={[
+                      'flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors',
                       active
-                        ? 'text-bamboo-700 dark:text-bamboo-300'
-                        : 'text-zinc-500 dark:text-zinc-400'
-                    }
+                        ? 'bg-bamboo-100 font-medium text-bamboo-700 dark:bg-bamboo-900/30 dark:text-bamboo-300'
+                        : 'text-zinc-700 hover:bg-bamboo-50 hover:text-zinc-900 dark:text-zinc-300 dark:hover:bg-bamboo-900/20 dark:hover:text-zinc-100',
+                    ].join(' ')}
                   >
-                    {it.icon}
-                  </span>
-                  <span className="truncate">{it.label}</span>
-                </Link>
-              </li>
-            );
-          })}
-        </ul>
-      </nav>
-    </aside>
+                    <span
+                      aria-hidden
+                      className={
+                        active
+                          ? 'text-bamboo-700 dark:text-bamboo-300'
+                          : 'text-zinc-500 dark:text-zinc-400'
+                      }
+                    >
+                      {it.icon}
+                    </span>
+                    <span className="truncate">{it.label}</span>
+                  </Link>
+                </li>
+              );
+            })}
+          </ul>
+        </nav>
+      </aside>
+    </>
   );
 }
 
