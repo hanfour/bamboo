@@ -2,9 +2,10 @@
 
 'use client';
 
-import { useEffect, useRef, useState, useTransition } from 'react';
+import { useRef, useState, useTransition } from 'react';
 import { useTranslations } from 'next-intl';
 import { mintPreAuthKeyAction } from '@/lib/actions';
+import { useDialogA11y } from '@/hooks/useDialogA11y';
 
 // NewPeerButton wraps the /peers header's "新增節點" button with a
 // modal that mints a pre-auth key and shows the connect info once.
@@ -89,8 +90,8 @@ export function NewPeerButton({ tenantSlug }: { tenantSlug: string }) {
 // Modal is a tiny centered-dialog primitive — backdrop click + ESC
 // close, focus moves to the panel on open. Inlined here because the
 // drawer's slide-in pattern is the wrong fit for a transient form;
-// extracting a shared Modal lib is overkill until we have a third
-// modal-like surface.
+// extracting a shared Modal *component* is overkill until we have a
+// third surface, but the a11y wiring is shared via useDialogA11y.
 function Modal({
   onClose,
   title,
@@ -101,27 +102,11 @@ function Modal({
   children: React.ReactNode;
 }) {
   const panelRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    const prev = document.activeElement as HTMLElement | null;
-    const id = window.setTimeout(() => {
-      panelRef.current?.querySelector<HTMLElement>(
-        'input, button:not([disabled])',
-      )?.focus();
-    }, 0);
-    function onKey(e: KeyboardEvent) {
-      if (e.key === 'Escape') onClose();
-    }
-    document.addEventListener('keydown', onKey);
-    const prevOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    return () => {
-      window.clearTimeout(id);
-      document.removeEventListener('keydown', onKey);
-      document.body.style.overflow = prevOverflow;
-      if (prev && document.contains(prev)) prev.focus();
-    };
-  }, [onClose]);
+  // Modal is always rendered when mounted (the outer caller gates
+  // mount on `open` state) — pass open=true unconditionally here.
+  // trapTab keeps tab focus inside the form so users can't drift
+  // out to background content.
+  useDialogA11y({ open: true, onClose, panelRef, trapTab: true });
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
