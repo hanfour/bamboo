@@ -186,6 +186,31 @@ export async function inviteUserAction(input: {
   }
 }
 
+// revokeInvitationAction flips a pending invitation to revoked.
+// Backend returns 204 on success and 404 on "already terminal" (the
+// repo's MarkRevoked only flips pending → revoked; accepted /
+// already-revoked rows return ErrNotFound). We treat 404 as a soft
+// success — the row is in its desired terminal state regardless —
+// so the UI doesn't error when the user double-clicks or refreshes
+// after a successful revoke.
+export async function revokeInvitationAction(id: string): Promise<ActionResult> {
+  try {
+    const res = await fetch(`${BASE}/api/v1/invitations/${encodeURIComponent(id)}/revoke`, {
+      method: 'POST',
+      headers: await buildHeaders(),
+      cache: 'no-store',
+    });
+    if (!res.ok && res.status !== 204 && res.status !== 404) {
+      const text = await res.text().catch(() => '');
+      return { ok: false, error: `${res.status} ${text || res.statusText}` };
+    }
+    revalidatePath('/[locale]/users', 'page');
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: (e as Error).message };
+  }
+}
+
 // revokePreAuthKeyAction marks a pre-auth key as revoked. Idempotent
 // at the controller (re-revoking returns 204), so the UI doesn't
 // have to guard against double-clicks.

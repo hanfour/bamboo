@@ -259,13 +259,21 @@
         "status": "狀態",
         "invitedBy": "邀請人",
         "createdAt": "建立時間",
-        "expiresAt": "到期"
+        "expiresAt": "到期",
+        "actions": "操作"
       },
       "status": {
         "pending": "待處理",
         "accepted": "已接受",
         "revoked": "已撤銷",
         "expired": "已過期"
+      },
+      "actions": {
+        "revoke": "撤銷",
+        "confirmRevoke": "確定撤銷",
+        "cancel": "取消",
+        "working": "處理中…",
+        "noAction": "—"
       }
     }
   },
