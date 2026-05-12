@@ -25,6 +25,7 @@ import type {
   AclPolicy,
   AclRule,
   ActivityEvent,
+  DNSConfig,
   FetchResult,
   Peer,
   PeerEvent,
@@ -197,6 +198,13 @@ export async function fetchPeer(id: string): Promise<FetchResult<Peer>> {
 // fetchUsers reads the tenant's user list. Admin-only on the wire
 // (the controller returns 403 for member role), so the page renders
 // the forbidden variant of FetchErrorState for non-admins.
+// fetchDNS reads the tenant's DNS settings. Member-readable on the
+// wire (no admin gate), so the page only renders the unauthorized
+// variant of FetchErrorState when there's no session at all.
+export async function fetchDNS(): Promise<FetchResult<DNSConfig>> {
+  return fetchResult<DNSConfig>('/api/v1/dns');
+}
+
 export async function fetchUsers(): Promise<FetchResult<User[]>> {
   const r = await fetchResult<{ users: User[] }>('/api/v1/users');
   if (r.kind !== 'ok') return r;

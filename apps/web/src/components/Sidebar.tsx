@@ -27,7 +27,7 @@ export function Sidebar() {
   const { open, setOpen } = useDrawer();
 
   const items: Array<{
-    href: '/' | '/peers' | '/users' | '/acl' | '/settings';
+    href: '/' | '/peers' | '/users' | '/acl' | '/dns' | '/settings';
     label: string;
     icon: React.ReactNode;
   }> = [
@@ -35,6 +35,7 @@ export function Sidebar() {
     { href: '/peers', label: t('peers'), icon: <ServerIcon /> },
     { href: '/users', label: t('users'), icon: <UsersIcon /> },
     { href: '/acl', label: t('acl'), icon: <ShieldIcon /> },
+    { href: '/dns', label: t('dns'), icon: <GlobeIcon /> },
     // Pre-auth keys lives under Settings now (matches Tailscale's IA);
     // /preauth-keys route still exists, just reached via Settings →
     // Pre-auth keys card.
@@ -170,6 +171,25 @@ function UsersIcon() {
       <path d="M2.5 20a6.5 6.5 0 0 1 13 0" />
       <path d="M17 11a3 3 0 1 0 0-6" />
       <path d="M21.5 20a5.5 5.5 0 0 0-4.5-5.4" />
+    </svg>
+  );
+}
+
+function GlobeIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="h-5 w-5"
+    >
+      <circle cx="12" cy="12" r="9" />
+      <path d="M3 12h18" />
+      <path d="M12 3a14 14 0 0 1 0 18" />
+      <path d="M12 3a14 14 0 0 0 0 18" />
     </svg>
   );
 }

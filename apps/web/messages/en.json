@@ -8,6 +8,7 @@
     "dashboard": "Dashboard",
     "peers": "Peers",
     "users": "Users",
+    "dns": "DNS",
     "preAuthKeys": "Pre-auth keys",
     "acl": "Access Policy",
     "settings": "Settings",
@@ -227,6 +228,28 @@
       "fallback": "Local"
     },
     "empty": "No users yet. The first account to sign in via OIDC becomes admin."
+  },
+  "dns": {
+    "title": "DNS",
+    "subtitle": "Manage tenant DNS settings. This view is read-only; updates to MagicDNS and nameservers happen via the controller API today.",
+    "tenantSection": "Tailnet",
+    "tenantName": "Tailnet name",
+    "magicDnsSection": "MagicDNS",
+    "magicDnsEnabled": "MagicDNS enabled",
+    "magicDnsHint": "When on, peers in this tenant resolve each other by short hostname under the tailnet namespace.",
+    "nameserversSection": "Global nameservers",
+    "nameserversEmpty": "Not set — peers fall back to their local DNS.",
+    "searchDomainsSection": "Search domains",
+    "searchDomainsEmpty": "Not set.",
+    "overrideSection": "Override local DNS",
+    "overrideEnabled": "Override peer local DNS",
+    "overrideHint": "When on, tenant nameservers replace each peer's local DNS; when off, they're merged.",
+    "status": {
+      "enabled": "Enabled",
+      "disabled": "Disabled"
+    },
+    "neverUpdated": "Default (never customized)",
+    "lastUpdated": "Last updated"
   },
   "settings": {
     "title": "Settings",
