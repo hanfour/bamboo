@@ -6,6 +6,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -14,6 +16,7 @@ import (
 	"github.com/hanfour/bamboo/apps/controller/internal/db/repo"
 	bamboov1 "github.com/hanfour/bamboo/proto/gen/go/bamboo/v1"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -102,6 +105,9 @@ func (h *AuthHandler) CompleteOIDCFlow(_ context.Context, _ *bamboov1.CompleteOI
 
 // CreatePreAuthKey issues a new pre-auth key for the calling tenant.
 func (h *AuthHandler) CreatePreAuthKey(ctx context.Context, req *bamboov1.CreatePreAuthKeyRequest) (*bamboov1.CreatePreAuthKeyResponse, error) {
+	if err := h.RequireAdmin(ctx, "preauthkey.create"); err != nil {
+		return nil, err
+	}
 	slug := tenantSlugFromMetadata(ctx)
 	tenant, err := h.tenants.GetOrCreate(ctx, slug, "Default Tenant", "100.64.0.0/24")
 	if err != nil {
@@ -194,6 +200,9 @@ func (h *AuthHandler) RedeemPreAuthKey(ctx context.Context, req *bamboov1.Redeem
 
 // ListPreAuthKeys returns the calling tenant's keys.
 func (h *AuthHandler) ListPreAuthKeys(ctx context.Context, _ *bamboov1.ListPreAuthKeysRequest) (*bamboov1.ListPreAuthKeysResponse, error) {
+	if err := h.RequireAdmin(ctx, "preauthkey.list"); err != nil {
+		return nil, err
+	}
 	slug := tenantSlugFromMetadata(ctx)
 	tenant, err := h.tenants.GetBySlug(ctx, slug)
 	if err != nil {
@@ -216,6 +225,9 @@ func (h *AuthHandler) ListPreAuthKeys(ctx context.Context, _ *bamboov1.ListPreAu
 
 // RevokePreAuthKey revokes the named key. Idempotent.
 func (h *AuthHandler) RevokePreAuthKey(ctx context.Context, req *bamboov1.RevokePreAuthKeyRequest) (*bamboov1.RevokePreAuthKeyResponse, error) {
+	if err := h.RequireAdmin(ctx, "preauthkey.revoke"); err != nil {
+		return nil, err
+	}
 	id, err := uuid.Parse(req.GetId())
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "invalid id: %v", err)
@@ -275,6 +287,66 @@ func (h *AuthHandler) redeemAndReturnKey(ctx context.Context, presentedSecret st
 		ResourceID:   &key.ID,
 	})
 	return key, nil
+}
+
+// RequireAdmin gates a gRPC handler on the calling principal having
+// admin role. Mirrors the REST requireAdmin behavior so the two
+// protocols enforce the same policy:
+//
+//   - bearer JWT present + user.IsAdmin → allow
+//   - bearer JWT present + user not admin → PermissionDenied
+//   - bearer JWT present but invalid → Unauthenticated
+//   - no bearer JWT → dev fallback; logs a warn-once-per-call and
+//     allows. In production the gRPC interceptor (configured by
+//     Auth.RequireAuth) blocks unauthenticated calls before they reach
+//     the handler, so this branch only runs in dev mode.
+//
+// action is a short label included in the warn log + the permission-
+// denied message; use the same string the REST handler audit-logs.
+func (h *AuthHandler) RequireAdmin(ctx context.Context, action string) error {
+	token := bearerFromMetadata(ctx)
+	if token == "" {
+		slog.Warn("gRPC admin path via dev-fallback (no JWT) — configure OIDC + an admin user in production",
+			"action", action,
+		)
+		return nil
+	}
+	if h.sessionSec == nil {
+		return status.Error(codes.Unauthenticated, "session signing not configured")
+	}
+	claims, err := auth.VerifySessionToken(h.sessionSec, token)
+	if err != nil {
+		return status.Error(codes.Unauthenticated, "invalid bearer token")
+	}
+	user, err := h.users.GetByID(ctx, claims.UserID)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return status.Error(codes.Unauthenticated, "user not found")
+		}
+		return status.Errorf(codes.Internal, "resolve user: %v", err)
+	}
+	if user.TenantID != claims.TenantID {
+		return status.Error(codes.Unauthenticated, "tenant membership mismatch")
+	}
+	if !user.IsAdmin {
+		return status.Errorf(codes.PermissionDenied, "admin role required for %s", action)
+	}
+	return nil
+}
+
+// bearerFromMetadata extracts a "Bearer <token>" value from the gRPC
+// authorization metadata. Returns "" when no bearer is present.
+func bearerFromMetadata(ctx context.Context) string {
+	md, ok := metadata.FromIncomingContext(ctx)
+	if !ok {
+		return ""
+	}
+	for _, v := range md.Get("authorization") {
+		if strings.HasPrefix(v, "Bearer ") {
+			return strings.TrimSpace(strings.TrimPrefix(v, "Bearer "))
+		}
+	}
+	return ""
 }
 
 // resolveBearerToken validates a session JWT and returns the bound tenant.
