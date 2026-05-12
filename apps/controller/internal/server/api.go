@@ -619,6 +619,29 @@ type apiPreAuthKeyJSON struct {
 // generation + hash storage contract has to match because both
 // surfaces feed the same redeem path.
 func (h *HTTPServer) apiCreatePreAuthKey(w http.ResponseWriter, r *http.Request, authn *authnContext, tenant *repo.Tenant) {
+	// Pre-auth keys grant peer-registration capability, which is
+	// effectively VPN access for the tenant. Authenticated callers
+	// must be admins; the dev-fallback path (no JWT) is allowed
+	// with a warning so local development without OIDC keeps
+	// working. Operators running prod should configure OIDC and
+	// fronting Caddy ACLs / firewall to lock the bypass off.
+	if authn != nil && authn.claims != nil {
+		user, err := h.users.GetByID(r.Context(), authn.claims.UserID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, fmt.Errorf("resolve user: %w", err))
+			return
+		}
+		if !user.IsAdmin {
+			writeError(w, http.StatusForbidden, errors.New("admin role required to mint pre-auth keys"))
+			return
+		}
+	} else {
+		slog.Warn("preauthkey mint via dev-fallback auth (no JWT) — configure OIDC + an admin user in production",
+			"tenant", tenant.Slug,
+			"path", r.URL.Path,
+		)
+	}
+
 	var req apiCreatePreAuthKeyReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, fmt.Errorf("decode body: %w", err))
