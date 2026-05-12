@@ -12,7 +12,13 @@
 
 html,
 body {
-  @apply bg-white text-zinc-900;
+  /* Page bg is the 70% warm cream surface — bamboo-50 / #FDF6EC. White
+   * cards (Header, FetchErrorState, modal, drawer) then sit on top as
+   * the 25% layer, giving the wabi-sabi paper-and-ink contrast. Body
+   * text stays zinc-900 for legibility; using bamboo-900 (#3D3327)
+   * would still hit AAA contrast against cream but reads softer than
+   * desired for utility text. */
+  @apply bg-bamboo-50 text-zinc-900;
 }
 
 @media (prefers-color-scheme: dark) {
