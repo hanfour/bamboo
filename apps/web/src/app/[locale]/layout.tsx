@@ -6,7 +6,8 @@ import { getMessages } from 'next-intl/server';
 import { notFound } from 'next/navigation';
 import { Saira_Stencil_One } from 'next/font/google';
 import { routing } from '@/i18n/routing';
-import { Header } from '@/components/Header';
+import { TopBar } from '@/components/TopBar';
+import { Sidebar } from '@/components/Sidebar';
 import '../globals.css';
 
 // Saira Stencil One — loaded only for the wordmark via the
@@ -45,8 +46,15 @@ export default async function LocaleLayout({
     <html lang={locale} className={wordmarkFont.variable}>
       <body className="min-h-screen antialiased">
         <NextIntlClientProvider messages={messages}>
-          <Header />
-          <main className="mx-auto max-w-7xl px-6 py-8">{children}</main>
+          {/* Google-Account-style chrome: thin top bar across the
+              width, persistent left sidebar below it for primary nav.
+              Sidebar is hidden under md; a hamburger drawer is a
+              planned follow-up. */}
+          <TopBar />
+          <div className="flex">
+            <Sidebar />
+            <main className="min-w-0 flex-1 px-6 py-8">{children}</main>
+          </div>
         </NextIntlClientProvider>
       </body>
     </html>

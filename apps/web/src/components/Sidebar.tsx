@@ -1,0 +1,153 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+'use client';
+
+import { useTranslations } from 'next-intl';
+import { Link, usePathname } from '@/i18n/routing';
+
+// Sidebar is the persistent left navigation rail.
+//
+// Design target: Google Account / Workspace Admin / GCP Console — a
+// vertical rail with line-icon + label items, where the active item
+// shows as a filled pill (bamboo-100 bg + bamboo-700 text). No
+// underlines (those would echo Tailscale's horizontal-tab chrome).
+//
+// Client component so it can use usePathname for the active state.
+// Hidden on small viewports for now; a hamburger drawer is a planned
+// follow-up but not blocking on the chrome rebuild.
+export function Sidebar() {
+  const t = useTranslations('nav');
+  const pathname = usePathname();
+
+  const items: Array<{
+    href: '/' | '/peers' | '/preauth-keys' | '/acl';
+    label: string;
+    icon: React.ReactNode;
+  }> = [
+    { href: '/', label: t('dashboard'), icon: <HomeIcon /> },
+    { href: '/peers', label: t('peers'), icon: <ServerIcon /> },
+    { href: '/preauth-keys', label: t('preAuthKeys'), icon: <KeyIcon /> },
+    { href: '/acl', label: t('acl'), icon: <ShieldIcon /> },
+  ];
+
+  return (
+    <aside className="sticky top-14 hidden h-[calc(100vh-3.5rem)] w-60 shrink-0 overflow-y-auto border-r border-zinc-200 px-3 py-4 md:block dark:border-zinc-800">
+      <nav>
+        <ul className="space-y-1">
+          {items.map((it) => {
+            const active = isActive(pathname, it.href);
+            return (
+              <li key={it.href}>
+                <Link
+                  href={it.href}
+                  aria-current={active ? 'page' : undefined}
+                  className={[
+                    'flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors',
+                    active
+                      ? 'bg-bamboo-100 font-medium text-bamboo-700 dark:bg-bamboo-900/30 dark:text-bamboo-300'
+                      : 'text-zinc-700 hover:bg-bamboo-50 hover:text-zinc-900 dark:text-zinc-300 dark:hover:bg-bamboo-900/20 dark:hover:text-zinc-100',
+                  ].join(' ')}
+                >
+                  <span
+                    aria-hidden
+                    className={
+                      active
+                        ? 'text-bamboo-700 dark:text-bamboo-300'
+                        : 'text-zinc-500 dark:text-zinc-400'
+                    }
+                  >
+                    {it.icon}
+                  </span>
+                  <span className="truncate">{it.label}</span>
+                </Link>
+              </li>
+            );
+          })}
+        </ul>
+      </nav>
+    </aside>
+  );
+}
+
+function isActive(pathname: string, href: string): boolean {
+  if (href === '/') return pathname === '/';
+  // Treat /peers/anything as the peers entry being active. Same for
+  // /preauth-keys and /acl. Keeps the active pill stable across
+  // sub-routes and search-param-only navigations.
+  return pathname === href || pathname.startsWith(href + '/');
+}
+
+// Outlined icons (stroke-only, 1.5px). Sized via h-5 w-5 inline so the
+// active/inactive color comes from currentColor on the wrapping <span>.
+
+function HomeIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="h-5 w-5"
+    >
+      <path d="M3 12 12 4l9 8" />
+      <path d="M5 10v10h14V10" />
+      <path d="M10 20v-6h4v6" />
+    </svg>
+  );
+}
+
+function ServerIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="h-5 w-5"
+    >
+      <rect x="3" y="4" width="18" height="6" rx="1" />
+      <rect x="3" y="14" width="18" height="6" rx="1" />
+      <path d="M7 7h.01" />
+      <path d="M7 17h.01" />
+    </svg>
+  );
+}
+
+function KeyIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="h-5 w-5"
+    >
+      <circle cx="8" cy="12" r="4" />
+      <path d="M12 12h10" />
+      <path d="M18 12v4" />
+      <path d="M22 12v3" />
+    </svg>
+  );
+}
+
+function ShieldIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="h-5 w-5"
+    >
+      <path d="M12 3 5 6v6c0 4.5 3 8 7 9 4-1 7-4.5 7-9V6l-7-3Z" />
+    </svg>
+  );
+}
