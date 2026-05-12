@@ -44,9 +44,21 @@ type PeerConfig struct {
 //
 // Responsibilities:
 //   - The local Address is taken from resp.Self.Ip (host route, /32).
-//   - Each peer in resp.Peers becomes a PeerConfig with /32 AllowedIPs.
-//   - Endpoints are taken from peer.Endpoints (first non-empty wins for
-//     now; ICE-driven path selection lands in a follow-up).
+//   - Endpoints are taken from peer.Endpoints (first non-empty wins
+//     for now; ICE-driven path selection lands in a follow-up).
+//   - AllowedIPs come from one of two paths, decided by PolicyRevision:
+//
+// When resp.PolicyRevision > 0 the controller is enforcing an authored
+// ACL: peer.AllowedIps is authoritative. A peer with an empty
+// AllowedIps slice is intentionally excluded — the controller's policy
+// engine determined this peer is unreachable from us, and listing it
+// in WireGuard's peer set with no routes would still expose the public
+// key for no benefit.
+//
+// When resp.PolicyRevision == 0 the controller has no policy authored.
+// Each peer gets a single /32 (or /128) route to its tunnel IP — the
+// pre-enforcement default. This keeps tenants without a policy working
+// exactly as they did before this layer landed.
 func BuildDeviceConfig(privKey PrivateKey, resp *bamboov1.RegisterResponse) (*DeviceConfig, error) {
 	if resp == nil || resp.GetSelf() == nil {
 		return nil, fmt.Errorf("register response missing self")
@@ -67,22 +79,42 @@ func BuildDeviceConfig(privKey PrivateKey, resp *bamboov1.RegisterResponse) (*De
 		Address:    selfPrefix,
 	}
 
+	enforcing := resp.GetPolicyRevision() > 0
+
 	for _, p := range resp.GetPeers() {
 		pubKey, err := PublicKeyFromBase64(p.GetWireguardPublicKey())
 		if err != nil {
 			return nil, fmt.Errorf("peer %s pubkey: %w", p.GetId(), err)
 		}
-		peerAddr, err := netip.ParseAddr(p.GetIp())
-		if err != nil {
-			return nil, fmt.Errorf("peer %s ip: %w", p.GetId(), err)
+
+		var allowedIPs []netip.Prefix
+		if enforcing {
+			if len(p.GetAllowedIps()) == 0 {
+				// Policy denies traffic to this peer — drop it entirely.
+				continue
+			}
+			for _, s := range p.GetAllowedIps() {
+				pre, err := netip.ParsePrefix(s)
+				if err != nil {
+					return nil, fmt.Errorf("peer %s allowed_ips %q: %w", p.GetId(), s, err)
+				}
+				allowedIPs = append(allowedIPs, pre)
+			}
+		} else {
+			peerAddr, err := netip.ParseAddr(p.GetIp())
+			if err != nil {
+				return nil, fmt.Errorf("peer %s ip: %w", p.GetId(), err)
+			}
+			peerLen := 32
+			if peerAddr.Is6() {
+				peerLen = 128
+			}
+			allowedIPs = []netip.Prefix{netip.PrefixFrom(peerAddr, peerLen)}
 		}
-		peerLen := 32
-		if peerAddr.Is6() {
-			peerLen = 128
-		}
+
 		pc := PeerConfig{
 			PublicKey:           pubKey,
-			AllowedIPs:          []netip.Prefix{netip.PrefixFrom(peerAddr, peerLen)},
+			AllowedIPs:          allowedIPs,
 			PersistentKeepalive: 25 * time.Second,
 		}
 		if eps := p.GetEndpoints(); len(eps) > 0 {

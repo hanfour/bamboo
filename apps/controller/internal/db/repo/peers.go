@@ -123,19 +123,23 @@ func (r *Peers) GetByID(ctx context.Context, id uuid.UUID) (*Peer, error) {
 }
 
 // UpdateLastSeen sets last_seen_at = now() and status = 'online'.
-// Returns the number of rows affected (0 if the peer no longer exists).
-func (r *Peers) UpdateLastSeen(ctx context.Context, id uuid.UUID) (int64, error) {
-	tag, err := r.pool.Exec(ctx, `
+// Returns the peer's tenant_id so the caller can scope tenant-level
+// lookups (policy, etc.) without a second round-trip. Returns
+// ErrNotFound when the peer no longer exists.
+func (r *Peers) UpdateLastSeen(ctx context.Context, id uuid.UUID) (uuid.UUID, error) {
+	var tenantID uuid.UUID
+	err := r.pool.QueryRow(ctx, `
 		UPDATE peers
 		   SET last_seen_at = now(),
 		       status       = 'online',
 		       updated_at   = now()
 		 WHERE id = $1
-	`, id)
+		RETURNING tenant_id
+	`, id).Scan(&tenantID)
 	if err != nil {
-		return 0, err
+		return uuid.Nil, asNotFound(err)
 	}
-	return tag.RowsAffected(), nil
+	return tenantID, nil
 }
 
 // FindByPubKey returns a peer matching the (tenant_id, wireguard_public_key)

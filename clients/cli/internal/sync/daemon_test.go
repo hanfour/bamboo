@@ -94,7 +94,7 @@ func TestRunWatchPeers_AppliesAfterPeerAdded(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		sync.RunWatchPeers(ctx, cli, app, priv, cache, self.GetId())
+		sync.RunWatchPeers(ctx, cli, app, priv, cache, self.GetId(), nil)
 		close(done)
 	}()
 
@@ -150,7 +150,7 @@ func TestRunWatchPeers_ReconnectsAfterStreamError(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	go sync.RunWatchPeers(ctx, cli, app, priv, cache, self.GetId())
+	go sync.RunWatchPeers(ctx, cli, app, priv, cache, self.GetId(), nil)
 
 	// Wait for first open.
 	var errs chan error
@@ -180,6 +180,94 @@ func TestRunWatchPeers_ReconnectsAfterStreamError(t *testing.T) {
 	}
 	if opens, _, _ := cli.snapshot(); opens < 2 {
 		t.Errorf("expected reconnect (open count >= 2), got %d", opens)
+	}
+}
+
+func TestRunWatchPeers_RefreshesOnPolicyChanged(t *testing.T) {
+	priv, _ := wg.GeneratePrivateKey()
+	self := peer("self", "100.64.0.1")
+	cache := sync.New(self, nil)
+
+	cli := &fakeClient{}
+	app := &fakeApplier{}
+
+	allowedPriv, _ := wg.GeneratePrivateKey()
+	deniedPriv, _ := wg.GeneratePrivateKey()
+	refreshCount := 0
+	refresh := func(_ context.Context) (*bamboov1.RegisterResponse, error) {
+		refreshCount++
+		return &bamboov1.RegisterResponse{
+			PolicyRevision: 7,
+			Self:           self,
+			Peers: []*bamboov1.Peer{
+				{
+					Id:                 "allowed",
+					Ip:                 "100.64.0.5",
+					WireguardPublicKey: allowedPriv.PublicKey().Base64(),
+					AllowedIps:         []string{"100.64.0.5/32"},
+				},
+				{
+					Id:                 "denied",
+					Ip:                 "100.64.0.9",
+					WireguardPublicKey: deniedPriv.PublicKey().Base64(),
+					// AllowedIps empty → policy denies.
+				},
+			},
+		}, nil
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan struct{})
+	go func() {
+		sync.RunWatchPeers(ctx, cli, app, priv, cache, self.GetId(), refresh)
+		close(done)
+	}()
+
+	// Wait for the stream to open.
+	var evts chan *bamboov1.WatchPeersEvent
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		_, evts, _ = cli.snapshot()
+		if evts != nil {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if evts == nil {
+		t.Fatal("stream never opened")
+	}
+
+	evts <- &bamboov1.WatchPeersEvent{
+		Event: &bamboov1.WatchPeersEvent_PolicyChanged{
+			PolicyChanged: &bamboov1.PolicyChanged{PolicyRevision: 7},
+		},
+	}
+
+	deadline = time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		app.mu.Lock()
+		got := app.count
+		app.mu.Unlock()
+		if got >= 1 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	app.mu.Lock()
+	defer app.mu.Unlock()
+	if refreshCount != 1 {
+		t.Errorf("refresh called %d times, want 1", refreshCount)
+	}
+	if app.count != 1 {
+		t.Errorf("Apply count = %d, want 1", app.count)
+	}
+	if app.last == nil || len(app.last.Peers) != 1 {
+		t.Fatalf("last cfg = %+v, want exactly one peer (denied peer dropped)", app.last)
+	}
+	if app.last.Peers[0].AllowedIPs[0].String() != "100.64.0.5/32" {
+		t.Errorf("applied peer AllowedIPs = %v, want [100.64.0.5/32]", app.last.Peers[0].AllowedIPs)
 	}
 }
 

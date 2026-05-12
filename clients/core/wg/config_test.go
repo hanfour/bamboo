@@ -76,6 +76,118 @@ func TestBuildDeviceConfig_BadPeerKey(t *testing.T) {
 	}
 }
 
+func TestBuildDeviceConfig_EnforcingUsesAllowedIps(t *testing.T) {
+	priv, _ := wg.GeneratePrivateKey()
+	peerPriv, _ := wg.GeneratePrivateKey()
+
+	resp := &bamboov1.RegisterResponse{
+		PolicyRevision: 5,
+		Self:           &bamboov1.Peer{Ip: "100.64.0.1"},
+		Peers: []*bamboov1.Peer{
+			{
+				Id:                 "db",
+				Ip:                 "100.64.0.5",
+				WireguardPublicKey: peerPriv.PublicKey().Base64(),
+				AllowedIps:         []string{"100.64.0.5/32"},
+			},
+		},
+	}
+	cfg, err := wg.BuildDeviceConfig(priv, resp)
+	if err != nil {
+		t.Fatalf("BuildDeviceConfig: %v", err)
+	}
+	if len(cfg.Peers) != 1 {
+		t.Fatalf("len(Peers) = %d, want 1", len(cfg.Peers))
+	}
+	if cfg.Peers[0].AllowedIPs[0].String() != "100.64.0.5/32" {
+		t.Errorf("AllowedIPs[0] = %s, want 100.64.0.5/32", cfg.Peers[0].AllowedIPs[0])
+	}
+}
+
+func TestBuildDeviceConfig_EnforcingSkipsPeersWithEmptyAllowedIps(t *testing.T) {
+	priv, _ := wg.GeneratePrivateKey()
+	allowedPriv, _ := wg.GeneratePrivateKey()
+	deniedPriv, _ := wg.GeneratePrivateKey()
+
+	resp := &bamboov1.RegisterResponse{
+		PolicyRevision: 1,
+		Self:           &bamboov1.Peer{Ip: "100.64.0.1"},
+		Peers: []*bamboov1.Peer{
+			{
+				Id:                 "allowed",
+				Ip:                 "100.64.0.5",
+				WireguardPublicKey: allowedPriv.PublicKey().Base64(),
+				AllowedIps:         []string{"100.64.0.5/32"},
+			},
+			{
+				Id:                 "denied",
+				Ip:                 "100.64.0.9",
+				WireguardPublicKey: deniedPriv.PublicKey().Base64(),
+				// AllowedIps left empty by the controller — policy denies.
+			},
+		},
+	}
+	cfg, err := wg.BuildDeviceConfig(priv, resp)
+	if err != nil {
+		t.Fatalf("BuildDeviceConfig: %v", err)
+	}
+	if len(cfg.Peers) != 1 {
+		t.Fatalf("len(Peers) = %d, want 1 (denied peer should be excluded)", len(cfg.Peers))
+	}
+	if cfg.Peers[0].AllowedIPs[0].String() != "100.64.0.5/32" {
+		t.Errorf("AllowedIPs[0] = %s, want 100.64.0.5/32", cfg.Peers[0].AllowedIPs[0])
+	}
+}
+
+func TestBuildDeviceConfig_NoPolicyFallsBackToFullMesh(t *testing.T) {
+	priv, _ := wg.GeneratePrivateKey()
+	peerPriv, _ := wg.GeneratePrivateKey()
+
+	resp := &bamboov1.RegisterResponse{
+		// PolicyRevision: 0 (the zero value) → full-mesh fallback.
+		Self: &bamboov1.Peer{Ip: "100.64.0.1"},
+		Peers: []*bamboov1.Peer{
+			{
+				Id:                 "peer",
+				Ip:                 "100.64.0.2",
+				WireguardPublicKey: peerPriv.PublicKey().Base64(),
+				// AllowedIps deliberately left empty by the controller.
+			},
+		},
+	}
+	cfg, err := wg.BuildDeviceConfig(priv, resp)
+	if err != nil {
+		t.Fatalf("BuildDeviceConfig: %v", err)
+	}
+	if len(cfg.Peers) != 1 {
+		t.Fatalf("len(Peers) = %d, want 1 (full mesh keeps every peer)", len(cfg.Peers))
+	}
+	if cfg.Peers[0].AllowedIPs[0].String() != "100.64.0.2/32" {
+		t.Errorf("AllowedIPs[0] = %s, want 100.64.0.2/32 (derived from peer.IP)", cfg.Peers[0].AllowedIPs[0])
+	}
+}
+
+func TestBuildDeviceConfig_EnforcingRejectsMalformedAllowedIps(t *testing.T) {
+	priv, _ := wg.GeneratePrivateKey()
+	peerPriv, _ := wg.GeneratePrivateKey()
+
+	resp := &bamboov1.RegisterResponse{
+		PolicyRevision: 1,
+		Self:           &bamboov1.Peer{Ip: "100.64.0.1"},
+		Peers: []*bamboov1.Peer{
+			{
+				Id:                 "p",
+				Ip:                 "100.64.0.2",
+				WireguardPublicKey: peerPriv.PublicKey().Base64(),
+				AllowedIps:         []string{"not a cidr"},
+			},
+		},
+	}
+	if _, err := wg.BuildDeviceConfig(priv, resp); err == nil {
+		t.Error("expected error for malformed AllowedIps")
+	}
+}
+
 func TestDeviceConfig_WGQuick_Format(t *testing.T) {
 	priv, _ := wg.GeneratePrivateKey()
 	peerPriv, _ := wg.GeneratePrivateKey()

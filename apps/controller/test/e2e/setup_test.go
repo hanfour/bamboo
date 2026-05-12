@@ -41,6 +41,7 @@ type fixture struct {
 	conn       *grpc.ClientConn
 	auth       bamboov1.AuthServiceClient
 	coord      bamboov1.CoordinatorServiceClient
+	policy     bamboov1.PolicyServiceClient
 	tenantSlug string // unique per test, prevents cross-test interference
 	httpURL    string // base URL of the in-process HTTP fixture
 	httpSrv    *httptest.Server
@@ -99,6 +100,7 @@ func startFixture(t *testing.T) *fixture {
 		conn:       conn,
 		auth:       bamboov1.NewAuthServiceClient(conn),
 		coord:      bamboov1.NewCoordinatorServiceClient(conn),
+		policy:     bamboov1.NewPolicyServiceClient(conn),
 		tenantSlug: fmt.Sprintf("e2e-%s", uuid.NewString()[:8]),
 		httpURL:    httpSrv.URL,
 		httpSrv:    httpSrv,
@@ -126,7 +128,7 @@ func buildGRPCFixture(pool *db.Pool) (*grpc.Server, *handlers.CoordinatorHandler
 	coord := handlers.NewCoordinatorHandler(pool, authHandler, bus)
 	bamboov1.RegisterAuthServiceServer(s, authHandler)
 	bamboov1.RegisterCoordinatorServiceServer(s, coord)
-	bamboov1.RegisterPolicyServiceServer(s, handlers.NewPolicyHandler(pool, nil))
+	bamboov1.RegisterPolicyServiceServer(s, handlers.NewPolicyHandler(pool, nil, bus))
 	bamboov1.RegisterTelemetryServiceServer(s, handlers.NewTelemetryHandler(pool, nil))
 	return s, coord
 }
