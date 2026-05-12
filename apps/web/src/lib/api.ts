@@ -53,6 +53,8 @@ type ApiPeer = {
   createdAt: string;
   lastSeenAt?: string;
   lastHandshakeAt?: string;
+  ownerEmail?: string;
+  ownerDisplayName?: string;
 };
 
 function apiPeerToPeer(p: ApiPeer): Peer {
@@ -73,6 +75,8 @@ function apiPeerToPeer(p: ApiPeer): Peer {
     createdAt: p.createdAt,
     lastSeenAt: p.lastSeenAt,
     lastHandshakeAt: p.lastHandshakeAt,
+    ownerEmail: p.ownerEmail,
+    ownerDisplayName: p.ownerDisplayName,
   };
 }
 

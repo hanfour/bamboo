@@ -81,11 +81,13 @@
     "columns": {
       "hostname": "主機名稱",
       "ip": "IP",
+      "owner": "擁有者",
       "tags": "標籤",
       "os": "作業系統",
       "status": "狀態",
       "lastSeen": "最後上線"
     },
+    "ownerUnknown": "—",
     "status": {
       "online": "在線",
       "offline": "離線",
@@ -108,6 +110,7 @@
       "fields": {
         "hostname": "主機名稱",
         "ip": "IP",
+        "owner": "擁有者",
         "os": "作業系統",
         "clientVersion": "用戶端版本",
         "tags": "標籤",
