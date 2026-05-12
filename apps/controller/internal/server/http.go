@@ -33,6 +33,7 @@ type HTTPServer struct {
 	audits      *repo.AuditLogs
 	keys        *repo.PreAuthKeys
 	dns         *repo.TenantDNS
+	invitations *repo.UserInvitations
 	traces      *clickhouse.Traces
 	anomalies   *clickhouse.Anomalies
 	coord       *handlers.CoordinatorHandler
@@ -59,22 +60,23 @@ func NewHTTPServer(
 ) *HTTPServer {
 	mux := http.NewServeMux()
 	h := &HTTPServer{
-		addr:      addr,
-		providers: providers,
-		tenants:   repo.NewTenants(pool),
-		users:     repo.NewUsers(pool),
-		peers:     repo.NewPeers(pool),
-		policies:  repo.NewPolicies(pool),
-		relays:    repo.NewRelays(pool),
-		audits:    repo.NewAuditLogs(pool),
-		keys:      repo.NewPreAuthKeys(pool),
-		dns:       repo.NewTenantDNS(pool),
-		traces:    clickhouse.NewTraces(ch),
-		anomalies: clickhouse.NewAnomalies(ch),
-		coord:     coord,
-		secret:    secret,
-		baseURL:   baseURL,
-		ttl:       ttl,
+		addr:        addr,
+		providers:   providers,
+		tenants:     repo.NewTenants(pool),
+		users:       repo.NewUsers(pool),
+		peers:       repo.NewPeers(pool),
+		policies:    repo.NewPolicies(pool),
+		relays:      repo.NewRelays(pool),
+		audits:      repo.NewAuditLogs(pool),
+		keys:        repo.NewPreAuthKeys(pool),
+		dns:         repo.NewTenantDNS(pool),
+		invitations: repo.NewUserInvitations(pool),
+		traces:      clickhouse.NewTraces(ch),
+		anomalies:   clickhouse.NewAnomalies(ch),
+		coord:       coord,
+		secret:      secret,
+		baseURL:     baseURL,
+		ttl:         ttl,
 	}
 	mux.HandleFunc("/auth/", h.routeAuth)
 	mux.HandleFunc("/auth/sign-out", h.handleSignOut)

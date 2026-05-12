@@ -146,6 +146,22 @@ func (h *HTTPServer) routeAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Tenant-scoped invitations.
+	//   GET  /api/v1/invitations  → list (admin)
+	//   POST /api/v1/invitations  → mint (admin)
+	// Sub-paths (accept / revoke per-id) land in a follow-up.
+	if r.URL.Path == "/api/v1/invitations" {
+		switch r.Method {
+		case http.MethodGet:
+			h.apiListInvitations(w, r, authn, tenant)
+		case http.MethodPost:
+			h.apiCreateInvitation(w, r, authn, tenant)
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+		return
+	}
+
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -1299,6 +1315,129 @@ func (h *HTTPServer) apiUsers(w http.ResponseWriter, r *http.Request, authn *aut
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"users": out})
+}
+
+// apiInvitationJSON is the wire shape for /api/v1/invitations rows.
+// Mint response includes the plaintext token; subsequent list reads
+// omit it (we only have the bcrypt hash on disk). Status is derived
+// in the renderer from accepted_at / revoked_at / expires_at — same
+// pattern as PreAuthKeys.
+type apiInvitationJSON struct {
+	ID         string     `json:"id"`
+	Email      string     `json:"email"`
+	IsAdmin    bool       `json:"isAdmin,omitempty"`
+	InvitedBy  string     `json:"invitedBy,omitempty"`
+	CreatedAt  time.Time  `json:"createdAt"`
+	ExpiresAt  time.Time  `json:"expiresAt"`
+	AcceptedAt *time.Time `json:"acceptedAt,omitempty"`
+	RevokedAt  *time.Time `json:"revokedAt,omitempty"`
+	// Token is set only on the mint response. The plaintext is shown
+	// once to the inviter, then thrown away — only the bcrypt hash
+	// persists. List rows leave this empty.
+	Token string `json:"token,omitempty"`
+}
+
+type apiCreateInvitationReq struct {
+	Email   string `json:"email"`
+	IsAdmin bool   `json:"isAdmin,omitempty"`
+	TTLDays int    `json:"ttlDays,omitempty"` // optional; default 7
+}
+
+// apiCreateInvitation mints a tenant invitation. Admin-only. No email
+// delivery yet — this Phase A stub stores the row and returns the
+// plaintext token in the response so an admin can deliver it out-of-
+// band (Slack DM, paste). SMTP integration + a /invitations/{id}/
+// accept endpoint land in follow-ups.
+func (h *HTTPServer) apiCreateInvitation(w http.ResponseWriter, r *http.Request, authn *authnContext, tenant *repo.Tenant) {
+	if !h.requireAdmin(w, r, authn, tenant, "user.invite") {
+		return
+	}
+	var req apiCreateInvitationReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("decode body: %w", err))
+		return
+	}
+	if req.Email == "" {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("email is required"))
+		return
+	}
+	ttl := 7
+	if req.TTLDays > 0 {
+		ttl = req.TTLDays
+	}
+	expiresAt := time.Now().Add(time.Duration(ttl) * 24 * time.Hour)
+
+	id := uuid.New()
+	plaintext, hash, err := auth.GenerateInviteToken(id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("generate token: %w", err))
+		return
+	}
+
+	var invitedBy *uuid.UUID
+	if authn != nil && authn.claims != nil {
+		uid := authn.claims.UserID
+		invitedBy = &uid
+	}
+
+	inv := &repo.UserInvitation{
+		TenantID:  tenant.ID,
+		Email:     req.Email,
+		IsAdmin:   req.IsAdmin,
+		TokenHash: hash,
+		InvitedBy: invitedBy,
+		ExpiresAt: expiresAt,
+	}
+	// Pre-assign the ID so it matches the token's embedded id; Create
+	// will return the persisted row (id columns will match).
+	inv.ID = id
+	created, err := h.invitations.Create(r.Context(), inv)
+	if err != nil {
+		// Duplicate active invitation surfaces as a unique-index
+		// violation. Surface as 409 so the UI can render "already
+		// invited" without polling.
+		writeError(w, http.StatusConflict, fmt.Errorf("create invitation: %w", err))
+		return
+	}
+	out := invitationToJSON(created)
+	out.Token = plaintext
+	writeJSON(w, http.StatusCreated, out)
+}
+
+// apiListInvitations returns every invitation in the tenant. Admin-
+// only. Token field is empty for every row — the plaintext is gone
+// after the mint response is sent.
+func (h *HTTPServer) apiListInvitations(w http.ResponseWriter, r *http.Request, authn *authnContext, tenant *repo.Tenant) {
+	if !h.requireAdmin(w, r, authn, tenant, "user.invite.list") {
+		return
+	}
+	invs, err := h.invitations.ListByTenant(r.Context(), tenant.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	out := make([]apiInvitationJSON, 0, len(invs))
+	for _, inv := range invs {
+		out = append(out, invitationToJSON(inv))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"invitations": out})
+}
+
+func invitationToJSON(inv *repo.UserInvitation) apiInvitationJSON {
+	invitedBy := ""
+	if inv.InvitedBy != nil {
+		invitedBy = inv.InvitedBy.String()
+	}
+	return apiInvitationJSON{
+		ID:         inv.ID.String(),
+		Email:      inv.Email,
+		IsAdmin:    inv.IsAdmin,
+		InvitedBy:  invitedBy,
+		CreatedAt:  inv.CreatedAt,
+		ExpiresAt:  inv.ExpiresAt,
+		AcceptedAt: inv.AcceptedAt,
+		RevokedAt:  inv.RevokedAt,
+	}
 }
 
 func (h *HTTPServer) apiOverview(w http.ResponseWriter, r *http.Request, tenant *repo.Tenant) {
