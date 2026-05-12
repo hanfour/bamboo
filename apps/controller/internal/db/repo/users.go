@@ -76,6 +76,37 @@ func (r *Users) GetByID(ctx context.Context, id uuid.UUID) (*User, error) {
 	return &u, nil
 }
 
+// ListByTenant returns every active (non-deleted) user in the tenant,
+// most recently active first. updated_at is bumped on every UpsertOIDC
+// call, so ordering by it yields a "recently logged in" sort that
+// works well for the Users admin page even without a dedicated
+// last_seen_at column.
+func (r *Users) ListByTenant(ctx context.Context, tenantID uuid.UUID) ([]*User, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT id, tenant_id, email, display_name, oidc_provider, oidc_subject, is_admin, created_at, updated_at
+		FROM users
+		WHERE tenant_id = $1 AND deleted_at IS NULL
+		ORDER BY updated_at DESC
+	`, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*User
+	for rows.Next() {
+		var u User
+		if err := rows.Scan(
+			&u.ID, &u.TenantID, &u.Email, &u.DisplayName,
+			&u.OIDCProvider, &u.OIDCSubject, &u.IsAdmin,
+			&u.CreatedAt, &u.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		out = append(out, &u)
+	}
+	return out, rows.Err()
+}
+
 // GetByEmail returns a user within the given tenant by email.
 func (r *Users) GetByEmail(ctx context.Context, tenantID uuid.UUID, email string) (*User, error) {
 	var u User

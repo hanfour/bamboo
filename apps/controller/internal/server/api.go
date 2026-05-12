@@ -166,6 +166,8 @@ func (h *HTTPServer) routeAPI(w http.ResponseWriter, r *http.Request) {
 		h.apiActivity(w, r, tenant)
 	case "/api/v1/dns":
 		h.apiDNS(w, r, authn, tenant)
+	case "/api/v1/users":
+		h.apiUsers(w, r, authn, tenant)
 	default:
 		writeRouteMissing(w)
 	}
@@ -1241,6 +1243,54 @@ func (h *HTTPServer) apiDNS(w http.ResponseWriter, r *http.Request, _ *authnCont
 		UpdatedAt:          cfg.UpdatedAt,
 		UpdatedBy:          updatedBy,
 	})
+}
+
+// apiUserListJSON is the wire shape for /api/v1/users rows. We expose
+// the columns the Users admin page needs (identity + role + most-
+// recent activity proxy) and omit OIDC subject — that's an internal
+// linkage, not useful to the operator.
+type apiUserListJSON struct {
+	ID           string    `json:"id"`
+	Email        string    `json:"email"`
+	DisplayName  string    `json:"displayName,omitempty"`
+	OIDCProvider string    `json:"oidcProvider,omitempty"`
+	IsAdmin      bool      `json:"isAdmin,omitempty"`
+	CreatedAt    time.Time `json:"createdAt"`
+	UpdatedAt    time.Time `json:"updatedAt"`
+}
+
+// apiUsers returns every user in the request tenant. Admin-gated:
+// member-role accounts get 403, matching the same RBAC contract as
+// PreAuthKey listing. Mutation endpoints (invite / role-change /
+// delete) are out of scope for this Phase A skeleton and will land
+// in a follow-up PR once the email + audit pieces are designed.
+func (h *HTTPServer) apiUsers(w http.ResponseWriter, r *http.Request, authn *authnContext, tenant *repo.Tenant) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
+		writeError(w, http.StatusMethodNotAllowed, fmt.Errorf("method not allowed"))
+		return
+	}
+	if !h.requireAdmin(w, r, authn, tenant, "user.list") {
+		return
+	}
+	users, err := h.users.ListByTenant(r.Context(), tenant.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	out := make([]apiUserListJSON, 0, len(users))
+	for _, u := range users {
+		out = append(out, apiUserListJSON{
+			ID:           u.ID.String(),
+			Email:        u.Email,
+			DisplayName:  u.DisplayName,
+			OIDCProvider: u.OIDCProvider,
+			IsAdmin:      u.IsAdmin,
+			CreatedAt:    u.CreatedAt,
+			UpdatedAt:    u.UpdatedAt,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"users": out})
 }
 
 func (h *HTTPServer) apiOverview(w http.ResponseWriter, r *http.Request, tenant *repo.Tenant) {
