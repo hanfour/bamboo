@@ -206,5 +206,25 @@
     "ago": "{value} ago",
     "never": "Never",
     "loading": "Loading…"
+  },
+  "fetchError": {
+    "unauthorized": {
+      "title": "Sign in to continue",
+      "body": "This page needs an authenticated session. Sign in with the identity provider configured for your tenant.",
+      "signIn": "Sign in"
+    },
+    "forbidden": {
+      "title": "Admin access required",
+      "body": "Your account doesn't have permission to view this page. Ask a tenant admin to grant you the role."
+    },
+    "unreachable": {
+      "title": "Couldn't reach the controller",
+      "body": "The controller didn't respond. Check your connection, then try again.",
+      "retry": "Retry"
+    },
+    "notFound": {
+      "title": "Not found",
+      "body": "The resource is gone, or the URL is stale."
+    }
   }
 }
