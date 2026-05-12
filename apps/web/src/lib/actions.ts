@@ -120,6 +120,72 @@ export async function mintPreAuthKeyAction(input: {
   }
 }
 
+// InviteResult adds the minted invitation token on success. Used by
+// inviteUserAction; the modal needs the plaintext to display it once
+// — the controller stores only the bcrypt hash, so subsequent GETs
+// will not return it. `duplicate` is set on 409 so the UI can render
+// a friendlier "already invited this address" message instead of the
+// generic status-code error.
+export type InviteResult =
+  | {
+      ok: true;
+      id: string;
+      email: string;
+      token: string;
+      expiresAt: string;
+    }
+  | { ok: false; error: string; duplicate?: boolean };
+
+// inviteUserAction mints a tenant invitation. Admin-only on the wire
+// (the controller's requireAdmin gate returns 403 for member-role
+// callers). The plaintext token is shown in the result modal once;
+// subsequent reads return only the bcrypt hash.
+//
+// Currently the redeem path (OIDC-callback claim-on-first-login) is
+// not wired — the UI surfaces this honestly in the result modal so
+// admins don't distribute tokens that can't yet be used.
+export async function inviteUserAction(input: {
+  email: string;
+  isAdmin: boolean;
+}): Promise<InviteResult> {
+  try {
+    const res = await fetch(`${BASE}/api/v1/invitations`, {
+      method: 'POST',
+      headers: await buildHeaders(),
+      body: JSON.stringify({
+        email: input.email.trim(),
+        isAdmin: input.isAdmin,
+      }),
+      cache: 'no-store',
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      const duplicate = res.status === 409;
+      return {
+        ok: false,
+        error: `${res.status} ${text || res.statusText}`,
+        ...(duplicate ? { duplicate: true } : {}),
+      };
+    }
+    const body = (await res.json()) as {
+      id: string;
+      email: string;
+      token: string;
+      expiresAt: string;
+    };
+    revalidatePath('/[locale]/users', 'page');
+    return {
+      ok: true,
+      id: body.id,
+      email: body.email,
+      token: body.token,
+      expiresAt: body.expiresAt,
+    };
+  } catch (e) {
+    return { ok: false, error: (e as Error).message };
+  }
+}
+
 // revokePreAuthKeyAction marks a pre-auth key as revoked. Idempotent
 // at the controller (re-revoking returns 204), so the UI doesn't
 // have to guard against double-clicks.
