@@ -80,7 +80,7 @@ func (h *CoordinatorHandler) Register(ctx context.Context, req *bamboov1.Registe
 		return nil, status.Error(codes.InvalidArgument, "hostname is required")
 	}
 
-	tenant, err := h.resolveTenant(ctx, req)
+	tenant, ownerUserID, err := h.resolveCredential(ctx, req)
 	if err != nil {
 		return nil, err
 	}
@@ -123,6 +123,7 @@ func (h *CoordinatorHandler) Register(ctx context.Context, req *bamboov1.Registe
 
 		self, err = h.peers.Insert(ctx, &repo.Peer{
 			TenantID:           tenant.ID,
+			UserID:             ownerUserID,
 			Hostname:           req.GetHostname(),
 			WireGuardPublicKey: req.GetWireguardPublicKey(),
 			IP:                 ip,
@@ -297,11 +298,17 @@ func (h *CoordinatorHandler) SubscribePeer(ctx context.Context, peerIDStr string
 	return ch, cancel, nil
 }
 
-// resolveTenant chooses the tenant for a Register call by precedence:
-//  1. pre_auth_key_secret credential -> tenant from the key
-//  2. bearer_token credential -> resolved via the AuthHandler
+// resolveCredential chooses the tenant + owning user for a Register
+// call by precedence:
+//
+//  1. pre_auth_key_secret credential -> tenant from the key, owner =
+//     the user who minted the key (pre_auth_keys.created_by). Lets us
+//     attribute new peers to a human admin in the Users page.
+//  2. bearer_token credential -> resolved via the AuthHandler. owner
+//     = nil today; will become the bearer's user when bearer tokens
+//     learn user-scoped identity.
 //  3. x-tenant-slug metadata fallback (dev convenience only — rejected
-//     in prod mode where requireAuth=true)
+//     in prod mode where requireAuth=true). owner = nil.
 //
 // The prod-mode rejection is the gate the project-understanding doc
 // Finding #1 calls for: a caller that knows a tenant slug should not
@@ -310,33 +317,34 @@ func (h *CoordinatorHandler) SubscribePeer(ctx context.Context, peerIDStr string
 // onboarding credential) or a bearer/session token issued by the
 // controller. The REST adapter has its own corresponding check; this
 // path covers gRPC Register.
-func (h *CoordinatorHandler) resolveTenant(ctx context.Context, req *bamboov1.RegisterRequest) (*repo.Tenant, error) {
+func (h *CoordinatorHandler) resolveCredential(ctx context.Context, req *bamboov1.RegisterRequest) (*repo.Tenant, *uuid.UUID, error) {
 	if secret := req.GetPreAuthKeySecret(); secret != "" {
 		key, err := h.auth.redeemAndReturnKey(ctx, secret)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		t, err := h.tenants.GetByID(ctx, key.TenantID)
 		if err != nil {
-			return nil, status.Errorf(codes.Internal, "tenant by id: %v", err)
+			return nil, nil, status.Errorf(codes.Internal, "tenant by id: %v", err)
 		}
-		return t, nil
+		return t, key.CreatedBy, nil
 	}
 
 	if token := req.GetBearerToken(); token != "" {
-		return h.auth.resolveBearerToken(ctx, token)
+		t, err := h.auth.resolveBearerToken(ctx, token)
+		return t, nil, err
 	}
 
 	if h.requireAuth {
-		return nil, status.Error(codes.PermissionDenied, "Register requires a pre-auth key or bearer credential when require_auth is enabled")
+		return nil, nil, status.Error(codes.PermissionDenied, "Register requires a pre-auth key or bearer credential when require_auth is enabled")
 	}
 
 	slug := tenantSlugFromMetadata(ctx)
 	t, err := h.tenants.GetOrCreate(ctx, slug, "Default Tenant", "100.64.0.0/24")
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "tenant resolve: %v", err)
+		return nil, nil, status.Errorf(codes.Internal, "tenant resolve: %v", err)
 	}
-	return t, nil
+	return t, nil, nil
 }
 
 // tenantSlugFromMetadata extracts the tenant slug from gRPC metadata.

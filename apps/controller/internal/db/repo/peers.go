@@ -66,6 +66,13 @@ type Peer struct {
 	UpdatedAt       time.Time
 	LastSeenAt      *time.Time
 	LastHandshakeAt *time.Time // strictly the WG handshake time; NULL = never handshook
+	// OwnerEmail / OwnerDisplayName are populated only by read paths
+	// that LEFT JOIN users (ListByTenant, GetByID). For Insert /
+	// Update paths and methods that don't join, these stay empty.
+	// They mirror users.email / users.display_name for the row
+	// identified by peer.user_id. Empty when peer.user_id is NULL.
+	OwnerEmail       string
+	OwnerDisplayName string
 }
 
 // Insert creates a new peer. Returns the persisted row.
@@ -99,25 +106,39 @@ func (r *Peers) Insert(ctx context.Context, p *Peer) (*Peer, error) {
 }
 
 // GetByID returns a peer by primary key.
+//
+// LEFT JOINs users so callers (drawer / list) can show the owner
+// alongside peer details without a second round-trip. owner_email /
+// owner_display_name are empty strings when peer.user_id is NULL.
 func (r *Peers) GetByID(ctx context.Context, id uuid.UUID) (*Peer, error) {
 	var p Peer
+	var ownerEmail, ownerDisplay *string
 	err := r.pool.QueryRow(ctx, `
-		SELECT id, tenant_id, user_id, hostname, wireguard_public_key,
-		       host(ip), os, client_version, status, endpoints,
-		       wg_endpoint, rx_bytes, tx_bytes,
-		       created_at, updated_at, last_seen_at, last_handshake_at,
-		       `+peerTagsSubquery+`
+		SELECT peers.id, peers.tenant_id, peers.user_id, peers.hostname, peers.wireguard_public_key,
+		       host(peers.ip), peers.os, peers.client_version, peers.status, peers.endpoints,
+		       peers.wg_endpoint, peers.rx_bytes, peers.tx_bytes,
+		       peers.created_at, peers.updated_at, peers.last_seen_at, peers.last_handshake_at,
+		       `+peerTagsSubquery+`,
+		       users.email, users.display_name
 		FROM peers
-		WHERE id = $1
+		LEFT JOIN users ON users.id = peers.user_id AND users.deleted_at IS NULL
+		WHERE peers.id = $1
 	`, id).Scan(
 		&p.ID, &p.TenantID, &p.UserID, &p.Hostname, &p.WireGuardPublicKey,
 		&p.IP, &p.OS, &p.ClientVersion, &p.Status, &p.Endpoints,
 		&p.WGEndpoint, &p.RxBytes, &p.TxBytes,
 		&p.CreatedAt, &p.UpdatedAt, &p.LastSeenAt, &p.LastHandshakeAt,
 		&p.Tags,
+		&ownerEmail, &ownerDisplay,
 	)
 	if err != nil {
 		return nil, asNotFound(err)
+	}
+	if ownerEmail != nil {
+		p.OwnerEmail = *ownerEmail
+	}
+	if ownerDisplay != nil {
+		p.OwnerDisplayName = *ownerDisplay
 	}
 	return &p, nil
 }
@@ -168,16 +189,23 @@ func (r *Peers) FindByPubKey(ctx context.Context, tenantID uuid.UUID, pubKey str
 }
 
 // ListByTenant returns all peers within a tenant, ordered by IP.
+//
+// LEFT JOINs users so the admin Peers page can show the owning user
+// alongside each row without a second N+1 round-trip. Empty owner_*
+// columns when peer.user_id is NULL (e.g. legacy peers registered
+// via dev-fallback before user attribution was wired).
 func (r *Peers) ListByTenant(ctx context.Context, tenantID uuid.UUID) ([]*Peer, error) {
 	rows, err := r.pool.Query(ctx, `
-		SELECT id, tenant_id, user_id, hostname, wireguard_public_key,
-		       host(ip), os, client_version, status, endpoints,
-		       wg_endpoint, rx_bytes, tx_bytes,
-		       created_at, updated_at, last_seen_at, last_handshake_at,
-		       `+peerTagsSubquery+`
+		SELECT peers.id, peers.tenant_id, peers.user_id, peers.hostname, peers.wireguard_public_key,
+		       host(peers.ip), peers.os, peers.client_version, peers.status, peers.endpoints,
+		       peers.wg_endpoint, peers.rx_bytes, peers.tx_bytes,
+		       peers.created_at, peers.updated_at, peers.last_seen_at, peers.last_handshake_at,
+		       `+peerTagsSubquery+`,
+		       users.email, users.display_name
 		FROM peers
-		WHERE tenant_id = $1
-		ORDER BY ip
+		LEFT JOIN users ON users.id = peers.user_id AND users.deleted_at IS NULL
+		WHERE peers.tenant_id = $1
+		ORDER BY peers.ip
 	`, tenantID)
 	if err != nil {
 		return nil, err
@@ -187,14 +215,22 @@ func (r *Peers) ListByTenant(ctx context.Context, tenantID uuid.UUID) ([]*Peer, 
 	var peers []*Peer
 	for rows.Next() {
 		var p Peer
+		var ownerEmail, ownerDisplay *string
 		if err := rows.Scan(
 			&p.ID, &p.TenantID, &p.UserID, &p.Hostname, &p.WireGuardPublicKey,
 			&p.IP, &p.OS, &p.ClientVersion, &p.Status, &p.Endpoints,
 			&p.WGEndpoint, &p.RxBytes, &p.TxBytes,
 			&p.CreatedAt, &p.UpdatedAt, &p.LastSeenAt, &p.LastHandshakeAt,
 			&p.Tags,
+			&ownerEmail, &ownerDisplay,
 		); err != nil {
 			return nil, err
+		}
+		if ownerEmail != nil {
+			p.OwnerEmail = *ownerEmail
+		}
+		if ownerDisplay != nil {
+			p.OwnerDisplayName = *ownerDisplay
 		}
 		peers = append(peers, &p)
 	}

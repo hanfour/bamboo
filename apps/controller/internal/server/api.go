@@ -417,6 +417,12 @@ type apiPeerJSON struct {
 	CreatedAt          time.Time  `json:"createdAt"`
 	LastSeenAt         *time.Time `json:"lastSeenAt,omitempty"`
 	LastHandshakeAt    *time.Time `json:"lastHandshakeAt,omitempty"`
+	// Owner is populated only by read paths that LEFT JOIN users
+	// (list + get). Empty when peer.user_id is NULL — legacy peers
+	// registered before owner attribution was wired (dev-fallback or
+	// pre-auth keys minted without a session) carry no owner.
+	OwnerEmail       string `json:"ownerEmail,omitempty"`
+	OwnerDisplayName string `json:"ownerDisplayName,omitempty"`
 }
 
 func peerToJSON(p *repo.Peer) apiPeerJSON {
@@ -445,6 +451,8 @@ func peerToJSON(p *repo.Peer) apiPeerJSON {
 		CreatedAt:          p.CreatedAt,
 		LastSeenAt:         p.LastSeenAt,
 		LastHandshakeAt:    p.LastHandshakeAt,
+		OwnerEmail:         p.OwnerEmail,
+		OwnerDisplayName:   p.OwnerDisplayName,
 	}
 }
 
