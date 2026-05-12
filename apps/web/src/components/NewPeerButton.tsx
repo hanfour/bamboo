@@ -4,6 +4,7 @@
 
 import { useRef, useState, useTransition } from 'react';
 import { useTranslations } from 'next-intl';
+import { QRCodeSVG } from 'qrcode.react';
 import { mintPreAuthKeyAction } from '@/lib/actions';
 import { useDialogA11y } from '@/hooks/useDialogA11y';
 
@@ -227,6 +228,19 @@ function ResultView({
   // window is available. SSR sees only an empty modal frame.
   const controllerURL = typeof window !== 'undefined' ? window.location.origin : '';
 
+  // QR payload: a small JSON envelope the Apple/Android client
+  // can scan to auto-fill its three connection fields. The "type"
+  // tag lets the client identify a bamboo config QR vs an
+  // arbitrary scan; bumping it (v2) is how we'd add fields
+  // without breaking older clients. Stays well under the ~1 KB
+  // limit a Version-10 QR comfortably renders at modal size.
+  const qrPayload = JSON.stringify({
+    type: 'bamboo.config.v1',
+    controllerUrl: controllerURL,
+    tenantSlug,
+    preAuthKey: secret,
+  });
+
   return (
     <div className="space-y-4">
       <p className="text-sm text-zinc-700 dark:text-zinc-300">
@@ -238,9 +252,28 @@ function ResultView({
         </p>
       )}
 
-      <CopyableField label={t('fields.controllerURL')} value={controllerURL} mono />
-      <CopyableField label={t('fields.tenantSlug')} value={tenantSlug} mono />
-      <CopyableField label={t('fields.preAuthKey')} value={secret} mono secret />
+      <div className="flex flex-col items-center gap-2 rounded-md border border-zinc-200 bg-white px-4 py-4 dark:border-zinc-800 dark:bg-zinc-900">
+        <div className="rounded-md bg-white p-2">
+          <QRCodeSVG
+            value={qrPayload}
+            size={180}
+            level="M"
+            aria-label={t('qrLabel')}
+          />
+        </div>
+        <p className="text-center text-xs text-zinc-500 dark:text-zinc-400">{t('qrHint')}</p>
+      </div>
+
+      <details className="space-y-2 text-sm">
+        <summary className="cursor-pointer select-none text-xs uppercase tracking-wide text-zinc-500 hover:text-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-200">
+          {t('manualFieldsToggle')}
+        </summary>
+        <div className="space-y-2 pt-2">
+          <CopyableField label={t('fields.controllerURL')} value={controllerURL} mono />
+          <CopyableField label={t('fields.tenantSlug')} value={tenantSlug} mono />
+          <CopyableField label={t('fields.preAuthKey')} value={secret} mono secret />
+        </div>
+      </details>
 
       <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/40 dark:text-amber-300">
         {t('oneShotWarning')}
