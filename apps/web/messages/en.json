@@ -312,6 +312,17 @@
       "link": "Go to Pre-auth keys"
     }
   },
+  "invite": {
+    "title": "You've been invited",
+    "subtitle": "An admin invited you to a bamboo tenant. Sign in with the email address the invitation was sent to; the system will accept the invitation and create your account automatically.",
+    "signInWithGoogle": "Continue with Google to accept",
+    "tokenMissing": {
+      "title": "Missing invite token",
+      "body": "This link doesn't include a ?token parameter. Ask the admin for the full invite link."
+    },
+    "emailHint": "Sign in with the same email the invite was issued to — anything else is rejected.",
+    "expiryHint": "Invitations expire. Ask the admin to re-issue if the link no longer works."
+  },
   "common": {
     "ago": "{value} ago",
     "never": "Never",
