@@ -29,6 +29,7 @@
     "online": "在線",
     "offline": "離線",
     "policyRevision": "政策版本",
+    "openRecommendations": "待處理建議",
     "recentActivity": "最近活動",
     "activity": {
       "empty": "尚無活動紀錄。",

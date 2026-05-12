@@ -29,6 +29,7 @@
     "online": "Online",
     "offline": "Offline",
     "policyRevision": "Policy revision",
+    "openRecommendations": "Open recommendations",
     "recentActivity": "Recent activity",
     "activity": {
       "empty": "No activity yet.",

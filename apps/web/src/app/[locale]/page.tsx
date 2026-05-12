@@ -49,7 +49,7 @@ function Dashboard({
       <div className="grid gap-4 sm:grid-cols-2">
         <Stat label={t('policyRevision')} value={overview.policyRevision} mono />
         <Stat
-          label="Open recommendations"
+          label={t('openRecommendations')}
           value={overview.recommendationCount}
           tone={overview.recommendationCount > 0 ? 'amber' : undefined}
         />
