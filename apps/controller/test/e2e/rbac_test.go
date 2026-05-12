@@ -30,7 +30,11 @@ func TestGRPCAdminGate_PutPolicy_RejectsNonAdmin(t *testing.T) {
 
 	ctx := withBearer(f.outgoingCtx(context.Background()), tok)
 	_, err := f.policy.PutPolicy(ctx, &bamboov1.PutPolicyRequest{
-		HclSource: `rule "x" { action="allow" sources=["*"] destinations=["*:*"] }`,
+		HclSource: `rule "x" {
+  action       = "allow"
+  sources      = ["*"]
+  destinations = ["*:*"]
+}`,
 	})
 	if status.Code(err) != codes.PermissionDenied {
 		t.Errorf("non-admin PutPolicy should be PermissionDenied, got code=%v err=%v",
@@ -44,7 +48,11 @@ func TestGRPCAdminGate_PutPolicy_AcceptsAdmin(t *testing.T) {
 
 	ctx := withBearer(f.outgoingCtx(context.Background()), tok)
 	if _, err := f.policy.PutPolicy(ctx, &bamboov1.PutPolicyRequest{
-		HclSource: `rule "x" { action="allow" sources=["*"] destinations=["*:*"] }`,
+		HclSource: `rule "x" {
+  action       = "allow"
+  sources      = ["*"]
+  destinations = ["*:*"]
+}`,
 	}); err != nil {
 		t.Errorf("admin PutPolicy should succeed, got err=%v", err)
 	}
@@ -56,7 +64,11 @@ func TestGRPCAdminGate_PutPolicy_DevFallback(t *testing.T) {
 	// so the gate logs a warn and allows.
 	ctx := f.outgoingCtx(context.Background())
 	if _, err := f.policy.PutPolicy(ctx, &bamboov1.PutPolicyRequest{
-		HclSource: `rule "x" { action="allow" sources=["*"] destinations=["*:*"] }`,
+		HclSource: `rule "x" {
+  action       = "allow"
+  sources      = ["*"]
+  destinations = ["*:*"]
+}`,
 	}); err != nil {
 		t.Errorf("dev-fallback PutPolicy should succeed, got err=%v", err)
 	}
