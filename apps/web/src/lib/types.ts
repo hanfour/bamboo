@@ -48,6 +48,24 @@ export type FetchResult<T> =
   | { kind: 'notFound' }
   | { kind: 'error'; message: string };
 
+// PreAuthKey is one row from /api/v1/preauth-keys (list shape;
+// the mint response is similar but includes the plaintext secret
+// — see MintResult in lib/actions.ts). Status is derived in the
+// renderer from revokedAt / expiresAt / useCount / reusable;
+// keeping the controller agnostic of UI status enums lets the UI
+// change presentation without a coordinated wire-shape bump.
+export type PreAuthKey = {
+  id: string;
+  description?: string;
+  reusable: boolean;
+  ephemeral: boolean;
+  tags: string[];
+  createdAt: string;
+  expiresAt?: string;
+  revokedAt?: string;
+  useCount: number;
+};
+
 // ActivityEvent is one row from the tenant-wide audit feed
 // (`/api/v1/activity`). Same shape as PeerEvent but carries
 // resourceType/resourceId because activity spans peer.* / policy.*

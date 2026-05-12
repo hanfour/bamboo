@@ -70,12 +70,16 @@ func TestRESTCreatePreAuthKey_HappyPath(t *testing.T) {
 	}
 }
 
-// TestRESTCreatePreAuthKey_RejectsGet verifies the route is POST-only.
-func TestRESTCreatePreAuthKey_RejectsGet(t *testing.T) {
+// TestRESTPreAuthKeys_RejectsUnsupportedMethod verifies that
+// non-GET/POST methods at /api/v1/preauth-keys return 405. The list+
+// revoke series (this PR) accepts GET for list and POST for mint;
+// anything else should be rejected by the method switch.
+func TestRESTPreAuthKeys_RejectsUnsupportedMethod(t *testing.T) {
 	f := startFixture(t)
-	got := getJSON(t, f.httpURL+"/api/v1/preauth-keys", f.tenantSlug)
-	if got.status != http.StatusMethodNotAllowed {
-		t.Errorf("GET status = %d, want 405; body=%s", got.status, got.body)
+	resp := sendJSONWithTenant(t, http.MethodPut,
+		f.httpURL+"/api/v1/preauth-keys", f.tenantSlug, nil)
+	if resp.status != http.StatusMethodNotAllowed {
+		t.Errorf("PUT status = %d, want 405; body=%s", resp.status, resp.body)
 	}
 }
 
@@ -135,6 +139,136 @@ func TestRESTCreatePreAuthKey_RejectsNonAdmin(t *testing.T) {
 	respBody, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusForbidden {
 		t.Errorf("status = %d, want 403; body=%s", resp.StatusCode, respBody)
+	}
+}
+
+// TestRESTListPreAuthKeys_HappyPath mints two keys then lists them.
+// Order is newest-first; the plaintext secret never appears in the
+// list response (the bcrypt-hash-only design means it's gone).
+func TestRESTListPreAuthKeys_HappyPath(t *testing.T) {
+	f := startFixture(t)
+
+	for _, desc := range []string{"first key", "second key"} {
+		resp := sendJSONWithTenant(t, http.MethodPost,
+			f.httpURL+"/api/v1/preauth-keys", f.tenantSlug,
+			map[string]any{"description": desc})
+		if resp.status != http.StatusOK {
+			t.Fatalf("mint %q: status=%d body=%s", desc, resp.status, resp.body)
+		}
+	}
+
+	got := getJSON(t, f.httpURL+"/api/v1/preauth-keys", f.tenantSlug)
+	if got.status != http.StatusOK {
+		t.Fatalf("list status=%d body=%s", got.status, got.body)
+	}
+	var body struct {
+		Keys []struct {
+			ID          string `json:"id"`
+			Description string `json:"description"`
+			Secret      string `json:"secret"` // must be absent (no JSON key)
+		} `json:"keys"`
+	}
+	if err := json.Unmarshal(got.body, &body); err != nil {
+		t.Fatalf("decode: %v; body=%s", err, got.body)
+	}
+	if len(body.Keys) < 2 {
+		t.Fatalf("len(keys) = %d, want >= 2; body=%s", len(body.Keys), got.body)
+	}
+	// Newest-first.
+	if body.Keys[0].Description != "second key" {
+		t.Errorf("keys[0].Description = %q, want second key (newest first)", body.Keys[0].Description)
+	}
+	// Plaintext secret must NOT appear on list.
+	for i, k := range body.Keys {
+		if k.Secret != "" {
+			t.Errorf("keys[%d].Secret = %q, want empty (plaintext never re-readable)", i, k.Secret)
+		}
+	}
+}
+
+// TestRESTRevokePreAuthKey_HappyPath revokes a key and verifies the
+// revokedAt timestamp appears on the next list call + the audit row
+// is recorded. Idempotency is checked by revoking twice.
+func TestRESTRevokePreAuthKey_HappyPath(t *testing.T) {
+	f := startFixture(t)
+
+	mint := sendJSONWithTenant(t, http.MethodPost,
+		f.httpURL+"/api/v1/preauth-keys", f.tenantSlug,
+		map[string]any{"description": "doomed key"})
+	if mint.status != http.StatusOK {
+		t.Fatalf("mint: status=%d body=%s", mint.status, mint.body)
+	}
+	var minted struct {
+		ID string `json:"id"`
+	}
+	_ = json.Unmarshal(mint.body, &minted)
+
+	revoke := sendJSONWithTenant(t, http.MethodPost,
+		f.httpURL+"/api/v1/preauth-keys/"+minted.ID+"/revoke", f.tenantSlug, nil)
+	if revoke.status != http.StatusNoContent {
+		t.Fatalf("revoke status=%d body=%s", revoke.status, revoke.body)
+	}
+
+	// list — find our key, expect revokedAt to be non-empty.
+	list := getJSON(t, f.httpURL+"/api/v1/preauth-keys", f.tenantSlug)
+	var body struct {
+		Keys []struct {
+			ID        string `json:"id"`
+			RevokedAt string `json:"revokedAt"`
+		} `json:"keys"`
+	}
+	_ = json.Unmarshal(list.body, &body)
+	var found bool
+	for _, k := range body.Keys {
+		if k.ID == minted.ID {
+			found = true
+			if k.RevokedAt == "" {
+				t.Errorf("revokedAt empty after revoke; key=%+v", k)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("revoked key %s not in list; body=%s", minted.ID, list.body)
+	}
+
+	// Idempotent — second revoke also 204.
+	revoke2 := sendJSONWithTenant(t, http.MethodPost,
+		f.httpURL+"/api/v1/preauth-keys/"+minted.ID+"/revoke", f.tenantSlug, nil)
+	if revoke2.status != http.StatusNoContent {
+		t.Errorf("re-revoke status=%d (want 204); body=%s", revoke2.status, revoke2.body)
+	}
+
+	// audit row recorded.
+	var count int
+	_ = f.pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM audit_log WHERE action='preauthkey.revoke' AND resource_id = $1`,
+		minted.ID).Scan(&count)
+	if count < 1 {
+		t.Errorf("audit rows for preauthkey.revoke = %d, want >= 1", count)
+	}
+}
+
+// TestRESTRevokePreAuthKey_CrossTenantIsolation matches the contract
+// the /peers/{id} surface set: a key in tenant A is invisible from
+// tenant B even when the id is known.
+func TestRESTRevokePreAuthKey_CrossTenantIsolation(t *testing.T) {
+	f := startFixture(t)
+
+	mint := sendJSONWithTenant(t, http.MethodPost,
+		f.httpURL+"/api/v1/preauth-keys", f.tenantSlug,
+		map[string]any{"description": "tenant A key"})
+	var minted struct {
+		ID string `json:"id"`
+	}
+	_ = json.Unmarshal(mint.body, &minted)
+
+	otherSlug := "e2e-other-revoke-" + f.tenantSlug[len("e2e-"):]
+	t.Cleanup(func() { cleanupTenant(f.pool, otherSlug) })
+
+	resp := sendJSONWithTenant(t, http.MethodPost,
+		f.httpURL+"/api/v1/preauth-keys/"+minted.ID+"/revoke", otherSlug, nil)
+	if resp.status != http.StatusNotFound {
+		t.Errorf("cross-tenant revoke status=%d, want 404; body=%s", resp.status, resp.body)
 	}
 }
 

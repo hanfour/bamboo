@@ -152,6 +152,38 @@
       }
     }
   },
+  "preAuthKeys": {
+    "title": "Pre-auth keys",
+    "subtitle": "Admin-issued keys you paste into a bamboo client on a new device for its first connection. The plaintext is shown once at mint time; afterward only revocation is possible.",
+    "empty": "No pre-auth keys yet. Go to Peers → Add peer to mint one.",
+    "columns": {
+      "description": "Description",
+      "status": "Status",
+      "kind": "Kind",
+      "useCount": "Uses",
+      "createdAt": "Created",
+      "actions": "Actions"
+    },
+    "status": {
+      "revoked": "Revoked",
+      "expired": "Expired",
+      "used": "Used",
+      "reusable": "Reusable",
+      "pending": "Pending"
+    },
+    "kind": {
+      "oneShot": "One-shot",
+      "reusable": "Reusable"
+    },
+    "actions": {
+      "revoke": "Revoke",
+      "confirmRevoke": "Confirm revoke",
+      "cancel": "Cancel",
+      "working": "Working…",
+      "alreadyRevoked": "—"
+    },
+    "manageLink": "Manage pre-auth keys"
+  },
   "acl": {
     "title": "Access Policy",
     "revision": "Revision",

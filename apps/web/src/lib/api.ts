@@ -17,7 +17,15 @@
 
 import { cookies } from 'next/headers';
 
-import type { AclPolicy, AclRule, ActivityEvent, FetchResult, Peer, PeerEvent } from './types';
+import type {
+  AclPolicy,
+  AclRule,
+  ActivityEvent,
+  FetchResult,
+  Peer,
+  PeerEvent,
+  PreAuthKey,
+} from './types';
 
 const BASE = process.env.BAMBOO_API_URL ?? 'http://localhost:8081';
 const TENANT = process.env.BAMBOO_TENANT ?? 'default';
@@ -185,6 +193,14 @@ export async function fetchPeer(id: string): Promise<FetchResult<Peer>> {
   } catch (e) {
     return { kind: 'error', message: (e as Error).message };
   }
+}
+
+// fetchPreAuthKeys returns the tenant's pre-auth keys, newest
+// first. Errors collapse to an empty list — the management page
+// renders an explicit empty state, never a misleading 404.
+export async function fetchPreAuthKeys(): Promise<PreAuthKey[]> {
+  const body = await get<{ keys: PreAuthKey[] }>('/api/v1/preauth-keys', { keys: [] });
+  return body.keys ?? [];
 }
 
 // fetchActivity returns the tenant-wide audit feed for the

@@ -120,6 +120,27 @@ export async function mintPreAuthKeyAction(input: {
   }
 }
 
+// revokePreAuthKeyAction marks a pre-auth key as revoked. Idempotent
+// at the controller (re-revoking returns 204), so the UI doesn't
+// have to guard against double-clicks.
+export async function revokePreAuthKeyAction(id: string): Promise<ActionResult> {
+  try {
+    const res = await fetch(`${BASE}/api/v1/preauth-keys/${encodeURIComponent(id)}/revoke`, {
+      method: 'POST',
+      headers: await buildHeaders(),
+      cache: 'no-store',
+    });
+    if (!res.ok && res.status !== 204) {
+      const text = await res.text().catch(() => '');
+      return { ok: false, error: `${res.status} ${text || res.statusText}` };
+    }
+    revalidatePath('/[locale]/preauth-keys', 'page');
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: (e as Error).message };
+  }
+}
+
 export async function deletePeerAction(id: string): Promise<ActionResult> {
   try {
     const res = await fetch(`${BASE}/api/v1/peers/${encodeURIComponent(id)}`, {
