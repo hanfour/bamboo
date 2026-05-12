@@ -6,12 +6,14 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net/netip"
 
 	"github.com/google/uuid"
 	"github.com/hanfour/bamboo/apps/controller/internal/db"
 	"github.com/hanfour/bamboo/apps/controller/internal/db/repo"
 	"github.com/hanfour/bamboo/apps/controller/internal/events"
 	"github.com/hanfour/bamboo/apps/controller/internal/ipalloc"
+	"github.com/hanfour/bamboo/apps/controller/internal/policy"
 	bamboov1 "github.com/hanfour/bamboo/proto/gen/go/bamboo/v1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -23,14 +25,15 @@ import (
 type CoordinatorHandler struct {
 	bamboov1.UnimplementedCoordinatorServiceServer
 
-	tenants *repo.Tenants
-	users   *repo.Users
-	peers   *repo.Peers
-	relays  *repo.Relays
-	audits  *repo.AuditLogs
-	auth    *AuthHandler
-	bus     *events.Bus
-	pool    *db.Pool
+	tenants  *repo.Tenants
+	users    *repo.Users
+	peers    *repo.Peers
+	relays   *repo.Relays
+	audits   *repo.AuditLogs
+	policies *repo.Policies
+	auth     *AuthHandler
+	bus      *events.Bus
+	pool     *db.Pool
 }
 
 // NewCoordinatorHandler constructs the coordinator handler. The auth
@@ -39,14 +42,15 @@ type CoordinatorHandler struct {
 // subscribers.
 func NewCoordinatorHandler(pool *db.Pool, auth *AuthHandler, bus *events.Bus) *CoordinatorHandler {
 	return &CoordinatorHandler{
-		tenants: repo.NewTenants(pool),
-		users:   repo.NewUsers(pool),
-		peers:   repo.NewPeers(pool),
-		relays:  repo.NewRelays(pool),
-		audits:  repo.NewAuditLogs(pool),
-		auth:    auth,
-		bus:     bus,
-		pool:    pool,
+		tenants:  repo.NewTenants(pool),
+		users:    repo.NewUsers(pool),
+		peers:    repo.NewPeers(pool),
+		relays:   repo.NewRelays(pool),
+		audits:   repo.NewAuditLogs(pool),
+		policies: repo.NewPolicies(pool),
+		auth:     auth,
+		bus:      bus,
+		pool:     pool,
 	}
 }
 
@@ -140,10 +144,12 @@ func (h *CoordinatorHandler) Register(ctx context.Context, req *bamboov1.Registe
 		slog.Warn("list relays for register response", "err", err)
 	}
 
+	policyDoc, currentRev := h.loadPolicyAndRevision(ctx, tenant.ID)
+
 	resp := &bamboov1.RegisterResponse{
 		Self:           toProtoPeer(self),
 		Peers:          make([]*bamboov1.Peer, 0, len(allPeers)),
-		PolicyRevision: 1, // TODO: read from acl_policies once ACL handlers ship
+		PolicyRevision: currentRev,
 		RelayServers:   make([]*bamboov1.RelayServer, 0, len(relays)),
 	}
 	for _, rs := range relays {
@@ -159,7 +165,9 @@ func (h *CoordinatorHandler) Register(ctx context.Context, req *bamboov1.Registe
 		if p.ID == self.ID {
 			continue
 		}
-		resp.Peers = append(resp.Peers, toProtoPeer(p))
+		pp := toProtoPeer(p)
+		pp.AllowedIps = allowedIPsFor(policyDoc, self, p)
+		resp.Peers = append(resp.Peers, pp)
 	}
 
 	// Publish to other peers in the tenant after the response is built so
@@ -186,12 +194,12 @@ func (h *CoordinatorHandler) Heartbeat(ctx context.Context, req *bamboov1.Heartb
 		return nil, status.Errorf(codes.InvalidArgument, "invalid peer_id: %v", err)
 	}
 
-	rows, err := h.peers.UpdateLastSeen(ctx, peerID)
+	tenantID, err := h.peers.UpdateLastSeen(ctx, peerID)
+	if errors.Is(err, repo.ErrNotFound) {
+		return nil, status.Error(codes.NotFound, "peer not found")
+	}
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "update last seen: %v", err)
-	}
-	if rows == 0 {
-		return nil, status.Error(codes.NotFound, "peer not found")
 	}
 
 	// Apply endpoint updates if the client reported any. When the
@@ -217,8 +225,7 @@ func (h *CoordinatorHandler) Heartbeat(ctx context.Context, req *bamboov1.Heartb
 		}
 	}
 
-	// Phase 1: policy revision is hardcoded to 1 until ACL handlers ship.
-	const currentRev = int64(1)
+	_, currentRev := h.loadPolicyAndRevision(ctx, tenantID)
 	return &bamboov1.HeartbeatResponse{
 		PeersChanged:          endpointsChanged,
 		PolicyChanged:         req.GetKnownPolicyRevision() != currentRev,
@@ -314,6 +321,56 @@ func tenantSlugFromMetadata(ctx context.Context) string {
 		return vals[0]
 	}
 	return "default"
+}
+
+// loadPolicyAndRevision fetches the tenant's current policy and
+// revision. Returns (nil, 0) when no policy has been authored yet —
+// callers interpret that as full-mesh fallback. A parse error on a
+// previously-persisted policy is logged and treated as "no policy" so
+// a malformed row cannot black-hole the whole tenant.
+func (h *CoordinatorHandler) loadPolicyAndRevision(ctx context.Context, tenantID uuid.UUID) (*policy.Policy, int64) {
+	rec, err := h.policies.Get(ctx, tenantID)
+	if errors.Is(err, repo.ErrNotFound) {
+		return nil, 0
+	}
+	if err != nil {
+		slog.Warn("load policy for tenant", "tenant_id", tenantID, "err", err)
+		return nil, 0
+	}
+	parsed, perr := policy.Parse("policy.hcl", rec.HCLSource)
+	if perr != nil {
+		slog.Warn("parse persisted policy", "tenant_id", tenantID, "revision", rec.Revision, "err", perr)
+		return nil, rec.Revision
+	}
+	return parsed, rec.Revision
+}
+
+// peerView projects a repo.Peer onto the shape the L3 enforcer needs.
+// User/Groups are left empty: only tag- and CIDR-based rules apply at
+// the wire layer for now. user:/group: matchers require OIDC identity
+// propagation through to the coordinator, which is not wired up yet.
+func peerView(p *repo.Peer) policy.PeerView {
+	view := policy.PeerView{Tags: p.Tags}
+	if addr, err := netip.ParseAddr(p.IP); err == nil {
+		view.IP = addr
+	}
+	return view
+}
+
+// allowedIPsFor returns the AllowedIps slice for dst as seen from src.
+// nil when src is not permitted to reach dst — clients should skip the
+// peer entirely. Today this is a single /32 (or /128) of the
+// destination's tunnel IP; future revisions may add explicit CIDR
+// routes (e.g., subnet routers).
+func allowedIPsFor(p *policy.Policy, src, dst *repo.Peer) []string {
+	if !policy.Allow(p, peerView(src), peerView(dst)) {
+		return nil
+	}
+	suffix := "/32"
+	if addr, err := netip.ParseAddr(dst.IP); err == nil && addr.Is6() {
+		suffix = "/128"
+	}
+	return []string{dst.IP + suffix}
 }
 
 // toProtoPeer converts a repo.Peer into the proto type.
