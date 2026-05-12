@@ -2,6 +2,7 @@
 
 'use client';
 
+import { useState } from 'react';
 import { useTranslations } from 'next-intl';
 import type { Peer } from '@/lib/types';
 
@@ -13,6 +14,12 @@ type Props = {
 
 export function PeerTable({ peers, selectedId, onSelect }: Props) {
   const t = useTranslations('peers');
+  // expandedId tracks which row's address-details disclosure is open.
+  // Only one row can be open at a time — clicking another row's
+  // chevron auto-closes the previous one. The row-click handler
+  // (drawer open) is unaffected; chevron click stops propagation so
+  // the disclosure can toggle without opening the drawer.
+  const [expandedId, setExpandedId] = useState<string | null>(null);
 
   if (peers.length === 0) {
     return (
@@ -38,6 +45,7 @@ export function PeerTable({ peers, selectedId, onSelect }: Props) {
         <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800">
           {peers.map((p) => {
             const isSelected = p.id === selectedId;
+            const isExpanded = expandedId === p.id;
             // Selected-row treatment: a 2px bamboo-500 stripe on the
             // left edge (single accent) plus a zinc-50 fill — no
             // bamboo-tinted background so the row stays Muji-neutral.
@@ -60,11 +68,20 @@ export function PeerTable({ peers, selectedId, onSelect }: Props) {
                     : 'hover:bg-zinc-50 dark:hover:bg-zinc-900'
                 }`}
               >
-                <td className="px-4 py-3 font-medium text-zinc-900 dark:text-zinc-100">
+                <td className="px-4 py-3 align-top font-medium text-zinc-900 dark:text-zinc-100">
                   {p.hostname}
                 </td>
-                <td className="px-4 py-3 font-mono text-xs">{p.ip}</td>
-                <td className="px-4 py-3">
+                <td className="px-4 py-3 align-top">
+                  <AddressCell
+                    peer={p}
+                    expanded={isExpanded}
+                    onToggle={(e) => {
+                      e.stopPropagation();
+                      setExpandedId((curr) => (curr === p.id ? null : p.id));
+                    }}
+                  />
+                </td>
+                <td className="px-4 py-3 align-top">
                   <div className="flex flex-wrap gap-1">
                     {p.tags.map((tag) => (
                       <span
@@ -76,11 +93,11 @@ export function PeerTable({ peers, selectedId, onSelect }: Props) {
                     ))}
                   </div>
                 </td>
-                <td className="px-4 py-3 text-xs text-zinc-500 dark:text-zinc-400">{p.os}</td>
-                <td className="px-4 py-3">
+                <td className="px-4 py-3 align-top text-xs text-zinc-500 dark:text-zinc-400">{p.os}</td>
+                <td className="px-4 py-3 align-top">
                   <StatusBadge status={p.status} label={t(`status.${p.status}`)} />
                 </td>
-                <td className="px-4 py-3 text-xs text-zinc-500 dark:text-zinc-400">
+                <td className="px-4 py-3 align-top text-xs text-zinc-500 dark:text-zinc-400">
                   {p.lastSeenAt ? formatRelative(p.lastSeenAt) : '—'}
                 </td>
               </tr>
@@ -88,6 +105,78 @@ export function PeerTable({ peers, selectedId, onSelect }: Props) {
           })}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+// AddressCell shows the peer's primary IP with a chevron disclosure
+// that expands to reveal the WireGuard public key and the short id.
+// Matches Tailscale's "addresses" column where one click on the
+// chevron pops out the DNS short name + machine key; we expose the
+// equivalent fields (pubkey + short id) until we ship MagicDNS-style
+// short names.
+//
+// The chevron is a real <button>, so Tab/Enter/Space work for
+// keyboard activation. stopPropagation on the click prevents the
+// surrounding <tr> from opening the drawer.
+function AddressCell({
+  peer,
+  expanded,
+  onToggle,
+}: {
+  peer: Peer;
+  expanded: boolean;
+  onToggle: (e: React.MouseEvent | React.KeyboardEvent) => void;
+}) {
+  const hasDetails = Boolean(peer.wireguardPublicKey);
+  return (
+    <div className="flex items-start gap-1">
+      <div className="min-w-0 flex-1">
+        <div className="font-mono text-xs text-zinc-700 dark:text-zinc-300">{peer.ip}</div>
+        {expanded && hasDetails && (
+          <dl className="mt-1.5 space-y-1 text-[10px] text-zinc-500 dark:text-zinc-400">
+            <div>
+              <dt className="uppercase tracking-wide text-zinc-400 dark:text-zinc-500">ID</dt>
+              <dd className="font-mono text-zinc-700 dark:text-zinc-300">
+                {peer.id.slice(0, 8)}
+              </dd>
+            </div>
+            <div>
+              <dt className="uppercase tracking-wide text-zinc-400 dark:text-zinc-500">Public key</dt>
+              <dd className="break-all font-mono text-zinc-700 dark:text-zinc-300">
+                {peer.wireguardPublicKey}
+              </dd>
+            </div>
+          </dl>
+        )}
+      </div>
+      {hasDetails && (
+        <button
+          type="button"
+          onClick={onToggle}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.stopPropagation();
+            }
+          }}
+          aria-label="Toggle address details"
+          aria-expanded={expanded}
+          className="mt-0.5 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded text-zinc-400 transition-colors hover:bg-zinc-100 hover:text-zinc-700 focus:outline-none focus:ring-1 focus:ring-bamboo-500 dark:hover:bg-zinc-800 dark:hover:text-zinc-300"
+        >
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.5"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden
+            className={`h-3.5 w-3.5 transition-transform ${expanded ? 'rotate-180' : ''}`}
+          >
+            <path d="m6 9 6 6 6-6" />
+          </svg>
+        </button>
+      )}
     </div>
   );
 }
