@@ -117,12 +117,17 @@ func runUp(cmd *cobra.Command, _ []string) error {
 	// breaks; Heartbeat keeps the controller's "online" status fresh
 	// and is the canonical liveness signal for our own peer row.
 	cache := clientsync.New(resp.GetSelf(), resp.GetPeers())
+	cache.SetPolicyRevision(resp.GetPolicyRevision())
 	adapter := clientsync.AdaptClient(cli.Coordinator)
+
+	refresh := func(refreshCtx context.Context) (*bamboov1.RegisterResponse, error) {
+		return registerWithController(refreshCtx, cli, priv)
+	}
 
 	daemonCtx, daemonCancel := context.WithCancel(cmd.Context())
 	defer daemonCancel()
 	go clientsync.RunHeartbeat(daemonCtx, adapter, resp.GetSelf().GetId(), discoverEndpoints)
-	go clientsync.RunWatchPeers(daemonCtx, adapter, dev, priv, cache, resp.GetSelf().GetId())
+	go clientsync.RunWatchPeers(daemonCtx, adapter, dev, priv, cache, resp.GetSelf().GetId(), refresh)
 	if relayClient != nil {
 		reapply := &deviceReapplier{dev: dev, base: cfg}
 		go clientsync.RunRelayFallback(daemonCtx, dev, reapply, relayProxies, time.Now())

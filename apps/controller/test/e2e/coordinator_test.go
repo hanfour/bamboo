@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+	"github.com/hanfour/bamboo/apps/controller/internal/db/repo"
 	bamboov1 "github.com/hanfour/bamboo/proto/gen/go/bamboo/v1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -254,6 +256,116 @@ func TestWatchPeers_ContextCancelEndsStream(t *testing.T) {
 		status.Code(err) != codes.Canceled &&
 		status.Code(err) != codes.Unavailable {
 		t.Errorf("unexpected stream end error: %v (code %v)", err, status.Code(err))
+	}
+}
+
+func TestRegister_AllowedIpsReflectsACL(t *testing.T) {
+	f := startFixture(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	mctx := f.outgoingCtx(ctx)
+
+	// Two peers: A claims tag "dev", B claims tag "db".
+	devPubKey := randomPubKey(t)
+	dbPubKey := randomPubKey(t)
+
+	devResp, err := f.coord.Register(mctx, &bamboov1.RegisterRequest{
+		Hostname: "dev-host", WireguardPublicKey: devPubKey,
+	})
+	if err != nil {
+		t.Fatalf("Register dev: %v", err)
+	}
+	dbResp, err := f.coord.Register(mctx, &bamboov1.RegisterRequest{
+		Hostname: "db-host", WireguardPublicKey: dbPubKey,
+	})
+	if err != nil {
+		t.Fatalf("Register db: %v", err)
+	}
+
+	devID, err := uuid.Parse(devResp.GetSelf().GetId())
+	if err != nil {
+		t.Fatalf("parse dev id: %v", err)
+	}
+	dbID, err := uuid.Parse(dbResp.GetSelf().GetId())
+	if err != nil {
+		t.Fatalf("parse db id: %v", err)
+	}
+
+	peers := repo.NewPeers(f.pool)
+	if _, err := peers.SetTags(ctx, devID, []string{"dev"}); err != nil {
+		t.Fatalf("SetTags dev: %v", err)
+	}
+	if _, err := peers.SetTags(ctx, dbID, []string{"db"}); err != nil {
+		t.Fatalf("SetTags db: %v", err)
+	}
+
+	// Author a policy: dev may reach db; the implicit default-deny
+	// covers everything else, including db → dev.
+	putResp, err := f.policy.PutPolicy(mctx, &bamboov1.PutPolicyRequest{
+		HclSource: `rule "dev-to-db" {
+  action       = "allow"
+  sources      = ["tag:dev"]
+  destinations = ["tag:db:*"]
+}`,
+	})
+	if err != nil {
+		t.Fatalf("PutPolicy: %v", err)
+	}
+	wantRev := putResp.GetPolicy().GetRevision()
+	if wantRev <= 0 {
+		t.Fatalf("revision = %d, want > 0", wantRev)
+	}
+
+	// Re-register dev (idempotent on pubkey) — response should now
+	// carry policy-driven AllowedIps for the db peer.
+	devRefreshed, err := f.coord.Register(mctx, &bamboov1.RegisterRequest{
+		Hostname: "dev-host", WireguardPublicKey: devPubKey,
+	})
+	if err != nil {
+		t.Fatalf("dev re-Register: %v", err)
+	}
+	if got := devRefreshed.GetPolicyRevision(); got != wantRev {
+		t.Errorf("dev sees PolicyRevision = %d, want %d", got, wantRev)
+	}
+	var dbViewFromDev *bamboov1.Peer
+	for _, p := range devRefreshed.GetPeers() {
+		if p.GetId() == dbResp.GetSelf().GetId() {
+			dbViewFromDev = p
+			break
+		}
+	}
+	if dbViewFromDev == nil {
+		t.Fatalf("dev's peer list missing db peer")
+	}
+	if len(dbViewFromDev.GetAllowedIps()) == 0 {
+		t.Errorf("dev → db should be allowed: AllowedIps = %v, want non-empty", dbViewFromDev.GetAllowedIps())
+	}
+	wantCIDR := dbResp.GetSelf().GetIp() + "/32"
+	if len(dbViewFromDev.GetAllowedIps()) > 0 && dbViewFromDev.GetAllowedIps()[0] != wantCIDR {
+		t.Errorf("AllowedIps[0] = %q, want %q", dbViewFromDev.GetAllowedIps()[0], wantCIDR)
+	}
+
+	// Re-register db — policy denies db → dev, so AllowedIps for the
+	// dev peer in db's view should be empty.
+	dbRefreshed, err := f.coord.Register(mctx, &bamboov1.RegisterRequest{
+		Hostname: "db-host", WireguardPublicKey: dbPubKey,
+	})
+	if err != nil {
+		t.Fatalf("db re-Register: %v", err)
+	}
+	var devViewFromDB *bamboov1.Peer
+	for _, p := range dbRefreshed.GetPeers() {
+		if p.GetId() == devResp.GetSelf().GetId() {
+			devViewFromDB = p
+			break
+		}
+	}
+	if devViewFromDB == nil {
+		t.Fatalf("db's peer list missing dev peer")
+	}
+	if len(devViewFromDB.GetAllowedIps()) != 0 {
+		t.Errorf("db → dev should be denied: AllowedIps = %v, want empty", devViewFromDB.GetAllowedIps())
 	}
 }
 
