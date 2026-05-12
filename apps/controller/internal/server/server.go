@@ -47,7 +47,7 @@ func New(cfg *config.Config, pool *db.Pool, ch *clickhouse.Conn) (*Server, error
 	ttl := parseTTL(cfg.Auth.SessionTTL, 24*time.Hour)
 	secret := []byte(cfg.Auth.SessionSecret)
 
-	grpcSrv, authHandler, coordHandler := buildGRPCWithAuth(pool, ch)
+	grpcSrv, authHandler, coordHandler := buildGRPCWithAuth(pool, ch, cfg.Auth.RequireAuth, secret)
 	authHandler.SetOIDCConfig(cfg.Auth.OIDC.BaseURL, secret, ttl)
 
 	httpSrv := NewHTTPServer(cfg.Server.HTTPAddr, pool, providers, ch, secret, cfg.Auth.OIDC.BaseURL, ttl, coordHandler)
@@ -67,15 +67,18 @@ func New(cfg *config.Config, pool *db.Pool, ch *clickhouse.Conn) (*Server, error
 // can delegate peer register / heartbeat / watch to the same code path
 // as gRPC). Tests use BuildGRPCServer instead, which takes the simpler
 // path.
-func buildGRPCWithAuth(pool *db.Pool, ch *clickhouse.Conn) (*grpc.Server, *handlers.AuthHandler, *handlers.CoordinatorHandler) {
+func buildGRPCWithAuth(pool *db.Pool, ch *clickhouse.Conn, requireAuth bool, sessionSec []byte) (*grpc.Server, *handlers.AuthHandler, *handlers.CoordinatorHandler) {
 	bus := events.NewBus()
-	s := grpc.NewServer()
+	s := grpc.NewServer(
+		grpc.UnaryInterceptor(requireAuthUnaryInterceptor(requireAuth, sessionSec)),
+		grpc.StreamInterceptor(requireAuthStreamInterceptor(requireAuth, sessionSec)),
+	)
 
 	authHandler := handlers.NewAuthHandler(pool)
 	coordHandler := handlers.NewCoordinatorHandler(pool, authHandler, bus)
 	bamboov1.RegisterAuthServiceServer(s, authHandler)
 	bamboov1.RegisterCoordinatorServiceServer(s, coordHandler)
-	bamboov1.RegisterPolicyServiceServer(s, handlers.NewPolicyHandler(pool, ch, bus))
+	bamboov1.RegisterPolicyServiceServer(s, handlers.NewPolicyHandler(pool, ch, bus, authHandler))
 	bamboov1.RegisterTelemetryServiceServer(s, handlers.NewTelemetryHandler(pool, ch))
 	reflection.Register(s)
 
@@ -92,7 +95,7 @@ func BuildGRPCServer(pool *db.Pool) *grpc.Server {
 	authHandler := handlers.NewAuthHandler(pool)
 	bamboov1.RegisterAuthServiceServer(s, authHandler)
 	bamboov1.RegisterCoordinatorServiceServer(s, handlers.NewCoordinatorHandler(pool, authHandler, bus))
-	bamboov1.RegisterPolicyServiceServer(s, handlers.NewPolicyHandler(pool, nil, bus))
+	bamboov1.RegisterPolicyServiceServer(s, handlers.NewPolicyHandler(pool, nil, bus, authHandler))
 	bamboov1.RegisterTelemetryServiceServer(s, handlers.NewTelemetryHandler(pool, nil))
 
 	reflection.Register(s)

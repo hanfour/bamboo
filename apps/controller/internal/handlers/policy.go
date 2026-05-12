@@ -34,13 +34,16 @@ type PolicyHandler struct {
 	traces    *clickhouse.Traces
 	anomalies *clickhouse.Anomalies
 	bus       *events.Bus
+	auth      *AuthHandler
 }
 
 // NewPolicyHandler constructs a PolicyHandler with required repositories.
 // ch may be nil; the handler degrades to no-op telemetry writes.
 // bus may be nil; PolicyChanged events simply aren't published in that
 // case (clients still pick up changes on the next heartbeat).
-func NewPolicyHandler(pool *db.Pool, ch *clickhouse.Conn, bus *events.Bus) *PolicyHandler {
+// authH is shared with the gRPC AuthHandler so PutPolicy can reuse the
+// admin-RBAC check; may be nil in tests that don't exercise the gate.
+func NewPolicyHandler(pool *db.Pool, ch *clickhouse.Conn, bus *events.Bus, authH *AuthHandler) *PolicyHandler {
 	return &PolicyHandler{
 		tenants:   repo.NewTenants(pool),
 		policies:  repo.NewPolicies(pool),
@@ -48,6 +51,7 @@ func NewPolicyHandler(pool *db.Pool, ch *clickhouse.Conn, bus *events.Bus) *Poli
 		traces:    clickhouse.NewTraces(ch),
 		anomalies: clickhouse.NewAnomalies(ch),
 		bus:       bus,
+		auth:      authH,
 	}
 }
 
@@ -76,6 +80,11 @@ func (h *PolicyHandler) GetPolicy(ctx context.Context, _ *bamboov1.GetPolicyRequ
 
 // PutPolicy validates and persists a new policy revision.
 func (h *PolicyHandler) PutPolicy(ctx context.Context, req *bamboov1.PutPolicyRequest) (*bamboov1.PutPolicyResponse, error) {
+	if h.auth != nil {
+		if err := h.auth.RequireAdmin(ctx, "policy.update"); err != nil {
+			return nil, err
+		}
+	}
 	tenant, err := h.resolveTenant(ctx)
 	if err != nil {
 		return nil, err

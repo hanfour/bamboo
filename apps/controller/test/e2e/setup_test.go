@@ -124,15 +124,18 @@ func startFixture(t *testing.T) *fixture {
 
 // buildGRPCFixture is a test-only constructor that mirrors what
 // server.New does in production but exposes the CoordinatorHandler so
-// the HTTP fixture can share it.
+// the HTTP fixture can share it. The AuthHandler is wired with the
+// fixture's known session secret so RequireAdmin can verify test JWTs
+// minted via f.mintJWT.
 func buildGRPCFixture(pool *db.Pool) (*grpc.Server, *handlers.CoordinatorHandler) {
 	bus := events.NewBus()
 	s := grpc.NewServer()
 	authHandler := handlers.NewAuthHandler(pool)
+	authHandler.SetOIDCConfig("http://127.0.0.1", []byte("e2e-secret-with-at-least-32-bytes-padding"), 1*time.Hour)
 	coord := handlers.NewCoordinatorHandler(pool, authHandler, bus)
 	bamboov1.RegisterAuthServiceServer(s, authHandler)
 	bamboov1.RegisterCoordinatorServiceServer(s, coord)
-	bamboov1.RegisterPolicyServiceServer(s, handlers.NewPolicyHandler(pool, nil, bus))
+	bamboov1.RegisterPolicyServiceServer(s, handlers.NewPolicyHandler(pool, nil, bus, authHandler))
 	bamboov1.RegisterTelemetryServiceServer(s, handlers.NewTelemetryHandler(pool, nil))
 	return s, coord
 }
@@ -168,6 +171,16 @@ func (f *fixture) enableRequireAuth() {
 // to exercise authenticated REST flows under SetRequireAuth.
 func (f *fixture) mintJWT(t *testing.T, isAdmin bool) string {
 	t.Helper()
+	tok, _ := f.mintJWTWithUser(t, isAdmin)
+	return tok
+}
+
+// mintJWTWithUser returns both the signed token and the underlying
+// user.ID so tests that need to mutate the user (e.g. move it to a
+// different tenant to exercise the membership-mismatch path) can do
+// so without ambiguous SQL.
+func (f *fixture) mintJWTWithUser(t *testing.T, isAdmin bool) (string, uuid.UUID) {
+	t.Helper()
 	ctx := context.Background()
 	tenants := repo.NewTenants(f.pool)
 	tenant, err := tenants.GetOrCreate(ctx, f.tenantSlug, "Default Tenant", "100.64.0.0/24")
@@ -198,7 +211,7 @@ func (f *fixture) mintJWT(t *testing.T, isAdmin bool) string {
 	if err != nil {
 		t.Fatalf("IssueSessionToken: %v", err)
 	}
-	return tok
+	return tok, user.ID
 }
 
 // outgoingCtx returns a ctx that carries the fixture's tenant slug as gRPC

@@ -177,28 +177,53 @@ type authnContext struct {
 }
 
 // authenticate validates a session JWT from the Authorization header
-// (preferred) or the bamboo_session cookie. Returns (nil, nil) when no
-// credentials are present so the caller can fall back to header-based
-// dev mode. Returns an error only when a credential is *present but
-// invalid*.
+// (preferred) or the bamboo_session cookie. Returns an authnContext
+// with nil claims when no credentials are present so the caller can
+// fall back to header-based dev mode. Returns an error only when a
+// credential is present but invalid.
+//
+// When a JWT is present and verified, this also validates tenant
+// membership: the user's persisted users.tenant_id must equal the
+// token's TenantID claim. A mismatch indicates a stale JWT issued
+// before the user was moved to (or removed from) the claimed tenant,
+// and is rejected so the old token cannot grant cross-tenant access
+// for the rest of its TTL.
 func (h *HTTPServer) authenticate(r *http.Request) (*authnContext, error) {
+	var claims *auth.SessionClaims
 	if tok := bearerToken(r); tok != "" {
-		claims, err := auth.VerifySessionToken(h.secret, tok)
+		c, err := auth.VerifySessionToken(h.secret, tok)
 		if err != nil {
 			return nil, errors.New("invalid bearer token")
 		}
-		return &authnContext{claims: claims}, nil
-	}
-	if c, err := r.Cookie(SessionCookieName); err == nil && c.Value != "" {
-		claims, err := auth.VerifySessionToken(h.secret, c.Value)
+		claims = c
+	} else if cookie, err := r.Cookie(SessionCookieName); err == nil && cookie.Value != "" {
+		c, err := auth.VerifySessionToken(h.secret, cookie.Value)
 		if err != nil {
 			return nil, errors.New("invalid session cookie")
 		}
-		return &authnContext{claims: claims}, nil
+		claims = c
 	}
-	// No credential — dev fallback path. The caller resolves tenant
-	// from X-Tenant-Slug or "default".
-	return &authnContext{}, nil
+	if claims == nil {
+		// No credential — dev fallback path. The caller resolves tenant
+		// from X-Tenant-Slug or "default".
+		return &authnContext{}, nil
+	}
+	// Unit tests construct HTTPServer directly without a users repo to
+	// exercise JWT parsing in isolation; skip the membership check in
+	// that case. Production always wires users via NewHTTPServer.
+	if h.users != nil {
+		user, err := h.users.GetByID(r.Context(), claims.UserID)
+		if err != nil {
+			if errors.Is(err, repo.ErrNotFound) {
+				return nil, errors.New("user not found")
+			}
+			return nil, fmt.Errorf("resolve user: %w", err)
+		}
+		if user.TenantID != claims.TenantID {
+			return nil, errors.New("tenant membership mismatch")
+		}
+	}
+	return &authnContext{claims: claims}, nil
 }
 
 func bearerToken(r *http.Request) string {
@@ -369,6 +394,9 @@ type apiPeerPatchReq struct {
 // changed. Tenant scoping is identical to apiPeer — a peer in a
 // different tenant returns 404.
 func (h *HTTPServer) apiPeerPatch(w http.ResponseWriter, r *http.Request, authn *authnContext, tenant *repo.Tenant, idStr string) {
+	if !h.requireAdmin(w, r, authn, tenant, "peer.update") {
+		return
+	}
 	id, err := uuid.Parse(idStr)
 	if err != nil {
 		http.NotFound(w, r)
@@ -469,6 +497,9 @@ func (h *HTTPServer) apiPeerPatch(w http.ResponseWriter, r *http.Request, authn 
 // another tenant" from "doesn't exist anywhere" and probe
 // existence across tenants.
 func (h *HTTPServer) apiPeerDelete(w http.ResponseWriter, r *http.Request, authn *authnContext, tenant *repo.Tenant, idStr string) {
+	if !h.requireAdmin(w, r, authn, tenant, "peer.delete") {
+		return
+	}
 	id, err := uuid.Parse(idStr)
 	if err != nil {
 		http.NotFound(w, r)
@@ -649,7 +680,7 @@ type apiPreAuthKeyJSON struct {
 // generation + hash storage contract has to match because both
 // surfaces feed the same redeem path.
 func (h *HTTPServer) apiCreatePreAuthKey(w http.ResponseWriter, r *http.Request, authn *authnContext, tenant *repo.Tenant) {
-	if !h.requirePreAuthKeyAdmin(w, r, authn, tenant) {
+	if !h.requireAdmin(w, r, authn, tenant, "preauthkey.create") {
 		return
 	}
 
@@ -714,12 +745,18 @@ func (h *HTTPServer) apiCreatePreAuthKey(w http.ResponseWriter, r *http.Request,
 	})
 }
 
-// requirePreAuthKeyAdmin enforces the auth contract every pre-auth-
-// key endpoint shares: authenticated callers must have IsAdmin=true,
-// dev-fallback (no JWT) is allowed with a warn log so local dev
-// keeps working. Returns true when the caller may proceed; writes
-// the error response and returns false otherwise.
-func (h *HTTPServer) requirePreAuthKeyAdmin(w http.ResponseWriter, r *http.Request, authn *authnContext, tenant *repo.Tenant) bool {
+// requireAdmin enforces the admin-RBAC contract every protected REST
+// endpoint shares: authenticated callers must have IsAdmin=true,
+// dev-fallback (no JWT) is allowed with a warn log so local dev keeps
+// working. Returns true when the caller may proceed; writes the error
+// response and returns false otherwise. action is a short label
+// included in the warn log + the 403 body (e.g. "preauthkey.create",
+// "peer.update").
+//
+// In prod mode (require_auth=true) the top-level routeAPI gate has
+// already returned 401 for unauthenticated requests, so the
+// dev-fallback warn branch is unreachable.
+func (h *HTTPServer) requireAdmin(w http.ResponseWriter, r *http.Request, authn *authnContext, tenant *repo.Tenant, action string) bool {
 	if authn != nil && authn.claims != nil {
 		user, err := h.users.GetByID(r.Context(), authn.claims.UserID)
 		if err != nil {
@@ -727,13 +764,14 @@ func (h *HTTPServer) requirePreAuthKeyAdmin(w http.ResponseWriter, r *http.Reque
 			return false
 		}
 		if !user.IsAdmin {
-			writeError(w, http.StatusForbidden, errors.New("admin role required for pre-auth key management"))
+			writeError(w, http.StatusForbidden, fmt.Errorf("admin role required for %s", action))
 			return false
 		}
 		return true
 	}
-	slog.Warn("preauthkey access via dev-fallback auth (no JWT) — configure OIDC + an admin user in production",
+	slog.Warn("admin path via dev-fallback auth (no JWT) — configure OIDC + an admin user in production",
 		"tenant", tenant.Slug,
+		"action", action,
 		"method", r.Method,
 		"path", r.URL.Path,
 	)
@@ -780,7 +818,7 @@ func preAuthKeyToListJSON(k *repo.PreAuthKey) apiPreAuthKeyListJSON {
 // listing exposes nothing secret on its own, but the keys are an
 // admin-only resource so we keep the surface uniform.
 func (h *HTTPServer) apiListPreAuthKeys(w http.ResponseWriter, r *http.Request, authn *authnContext, tenant *repo.Tenant) {
-	if !h.requirePreAuthKeyAdmin(w, r, authn, tenant) {
+	if !h.requireAdmin(w, r, authn, tenant, "preauthkey.list") {
 		return
 	}
 	keys, err := h.keys.ListByTenant(r.Context(), tenant.ID)
@@ -801,7 +839,7 @@ func (h *HTTPServer) apiListPreAuthKeys(w http.ResponseWriter, r *http.Request, 
 // tenant check 404s on a key belonging to another tenant before we
 // even attempt the revoke, matching the /peers/{id} contract.
 func (h *HTTPServer) apiRevokePreAuthKey(w http.ResponseWriter, r *http.Request, authn *authnContext, tenant *repo.Tenant, idStr string) {
-	if !h.requirePreAuthKeyAdmin(w, r, authn, tenant) {
+	if !h.requireAdmin(w, r, authn, tenant, "preauthkey.revoke") {
 		return
 	}
 	id, err := uuid.Parse(idStr)
