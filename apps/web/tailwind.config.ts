@@ -2,7 +2,13 @@ import type { Config } from 'tailwindcss';
 
 const config: Config = {
   content: ['./src/**/*.{ts,tsx}'],
-  darkMode: 'media',
+  // Dark mode is opt-in via a class on <html> rather than tracking the
+  // OS prefers-color-scheme media feature. The media-feature behavior
+  // caused the page to flip dark whenever DevTools (or the OS) declared
+  // a dark scheme, which the user explicitly didn't want. Once a real
+  // theme-toggle ships we add the class through it; until then dark
+  // styles are dormant and the page stays in its committed light look.
+  darkMode: 'class',
   theme: {
     extend: {
       fontFamily: {

@@ -12,18 +12,18 @@
 
 html,
 body {
-  /* Page bg is the 70% warm cream surface — bamboo-50 / #FDF6EC. White
-   * cards (Header, FetchErrorState, modal, drawer) then sit on top as
-   * the 25% layer, giving the wabi-sabi paper-and-ink contrast. Body
-   * text stays zinc-900 for legibility; using bamboo-900 (#3D3327)
-   * would still hit AAA contrast against cream but reads softer than
-   * desired for utility text. */
-  @apply bg-bamboo-50 text-zinc-900;
+  /* Page bg is white. The bamboo-* taupe stops still ship in the
+   * Tailwind config and continue to drive state-accent surfaces
+   * (active nav pill = bamboo-100 cream pill on white, status dots,
+   * selected row stripe, peer.update "to" diff badge) — but the
+   * page-level 70% surface is white now. The earlier cream page bg
+   * was rolled back at the user's request; the wabi-sabi accents
+   * still read against white because bamboo-100 (#F3EFE0) is just
+   * different enough from white to mark the pill. */
+  @apply bg-white text-zinc-900;
 }
 
-@media (prefers-color-scheme: dark) {
-  html,
-  body {
-    @apply bg-zinc-950 text-zinc-100;
-  }
-}
+/* Dark-mode bg pairs are kept as opt-in via the `dark` class on
+ * <html> (see tailwind.config.ts darkMode: 'class'). Without that
+ * class set, dark: utility variants never apply, so OS/DevTools
+ * prefers-color-scheme can't accidentally flip the page. */
