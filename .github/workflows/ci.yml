@@ -16,6 +16,15 @@ env:
   PROTOC_GEN_GO_VERSION: "v1.36.11"
   PROTOC_GEN_GO_GRPC_VERSION: "v1.5.1"
   GOOSE_VERSION: "v3.27.1"
+  # Opt into Node.js 24 for JS-based actions (actions/checkout,
+  # docker/build-push-action, etc.) ahead of GitHub's forced switch
+  # on 2026-06-02 and Node 20 removal on 2026-09-16. This is the
+  # vendor-recommended path until each individual action ships a
+  # Node 24 release; doing it via env keeps us from chasing six
+  # separate @v5/@v6 bumps, each requiring its own compatibility
+  # check. See:
+  # https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
   license-headers:
