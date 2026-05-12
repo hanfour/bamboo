@@ -48,6 +48,30 @@
   "peers": {
     "title": "Peers",
     "addPeer": "Add peer",
+    "newPeer": {
+      "button": "Add peer",
+      "formTitle": "Add a new peer",
+      "resultTitle": "Connection info",
+      "formHint": "Mint a pre-auth key. Paste it into the bamboo client on the new device to connect.",
+      "descriptionLabel": "Description",
+      "descriptionPlaceholder": "e.g. Han's iPhone",
+      "reusableLabel": "Reusable key",
+      "reusableHint": "Default: one-time. Reusable keys can connect multiple devices and are useful for bulk-rollout but harder to rotate.",
+      "submit": "Mint key",
+      "cancel": "Cancel",
+      "working": "Minting…",
+      "error": "Failed:",
+      "resultHint": "The pre-auth key below is shown only once. Copy it now — the controller stores only a hash and cannot recover the plaintext.",
+      "fields": {
+        "controllerURL": "Controller URL",
+        "tenantSlug": "Tenant slug",
+        "preAuthKey": "Pre-auth key"
+      },
+      "oneShotWarning": "If you lose this key, mint a new one — there's no way to retrieve it.",
+      "copy": "Copy",
+      "copied": "Copied",
+      "done": "Done"
+    },
     "search": "Search hostname or tag",
     "columns": {
       "hostname": "Hostname",
