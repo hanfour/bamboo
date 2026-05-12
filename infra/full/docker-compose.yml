@@ -65,6 +65,12 @@ services:
       OIDC_GOOGLE_CLIENT_SECRET: "${OIDC_GOOGLE_CLIENT_SECRET:-}"
       OIDC_GITHUB_CLIENT_ID: "${OIDC_GITHUB_CLIENT_ID:-}"
       OIDC_GITHUB_CLIENT_SECRET: "${OIDC_GITHUB_CLIENT_SECRET:-}"
+      # When BAMBOO_REQUIRE_AUTH=true the REST /api/v1/* surface
+      # rejects unauthenticated requests with 401 instead of falling
+      # back to the X-Tenant-Slug dev path. Default empty leaves the
+      # controller in the permissive dev mode that make local-up
+      # relies on. See apps/controller/internal/config/config.go.
+      BAMBOO_REQUIRE_AUTH: "${BAMBOO_REQUIRE_AUTH:-}"
       # wg-state reporter: reads the host-side dump produced by
       # wg-state-reporter.timer and reconciles peer liveness into
       # the DB. Empty path disables; controller HTTP is unaffected.
