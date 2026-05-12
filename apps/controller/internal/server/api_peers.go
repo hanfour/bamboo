@@ -45,6 +45,12 @@ type peerJSON struct {
 	OS                 string   `json:"os,omitempty"`
 	ClientVersion      string   `json:"clientVersion,omitempty"`
 	Endpoints          []string `json:"endpoints,omitempty"`
+	// AllowedIps is the L3 reachability set the controller computed
+	// for this peer from the recipient's perspective. Empty when the
+	// recipient is the one registering or when policy denies the
+	// pair. omitempty so dev-fallback responses (no policy authored)
+	// match the pre-enforcement wire format.
+	AllowedIps []string `json:"allowedIps,omitempty"`
 }
 
 type peerRegisterResponse struct {
@@ -257,6 +263,7 @@ func protoPeerToJSON(p *bamboov1.Peer) peerJSON {
 		OS:                 p.GetOs(),
 		ClientVersion:      p.GetClientVersion(),
 		Endpoints:          p.GetEndpoints(),
+		AllowedIps:         p.GetAllowedIps(),
 	}
 }
 

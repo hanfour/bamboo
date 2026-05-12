@@ -50,8 +50,28 @@ docs/             documentation
 ```bash
 make help            # list available commands
 make bootstrap       # install toolchain dependencies
-make dev             # start local development stack
+make dev             # start local development stack (Postgres + Redis)
+make local-up        # start the full local stack (controller + web + relay)
+make local-bootstrap # apply migrations + mint a default preauth key
 ```
+
+After `local-bootstrap` completes, drive the end-to-end ACL enforcement
+demo:
+
+```bash
+./scripts/demo.sh    # see docs/demo.md
+```
+
+The demo registers two tagged peers, applies a `dev → db` policy via
+gRPC, and shows that the controller's per-peer `AllowedIps` reflects
+the rule — proving the zero-trust promise lives at the wire layer, not
+just in the UI.
+
+For the broader Phase-1 walkthrough (OIDC sign-in + AI
+recommendations), see
+[`docs/development/phase-1-demo-walkthrough.md`](docs/development/phase-1-demo-walkthrough.md).
+Single-VPS production deployment is documented in
+[`docs/deployment/single-vps.md`](docs/deployment/single-vps.md).
 
 See per-module READMEs for component-specific instructions.
 
