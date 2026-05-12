@@ -29,6 +29,7 @@ import type {
   Peer,
   PeerEvent,
   PreAuthKey,
+  User,
 } from './types';
 
 const BASE = process.env.BAMBOO_API_URL ?? 'http://localhost:8081';
@@ -187,6 +188,15 @@ export async function fetchPeer(id: string): Promise<FetchResult<Peer>> {
   const r = await fetchResult<ApiPeer>(`/api/v1/peers/${encodeURIComponent(id)}`);
   if (r.kind !== 'ok') return r;
   return { kind: 'ok', value: apiPeerToPeer(r.value) };
+}
+
+// fetchUsers reads the tenant's user list. Admin-only on the wire
+// (the controller returns 403 for member role), so the page renders
+// the forbidden variant of FetchErrorState for non-admins.
+export async function fetchUsers(): Promise<FetchResult<User[]>> {
+  const r = await fetchResult<{ users: User[] }>('/api/v1/users');
+  if (r.kind !== 'ok') return r;
+  return { kind: 'ok', value: r.value.users ?? [] };
 }
 
 export async function fetchPreAuthKeys(): Promise<FetchResult<PreAuthKey[]>> {

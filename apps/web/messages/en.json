@@ -7,6 +7,7 @@
   "nav": {
     "dashboard": "Dashboard",
     "peers": "Peers",
+    "users": "Users",
     "preAuthKeys": "Pre-auth keys",
     "acl": "Access Policy",
     "settings": "Settings",
@@ -202,6 +203,27 @@
       "timeWindow": "Time window"
     },
     "empty": "No access policy is configured. New tenants start with allow-all; tighten before going to production."
+  },
+  "users": {
+    "title": "Users",
+    "subtitle": "People currently in this tenant. New members are created automatically on first OIDC sign-in; invite and role-management flows are planned but not yet shipped.",
+    "columns": {
+      "user": "User",
+      "role": "Role",
+      "provider": "Provider",
+      "createdAt": "Joined",
+      "lastSeen": "Last seen"
+    },
+    "role": {
+      "admin": "Admin",
+      "member": "Member"
+    },
+    "provider": {
+      "google": "Google",
+      "github": "GitHub",
+      "fallback": "Local"
+    },
+    "empty": "No users yet. The first account to sign in via OIDC becomes admin."
   },
   "settings": {
     "title": "Settings",

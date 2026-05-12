@@ -7,6 +7,7 @@
   "nav": {
     "dashboard": "總覽",
     "peers": "節點",
+    "users": "成員",
     "preAuthKeys": "Pre-auth keys",
     "acl": "存取政策",
     "settings": "設定",
@@ -202,6 +203,27 @@
       "timeWindow": "時段"
     },
     "empty": "尚未設定存取政策。新租戶預設允許全部，正式上線前請收緊。"
+  },
+  "users": {
+    "title": "成員",
+    "subtitle": "目前已加入此租戶的人員。新成員透過 OIDC 登入後自動建立；邀請與角色管理流程仍在規劃中。",
+    "columns": {
+      "user": "成員",
+      "role": "角色",
+      "provider": "登入方式",
+      "createdAt": "加入時間",
+      "lastSeen": "最後活動"
+    },
+    "role": {
+      "admin": "管理員",
+      "member": "成員"
+    },
+    "provider": {
+      "google": "Google",
+      "github": "GitHub",
+      "fallback": "本地"
+    },
+    "empty": "尚未有任何成員。第一個透過 OIDC 登入的帳號會成為管理員。"
   },
   "settings": {
     "title": "設定",
