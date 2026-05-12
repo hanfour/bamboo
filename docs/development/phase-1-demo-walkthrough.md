@@ -1,5 +1,12 @@
 # Phase 1 Demo Walkthrough
 
+> **Note** — this walkthrough targets the AI-recommendations-on-the-Web
+> dashboard demo from Phase 1. For the v0.1.4 ACL-enforcement-on-the-wire
+> demo (10-minute script with proof outputs), use
+> [`docs/demo.md`](../demo.md) instead. The two demos are complementary
+> but the v0.1.4 one is the canonical answer to "show me zero-trust is
+> real".
+
 This is a step-by-step recipe for a reviewer (or future-you) to take a
 clean clone of `hanfour/bamboo` and reach the point where the Web UI
 shows all four AI recommendation kinds populated with real data:

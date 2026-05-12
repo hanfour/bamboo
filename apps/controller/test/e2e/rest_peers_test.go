@@ -13,7 +13,103 @@ import (
 	"time"
 
 	"github.com/hanfour/bamboo/apps/controller/internal/db/repo"
+	bamboov1 "github.com/hanfour/bamboo/proto/gen/go/bamboo/v1"
 )
+
+// TestRESTRegister_PropagatesAllowedIps is the regression guard for
+// the REST→JSON bridge: the controller's Coordinator.Register returns
+// per-peer AllowedIps computed from the ACL policy (PR-b), but the
+// REST bridge in apps/controller/internal/server/api_peers.go used to
+// drop the field when projecting *bamboov1.Peer onto peerJSON. That
+// silent drop let the wire-layer enforcement land while Apple clients
+// (which talk REST) saw an empty AllowedIps list and stayed on full
+// mesh. The test pins the contract: when a policy authored via gRPC
+// allows src→dst, a re-Register over REST must carry the dst peer's
+// /32 in its allowedIps field.
+func TestRESTRegister_PropagatesAllowedIps(t *testing.T) {
+	f := startFixture(t)
+	ctx := context.Background()
+
+	devPubkey := randomPubKey(t)
+	dbPubkey := randomPubKey(t)
+
+	devResp := postJSON(t, f.httpURL+"/api/v1/peers/register", map[string]any{
+		"hostname":           "dev-laptop",
+		"wireguardPublicKey": devPubkey,
+		"tenantSlug":         f.tenantSlug,
+	})
+	dbResp := postJSON(t, f.httpURL+"/api/v1/peers/register", map[string]any{
+		"hostname":           "db-server",
+		"wireguardPublicKey": dbPubkey,
+		"tenantSlug":         f.tenantSlug,
+	})
+	var dev, db struct {
+		Self struct {
+			ID string `json:"id"`
+			IP string `json:"ip"`
+		} `json:"self"`
+	}
+	_ = json.Unmarshal(devResp.body, &dev)
+	_ = json.Unmarshal(dbResp.body, &db)
+
+	if r := sendJSONWithTenant(t, http.MethodPatch,
+		f.httpURL+"/api/v1/peers/"+dev.Self.ID, f.tenantSlug,
+		map[string]any{"tags": []string{"dev"}}); r.status != http.StatusOK {
+		t.Fatalf("tag dev: status=%d body=%s", r.status, r.body)
+	}
+	if r := sendJSONWithTenant(t, http.MethodPatch,
+		f.httpURL+"/api/v1/peers/"+db.Self.ID, f.tenantSlug,
+		map[string]any{"tags": []string{"db"}}); r.status != http.StatusOK {
+		t.Fatalf("tag db: status=%d body=%s", r.status, r.body)
+	}
+
+	if _, err := f.policy.PutPolicy(f.outgoingCtx(ctx), &bamboov1.PutPolicyRequest{
+		HclSource: `rule "dev-to-db" {
+  action       = "allow"
+  sources      = ["tag:dev"]
+  destinations = ["tag:db:*"]
+}`,
+	}); err != nil {
+		t.Fatalf("PutPolicy: %v", err)
+	}
+
+	refreshed := postJSON(t, f.httpURL+"/api/v1/peers/register", map[string]any{
+		"hostname":           "dev-laptop",
+		"wireguardPublicKey": devPubkey,
+		"tenantSlug":         f.tenantSlug,
+	})
+	if refreshed.status != http.StatusOK {
+		t.Fatalf("dev re-register status=%d body=%s", refreshed.status, refreshed.body)
+	}
+	var parsed struct {
+		PolicyRevision int64 `json:"policyRevision"`
+		Peers          []struct {
+			ID         string   `json:"id"`
+			AllowedIps []string `json:"allowedIps"`
+		} `json:"peers"`
+	}
+	if err := json.Unmarshal(refreshed.body, &parsed); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if parsed.PolicyRevision == 0 {
+		t.Fatalf("expected non-zero PolicyRevision after PutPolicy, got 0")
+	}
+
+	var found bool
+	for _, p := range parsed.Peers {
+		if p.ID == db.Self.ID {
+			found = true
+			wantCIDR := db.Self.IP + "/32"
+			if len(p.AllowedIps) != 1 || p.AllowedIps[0] != wantCIDR {
+				t.Errorf("dev's view of db.allowedIps = %v, want [%s]", p.AllowedIps, wantCIDR)
+			}
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("db peer (%s) missing from dev's re-register response", db.Self.ID)
+	}
+}
 
 // TestRESTRegister_HappyPath drives /api/v1/peers/register through the
 // HTTP fixture and verifies the JSON shape matches the gRPC handler's
