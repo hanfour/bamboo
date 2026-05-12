@@ -3,6 +3,7 @@
 import { useTranslations } from 'next-intl';
 import { NewPeerButton } from '@/components/NewPeerButton';
 import { PeersView } from '@/components/PeersView';
+import { Link } from '@/i18n/routing';
 import { fetchMe, fetchPeer, fetchPeerEvents, fetchPeers } from '@/lib/api';
 import type { FetchResult, Peer, PeerEvent } from '@/lib/types';
 
@@ -46,11 +47,20 @@ function Peers({
   tenantSlug: string;
 }) {
   const t = useTranslations('peers');
+  const tKeys = useTranslations('preAuthKeys');
   return (
     <div className="space-y-6">
       <header className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold tracking-tight">{t('title')}</h1>
-        <NewPeerButton tenantSlug={tenantSlug} />
+        <div className="flex items-center gap-3">
+          <Link
+            href="/preauth-keys"
+            className="text-xs text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
+          >
+            {tKeys('manageLink')}
+          </Link>
+          <NewPeerButton tenantSlug={tenantSlug} />
+        </div>
       </header>
       <PeersView
         peers={peers}

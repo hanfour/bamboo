@@ -104,15 +104,34 @@ func (h *HTTPServer) routeAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Tenant-scoped mutation endpoints. Sit between the /peers/{id}
-	// block (which handles its own method dispatch) and the GET-only
-	// block below.
+	// Tenant-scoped pre-auth-key endpoints. Sit between the
+	// /peers/{id} block (which handles its own method dispatch)
+	// and the GET-only block below.
+	//   GET  /api/v1/preauth-keys             → list (admin)
+	//   POST /api/v1/preauth-keys             → mint (admin)
+	//   POST /api/v1/preauth-keys/{id}/revoke → revoke (admin)
 	if r.URL.Path == "/api/v1/preauth-keys" {
-		if r.Method != http.MethodPost {
+		switch r.Method {
+		case http.MethodGet:
+			h.apiListPreAuthKeys(w, r, authn, tenant)
+		case http.MethodPost:
+			h.apiCreatePreAuthKey(w, r, authn, tenant)
+		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+		return
+	}
+	if rest, ok := strings.CutPrefix(r.URL.Path, "/api/v1/preauth-keys/"); ok && rest != "" {
+		// {id}/revoke is the only sub-path. Anything else is 404.
+		if id, found := strings.CutSuffix(rest, "/revoke"); found && id != "" && !strings.Contains(id, "/") {
+			if r.Method != http.MethodPost {
+				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+				return
+			}
+			h.apiRevokePreAuthKey(w, r, authn, tenant, id)
 			return
 		}
-		h.apiCreatePreAuthKey(w, r, authn, tenant)
+		http.NotFound(w, r)
 		return
 	}
 
@@ -619,27 +638,8 @@ type apiPreAuthKeyJSON struct {
 // generation + hash storage contract has to match because both
 // surfaces feed the same redeem path.
 func (h *HTTPServer) apiCreatePreAuthKey(w http.ResponseWriter, r *http.Request, authn *authnContext, tenant *repo.Tenant) {
-	// Pre-auth keys grant peer-registration capability, which is
-	// effectively VPN access for the tenant. Authenticated callers
-	// must be admins; the dev-fallback path (no JWT) is allowed
-	// with a warning so local development without OIDC keeps
-	// working. Operators running prod should configure OIDC and
-	// fronting Caddy ACLs / firewall to lock the bypass off.
-	if authn != nil && authn.claims != nil {
-		user, err := h.users.GetByID(r.Context(), authn.claims.UserID)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, fmt.Errorf("resolve user: %w", err))
-			return
-		}
-		if !user.IsAdmin {
-			writeError(w, http.StatusForbidden, errors.New("admin role required to mint pre-auth keys"))
-			return
-		}
-	} else {
-		slog.Warn("preauthkey mint via dev-fallback auth (no JWT) — configure OIDC + an admin user in production",
-			"tenant", tenant.Slug,
-			"path", r.URL.Path,
-		)
+	if !h.requirePreAuthKeyAdmin(w, r, authn, tenant) {
+		return
 	}
 
 	var req apiCreatePreAuthKeyReq
@@ -701,6 +701,144 @@ func (h *HTTPServer) apiCreatePreAuthKey(w http.ResponseWriter, r *http.Request,
 		CreatedAt:   created.CreatedAt,
 		Secret:      plaintext,
 	})
+}
+
+// requirePreAuthKeyAdmin enforces the auth contract every pre-auth-
+// key endpoint shares: authenticated callers must have IsAdmin=true,
+// dev-fallback (no JWT) is allowed with a warn log so local dev
+// keeps working. Returns true when the caller may proceed; writes
+// the error response and returns false otherwise.
+func (h *HTTPServer) requirePreAuthKeyAdmin(w http.ResponseWriter, r *http.Request, authn *authnContext, tenant *repo.Tenant) bool {
+	if authn != nil && authn.claims != nil {
+		user, err := h.users.GetByID(r.Context(), authn.claims.UserID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, fmt.Errorf("resolve user: %w", err))
+			return false
+		}
+		if !user.IsAdmin {
+			writeError(w, http.StatusForbidden, errors.New("admin role required for pre-auth key management"))
+			return false
+		}
+		return true
+	}
+	slog.Warn("preauthkey access via dev-fallback auth (no JWT) — configure OIDC + an admin user in production",
+		"tenant", tenant.Slug,
+		"method", r.Method,
+		"path", r.URL.Path,
+	)
+	return true
+}
+
+// apiPreAuthKeyListJSON is the wire shape for list rows. No Secret
+// — once minted, the plaintext is gone forever (DB stores only the
+// bcrypt hash). The UI derives a display status from RevokedAt /
+// ExpiresAt / UseCount / Reusable; the controller forwards raw
+// columns rather than committing to a status enum here.
+type apiPreAuthKeyListJSON struct {
+	ID          string     `json:"id"`
+	Description string     `json:"description,omitempty"`
+	Reusable    bool       `json:"reusable"`
+	Ephemeral   bool       `json:"ephemeral"`
+	Tags        []string   `json:"tags"`
+	CreatedAt   time.Time  `json:"createdAt"`
+	ExpiresAt   *time.Time `json:"expiresAt,omitempty"`
+	RevokedAt   *time.Time `json:"revokedAt,omitempty"`
+	UseCount    int64      `json:"useCount"`
+}
+
+func preAuthKeyToListJSON(k *repo.PreAuthKey) apiPreAuthKeyListJSON {
+	tags := k.Tags
+	if tags == nil {
+		tags = []string{}
+	}
+	return apiPreAuthKeyListJSON{
+		ID:          k.ID.String(),
+		Description: k.Description,
+		Reusable:    k.Reusable,
+		Ephemeral:   k.Ephemeral,
+		Tags:        tags,
+		CreatedAt:   k.CreatedAt,
+		ExpiresAt:   k.ExpiresAt,
+		RevokedAt:   k.RevokedAt,
+		UseCount:    k.UseCount,
+	}
+}
+
+// apiListPreAuthKeys implements GET /api/v1/preauth-keys. Tenant-
+// scoped, newest first. Same admin gate as the create path —
+// listing exposes nothing secret on its own, but the keys are an
+// admin-only resource so we keep the surface uniform.
+func (h *HTTPServer) apiListPreAuthKeys(w http.ResponseWriter, r *http.Request, authn *authnContext, tenant *repo.Tenant) {
+	if !h.requirePreAuthKeyAdmin(w, r, authn, tenant) {
+		return
+	}
+	keys, err := h.keys.ListByTenant(r.Context(), tenant.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	out := make([]apiPreAuthKeyListJSON, 0, len(keys))
+	for _, k := range keys {
+		out = append(out, preAuthKeyToListJSON(k))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"keys": out})
+}
+
+// apiRevokePreAuthKey implements POST /api/v1/preauth-keys/{id}/revoke.
+// Idempotent at the repo layer — already-revoked keys keep their
+// original revoked_at. Cross-tenant probe protection: a GetByID +
+// tenant check 404s on a key belonging to another tenant before we
+// even attempt the revoke, matching the /peers/{id} contract.
+func (h *HTTPServer) apiRevokePreAuthKey(w http.ResponseWriter, r *http.Request, authn *authnContext, tenant *repo.Tenant, idStr string) {
+	if !h.requirePreAuthKeyAdmin(w, r, authn, tenant) {
+		return
+	}
+	id, err := uuid.Parse(idStr)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	key, err := h.keys.GetByID(r.Context(), id)
+	if errors.Is(err, repo.ErrNotFound) {
+		http.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if key.TenantID != tenant.ID {
+		http.NotFound(w, r)
+		return
+	}
+	if err := h.keys.Revoke(r.Context(), id); err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("revoke key: %w", err))
+		return
+	}
+
+	auditEv := &repo.AuditEvent{
+		TenantID:     &tenant.ID,
+		Action:       "preauthkey.revoke",
+		ResourceType: "pre_auth_key",
+		ResourceID:   &id,
+		Diff: marshalDiff(map[string]any{
+			"description": key.Description,
+			"reusable":    key.Reusable,
+			"useCount":    key.UseCount,
+		}),
+	}
+	if authn != nil && authn.claims != nil {
+		auditEv.ActorType = "user"
+		uid := authn.claims.UserID
+		auditEv.ActorID = &uid
+	} else {
+		auditEv.ActorType = "system"
+	}
+	if err := h.audits.Insert(r.Context(), auditEv); err != nil {
+		slog.Warn("preauthkey.revoke audit insert failed", "key_id", id, "err", err)
+	}
+
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // writePeerAudit centralizes the actor + tenant + resource binding

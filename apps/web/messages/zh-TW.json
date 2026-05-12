@@ -152,6 +152,38 @@
       }
     }
   },
+  "preAuthKeys": {
+    "title": "Pre-auth keys",
+    "subtitle": "由管理員產生、給新節點貼進客戶端用於首次連線的金鑰。產生後即顯示一次明文；之後僅能撤銷。",
+    "empty": "尚未產生任何 pre-auth key。前往「節點」頁點「新增節點」即可產生第一支。",
+    "columns": {
+      "description": "備註",
+      "status": "狀態",
+      "kind": "類型",
+      "useCount": "使用次數",
+      "createdAt": "建立時間",
+      "actions": "操作"
+    },
+    "status": {
+      "revoked": "已撤銷",
+      "expired": "已過期",
+      "used": "已使用",
+      "reusable": "可重複使用",
+      "pending": "等待使用"
+    },
+    "kind": {
+      "oneShot": "一次性",
+      "reusable": "可重複"
+    },
+    "actions": {
+      "revoke": "撤銷",
+      "confirmRevoke": "確定撤銷",
+      "cancel": "取消",
+      "working": "處理中…",
+      "alreadyRevoked": "—"
+    },
+    "manageLink": "管理 pre-auth keys"
+  },
   "acl": {
     "title": "存取政策",
     "revision": "版本",
