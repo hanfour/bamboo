@@ -7,6 +7,7 @@
   "nav": {
     "dashboard": "總覽",
     "peers": "節點",
+    "preAuthKeys": "Pre-auth keys",
     "acl": "存取政策",
     "settings": "設定",
     "signOut": "登出"
@@ -20,7 +21,6 @@
     "title": "bamboo",
     "subtitle": "登入以管理你的網路。",
     "signInWithGoogle": "使用 Google 登入",
-    "signInWithGitHub": "使用 GitHub 登入",
     "selfHosted": "自架版本請於 CLI 使用 pre-auth key。"
   },
   "dashboard": {
@@ -38,10 +38,10 @@
         "api": "API"
       },
       "action": {
-        "peer.register": "註冊節點",
-        "peer.update": "更新節點",
-        "peer.delete": "刪除節點",
-        "policy.update": "更新政策"
+        "peer_register": "註冊節點",
+        "peer_update": "更新節點",
+        "peer_delete": "刪除節點",
+        "policy_update": "更新政策"
       }
     }
   },
@@ -148,9 +148,9 @@
           "api": "API"
         },
         "action": {
-          "peer.register": "註冊節點",
-          "peer.update": "更新節點",
-          "peer.delete": "刪除節點"
+          "peer_register": "註冊節點",
+          "peer_update": "更新節點",
+          "peer_delete": "刪除節點"
         }
       }
     }

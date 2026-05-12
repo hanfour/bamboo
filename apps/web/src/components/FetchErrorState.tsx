@@ -9,9 +9,13 @@
 // configured (e.g. self-hosted operator hasn't set OIDC env yet) is
 // worse than rendering an explicit "Sign in" affordance the user can
 // reach when they're ready. The link points at the controller's
-// /auth/{provider}/login flow; the provider is operator-chosen so we
-// surface both Google and GitHub and let the buttons 404 cleanly if
-// the provider isn't configured.
+// /auth/{provider}/login flow.
+//
+// Only Google is offered today — GitHub OIDC is unimplemented in
+// production (OIDC_GITHUB_* env vars are empty on the VPS) and the
+// button used to 404 on click. When GitHub auth lands, gate visible
+// providers behind a /api/v1/me-style "configured providers" list so
+// self-hosted operators see exactly what's wired.
 
 import { useTranslations } from 'next-intl';
 
@@ -148,12 +152,6 @@ function SignInLinks({
         className="inline-flex items-center rounded-md border border-current/20 bg-white/60 px-3 py-1.5 text-sm font-medium hover:bg-white dark:bg-zinc-900/40 dark:hover:bg-zinc-900"
       >
         {label} — Google
-      </a>
-      <a
-        href={url('github')}
-        className="inline-flex items-center rounded-md border border-current/20 bg-white/60 px-3 py-1.5 text-sm font-medium hover:bg-white dark:bg-zinc-900/40 dark:hover:bg-zinc-900"
-      >
-        {label} — GitHub
       </a>
     </div>
   );

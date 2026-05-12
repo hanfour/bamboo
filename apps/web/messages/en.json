@@ -7,6 +7,7 @@
   "nav": {
     "dashboard": "Dashboard",
     "peers": "Peers",
+    "preAuthKeys": "Pre-auth keys",
     "acl": "Access Policy",
     "settings": "Settings",
     "signOut": "Sign out"
@@ -20,7 +21,6 @@
     "title": "bamboo",
     "subtitle": "Sign in to manage your mesh.",
     "signInWithGoogle": "Continue with Google",
-    "signInWithGitHub": "Continue with GitHub",
     "selfHosted": "Running self-hosted? Use a pre-auth key in the CLI."
   },
   "dashboard": {
@@ -38,10 +38,10 @@
         "api": "API"
       },
       "action": {
-        "peer.register": "Registered",
-        "peer.update": "Updated",
-        "peer.delete": "Deleted",
-        "policy.update": "Policy updated"
+        "peer_register": "Registered",
+        "peer_update": "Updated",
+        "peer_delete": "Deleted",
+        "policy_update": "Policy updated"
       }
     }
   },
@@ -148,9 +148,9 @@
           "api": "API"
         },
         "action": {
-          "peer.register": "Registered",
-          "peer.update": "Updated",
-          "peer.delete": "Deleted"
+          "peer_register": "Registered",
+          "peer_update": "Updated",
+          "peer_delete": "Deleted"
         }
       }
     }

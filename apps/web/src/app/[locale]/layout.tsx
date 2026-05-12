@@ -4,9 +4,22 @@ import type { ReactNode } from 'react';
 import { NextIntlClientProvider } from 'next-intl';
 import { getMessages } from 'next-intl/server';
 import { notFound } from 'next/navigation';
+import { Saira_Stencil_One } from 'next/font/google';
 import { routing } from '@/i18n/routing';
 import { Header } from '@/components/Header';
 import '../globals.css';
+
+// Saira Stencil One — loaded only for the wordmark via the
+// --font-wordmark CSS variable. The rest of the site keeps the
+// system-sans stack defined in globals.css; pulling a display
+// font onto body text would push us back toward the editorial
+// look that got rejected on 2026-05-12.
+const wordmarkFont = Saira_Stencil_One({
+  subsets: ['latin'],
+  weight: '400',
+  variable: '--font-wordmark',
+  display: 'swap',
+});
 
 export const metadata = {
   title: 'bamboo',
@@ -29,11 +42,11 @@ export default async function LocaleLayout({
   const messages = await getMessages();
 
   return (
-    <html lang={locale}>
-      <body className="min-h-screen">
+    <html lang={locale} className={wordmarkFont.variable}>
+      <body className="min-h-screen antialiased">
         <NextIntlClientProvider messages={messages}>
           <Header />
-          <main className="mx-auto max-w-6xl px-6 py-8">{children}</main>
+          <main className="mx-auto max-w-7xl px-6 py-8">{children}</main>
         </NextIntlClientProvider>
       </body>
     </html>

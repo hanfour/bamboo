@@ -62,7 +62,11 @@ const KNOWN_ACTORS = new Set<ActivityEvent['actorType']>(['user', 'system', 'api
 
 function actionLabel(t: ReturnType<typeof useTranslations>, action: string): string {
   if (KNOWN_ACTIONS.has(action)) {
-    return t(`action.${action}` as never);
+    // next-intl treats "." as namespace nesting, so we can't key the
+    // JSON with `peer.register` literally. The audit log on the wire
+    // still uses dotted form; the i18n JSON uses `peer_register` and
+    // we translate at lookup time.
+    return t(`action.${action.replaceAll('.', '_')}` as never);
   }
   return action;
 }

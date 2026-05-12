@@ -86,3 +86,6 @@ crash.log
 .cache/
 tmp/
 *.log
+
+# Playwright MCP screenshot / snapshot artifacts (local-only)
+.playwright-mcp/
