@@ -256,3 +256,52 @@ func TestWatchPeers_ContextCancelEndsStream(t *testing.T) {
 		t.Errorf("unexpected stream end error: %v (code %v)", err, status.Code(err))
 	}
 }
+
+func TestWatchPeers_ReceivesPolicyChanged(t *testing.T) {
+	f := startFixture(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	mctx := f.outgoingCtx(ctx)
+
+	self, err := f.coord.Register(mctx, &bamboov1.RegisterRequest{
+		Hostname: "watcher", WireguardPublicKey: randomPubKey(t),
+	})
+	if err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	stream, err := f.coord.WatchPeers(mctx, &bamboov1.WatchPeersRequest{
+		PeerId: self.GetSelf().GetId(),
+	})
+	if err != nil {
+		t.Fatalf("WatchPeers: %v", err)
+	}
+
+	// Give the subscribe goroutine a moment to register before we publish.
+	time.Sleep(100 * time.Millisecond)
+
+	resp, err := f.policy.PutPolicy(mctx, &bamboov1.PutPolicyRequest{
+		HclSource: `rule "allow-all" {
+  action       = "allow"
+  sources      = ["*"]
+  destinations = ["*:*"]
+}`,
+	})
+	if err != nil {
+		t.Fatalf("PutPolicy: %v", err)
+	}
+
+	event, err := stream.Recv()
+	if err != nil {
+		t.Fatalf("stream.Recv: %v", err)
+	}
+	pc := event.GetPolicyChanged()
+	if pc == nil {
+		t.Fatalf("expected PolicyChanged event, got %T", event.GetEvent())
+	}
+	if pc.GetPolicyRevision() != resp.GetPolicy().GetRevision() {
+		t.Errorf("event revision = %d, want %d",
+			pc.GetPolicyRevision(), resp.GetPolicy().GetRevision())
+	}
+}

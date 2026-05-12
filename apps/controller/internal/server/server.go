@@ -74,7 +74,7 @@ func buildGRPCWithAuth(pool *db.Pool, ch *clickhouse.Conn) (*grpc.Server, *handl
 	coordHandler := handlers.NewCoordinatorHandler(pool, authHandler, bus)
 	bamboov1.RegisterAuthServiceServer(s, authHandler)
 	bamboov1.RegisterCoordinatorServiceServer(s, coordHandler)
-	bamboov1.RegisterPolicyServiceServer(s, handlers.NewPolicyHandler(pool, ch))
+	bamboov1.RegisterPolicyServiceServer(s, handlers.NewPolicyHandler(pool, ch, bus))
 	bamboov1.RegisterTelemetryServiceServer(s, handlers.NewTelemetryHandler(pool, ch))
 	reflection.Register(s)
 
@@ -91,7 +91,7 @@ func BuildGRPCServer(pool *db.Pool) *grpc.Server {
 	authHandler := handlers.NewAuthHandler(pool)
 	bamboov1.RegisterAuthServiceServer(s, authHandler)
 	bamboov1.RegisterCoordinatorServiceServer(s, handlers.NewCoordinatorHandler(pool, authHandler, bus))
-	bamboov1.RegisterPolicyServiceServer(s, handlers.NewPolicyHandler(pool, nil))
+	bamboov1.RegisterPolicyServiceServer(s, handlers.NewPolicyHandler(pool, nil, bus))
 	bamboov1.RegisterTelemetryServiceServer(s, handlers.NewTelemetryHandler(pool, nil))
 
 	reflection.Register(s)

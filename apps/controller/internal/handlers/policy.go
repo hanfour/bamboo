@@ -14,6 +14,7 @@ import (
 	"github.com/hanfour/bamboo/apps/controller/internal/clickhouse"
 	"github.com/hanfour/bamboo/apps/controller/internal/db"
 	"github.com/hanfour/bamboo/apps/controller/internal/db/repo"
+	"github.com/hanfour/bamboo/apps/controller/internal/events"
 	"github.com/hanfour/bamboo/apps/controller/internal/policy"
 	"github.com/hanfour/bamboo/apps/controller/internal/policy/recommend"
 	bamboov1 "github.com/hanfour/bamboo/proto/gen/go/bamboo/v1"
@@ -32,17 +33,21 @@ type PolicyHandler struct {
 	audits    *repo.AuditLogs
 	traces    *clickhouse.Traces
 	anomalies *clickhouse.Anomalies
+	bus       *events.Bus
 }
 
 // NewPolicyHandler constructs a PolicyHandler with required repositories.
 // ch may be nil; the handler degrades to no-op telemetry writes.
-func NewPolicyHandler(pool *db.Pool, ch *clickhouse.Conn) *PolicyHandler {
+// bus may be nil; PolicyChanged events simply aren't published in that
+// case (clients still pick up changes on the next heartbeat).
+func NewPolicyHandler(pool *db.Pool, ch *clickhouse.Conn, bus *events.Bus) *PolicyHandler {
 	return &PolicyHandler{
 		tenants:   repo.NewTenants(pool),
 		policies:  repo.NewPolicies(pool),
 		audits:    repo.NewAuditLogs(pool),
 		traces:    clickhouse.NewTraces(ch),
 		anomalies: clickhouse.NewAnomalies(ch),
+		bus:       bus,
 	}
 }
 
@@ -100,6 +105,14 @@ func (h *PolicyHandler) PutPolicy(ctx context.Context, req *bamboov1.PutPolicyRe
 			"hcl_bytes": len(rec.HCLSource),
 		}),
 	})
+
+	if h.bus != nil {
+		h.bus.Publish(tenant.ID, &bamboov1.WatchPeersEvent{
+			Event: &bamboov1.WatchPeersEvent_PolicyChanged{
+				PolicyChanged: &bamboov1.PolicyChanged{PolicyRevision: rec.Revision},
+			},
+		})
+	}
 
 	return &bamboov1.PutPolicyResponse{Policy: toProtoPolicy(rec, parsed)}, nil
 }
