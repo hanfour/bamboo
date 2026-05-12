@@ -62,6 +62,9 @@
       "working": "產生中…",
       "error": "失敗：",
       "resultHint": "下方的 pre-auth key 只會顯示一次。請立即複製 — controller 只儲存雜湊值，無法事後取回明文。",
+      "qrLabel": "bamboo 連線設定 QR code",
+      "qrHint": "用 bamboo iOS / macOS app 掃描，自動帶入三個欄位。",
+      "manualFieldsToggle": "或手動複製欄位",
       "fields": {
         "controllerURL": "Controller URL",
         "tenantSlug": "租戶代號",

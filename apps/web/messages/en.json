@@ -62,6 +62,9 @@
       "working": "Minting…",
       "error": "Failed:",
       "resultHint": "The pre-auth key below is shown only once. Copy it now — the controller stores only a hash and cannot recover the plaintext.",
+      "qrLabel": "bamboo connection config QR code",
+      "qrHint": "Scan with the bamboo iOS / macOS app to autofill all three fields.",
+      "manualFieldsToggle": "Or copy fields manually",
       "fields": {
         "controllerURL": "Controller URL",
         "tenantSlug": "Tenant slug",
