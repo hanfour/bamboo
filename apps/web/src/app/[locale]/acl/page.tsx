@@ -4,6 +4,7 @@ import { useTranslations } from 'next-intl';
 import { fetchPolicy, fetchRecommendations, type ApiRecommendation } from '@/lib/api';
 import type { AclPolicy } from '@/lib/types';
 import { FetchErrorState } from '@/components/FetchErrorState';
+import { PageHeader } from '@/components/PageHeader';
 
 export default async function AclPage() {
   const [policy, recommendations] = await Promise.all([
@@ -11,10 +12,6 @@ export default async function AclPage() {
     fetchRecommendations(),
   ]);
 
-  // The ACL page is the policy editor. Policy is load-bearing; if we
-  // can't load it we surface the failure rather than render the empty
-  // placeholder that lies about there being no policy. Recommendations
-  // are advisory — failing to load them just hides the section.
   if (policy.kind !== 'ok') {
     return <FetchErrorState kind={policy.kind} />;
   }
@@ -36,13 +33,13 @@ function Acl({
 }) {
   const t = useTranslations('acl');
 
+  // Empty state — distinct page header that explains the situation
+  // rather than rendering a header-then-card hybrid.
   if (!policy.hclSource) {
     return (
-      <div className="space-y-6">
-        <header>
-          <h1 className="text-2xl font-semibold tracking-tight">{t('title')}</h1>
-        </header>
-        <p className="rounded-lg border border-dashed border-zinc-300 p-8 text-center text-sm text-zinc-500 dark:border-zinc-700 dark:text-zinc-400">
+      <div>
+        <PageHeader kicker="policy · 存取政策" title={t('title')} />
+        <p className="rounded-md border border-dashed border-white/[0.08] px-8 py-12 text-center text-sm leading-relaxed text-zinc-400">
           {t('empty')}
         </p>
       </div>
@@ -50,82 +47,63 @@ function Acl({
   }
 
   return (
-    <div className="space-y-6">
-      <header className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">{t('title')}</h1>
-          <p className="text-sm text-zinc-500 dark:text-zinc-400">
-            {t('revision')}: <span className="font-mono">{policy.revision}</span>
+    <div>
+      <PageHeader
+        kicker="policy · 存取政策"
+        title={t('title')}
+        description={
+          <span className="font-mono text-[12px] uppercase tracking-[0.18em] text-zinc-500">
+            <span className="text-zinc-400">{t('revision')}</span>
+            <span className="mx-2 text-zinc-700">·</span>
+            <span className="text-bamboo-300">rev {policy.revision}</span>
             {policy.updatedAt && (
               <>
-                {' · '}
-                {t('lastUpdated')}:{' '}
+                <span className="mx-2 text-zinc-700">·</span>
+                <span>{t('lastUpdated')}: </span>
                 <time dateTime={policy.updatedAt}>
                   {new Date(policy.updatedAt).toLocaleString()}
                 </time>
               </>
             )}
-          </p>
-        </div>
-        <button
-          type="button"
-          className="rounded-md border border-zinc-300 px-3 py-1.5 text-sm font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-900"
-        >
-          {t('edit')}
-        </button>
-      </header>
+          </span>
+        }
+        meta={
+          <button
+            type="button"
+            className="rounded-md border border-white/[0.08] px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.18em] text-zinc-300 transition hover:border-bamboo-400/40 hover:bg-bamboo-500/[0.06]"
+          >
+            {t('edit')}
+          </button>
+        }
+      />
 
-      <section className="space-y-2">
-        <h2 className="text-sm font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
-          {t('viewSource')}
-        </h2>
-        <pre className="overflow-x-auto rounded-lg border border-zinc-200 bg-zinc-50 p-4 font-mono text-xs leading-relaxed text-zinc-800 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-200">
+      <section className="mb-12">
+        <SectionHeading>{t('viewSource')}</SectionHeading>
+        <pre className="overflow-x-auto rounded-md border border-white/[0.06] bg-ink-900/60 p-5 font-mono text-[12px] leading-relaxed text-zinc-200">
           <code>{policy.hclSource}</code>
         </pre>
       </section>
 
-      <section className="space-y-2">
-        <h2 className="text-sm font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
-          {t('rules')}
-        </h2>
-        <ul className="space-y-2">
+      <section className="mb-12">
+        <SectionHeading>{t('rules')}</SectionHeading>
+        <ul className="space-y-3">
           {policy.rules.map((r) => (
             <li
               key={r.id}
-              className="rounded-lg border border-zinc-200 p-4 dark:border-zinc-800"
+              className="rounded-md border border-white/[0.06] bg-white/[0.01] p-5"
             >
               <div className="flex flex-wrap items-baseline justify-between gap-2">
-                <code className="font-mono text-xs text-zinc-500 dark:text-zinc-400">
+                <code className="font-mono text-[11px] uppercase tracking-[0.16em] text-zinc-500">
                   {r.id}
                 </code>
-                <span
-                  className={`rounded-full px-2 py-0.5 text-xs font-medium ${
-                    r.action === 'allow'
-                      ? 'bg-bamboo-100 text-bamboo-800 dark:bg-bamboo-900/40 dark:text-bamboo-300'
-                      : 'bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300'
-                  }`}
-                >
-                  {r.action}
-                </span>
+                <ActionPill action={r.action} />
               </div>
               {r.description && (
-                <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-300">
-                  {r.description}
-                </p>
+                <p className="mt-2 text-sm text-zinc-300">{r.description}</p>
               )}
-              <dl className="mt-3 grid gap-2 text-xs sm:grid-cols-2">
-                <div>
-                  <dt className="text-zinc-500 dark:text-zinc-400">
-                    {t('rule.sources')}
-                  </dt>
-                  <dd className="mt-0.5 font-mono">{r.sources.join(', ')}</dd>
-                </div>
-                <div>
-                  <dt className="text-zinc-500 dark:text-zinc-400">
-                    {t('rule.destinations')}
-                  </dt>
-                  <dd className="mt-0.5 font-mono">{r.destinations.join(', ')}</dd>
-                </div>
+              <dl className="mt-4 grid gap-3 sm:grid-cols-2">
+                <RuleField label={t('rule.sources')} values={r.sources} />
+                <RuleField label={t('rule.destinations')} values={r.destinations} />
               </dl>
             </li>
           ))}
@@ -133,31 +111,29 @@ function Acl({
       </section>
 
       {recommendations.length > 0 && (
-        <section className="space-y-3">
-          <h2 className="text-sm font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
-            AI recommendations
-          </h2>
+        <section className="mb-12">
+          <SectionHeading>AI recommendations</SectionHeading>
           <ul className="space-y-3">
             {recommendations.map((r) => (
               <li
                 key={r.id}
-                className="rounded-lg border border-amber-200 bg-amber-50 p-4 dark:border-amber-900/60 dark:bg-amber-950/30"
+                className="rounded-md border border-amber-400/30 bg-amber-500/[0.04] p-5"
               >
                 <div className="flex flex-wrap items-baseline justify-between gap-2">
-                  <span className="font-medium text-amber-900 dark:text-amber-200">
+                  <span className="text-sm font-medium text-amber-200">
                     {r.summary}
                   </span>
-                  <span className="text-xs font-mono text-amber-700 dark:text-amber-300">
+                  <span className="font-mono text-[10px] uppercase tracking-[0.20em] text-amber-300/80">
                     confidence {(r.confidence * 100).toFixed(0)}%
                   </span>
                 </div>
                 {r.diff && (
-                  <pre className="mt-2 overflow-x-auto rounded bg-white p-2 font-mono text-xs leading-snug text-zinc-800 dark:bg-zinc-900 dark:text-zinc-100">
+                  <pre className="mt-3 overflow-x-auto rounded border border-amber-400/20 bg-amber-950/30 p-3 font-mono text-[11px] leading-snug text-amber-100">
                     <code>{r.diff}</code>
                   </pre>
                 )}
                 {r.evidence?.length > 0 && (
-                  <ul className="mt-2 list-inside list-disc text-xs text-amber-800 dark:text-amber-200">
+                  <ul className="mt-3 list-inside list-disc text-[12px] text-amber-200/80">
                     {r.evidence.map((e, i) => (
                       <li key={i}>{e}</li>
                     ))}
@@ -168,6 +144,57 @@ function Acl({
           </ul>
         </section>
       )}
+    </div>
+  );
+}
+
+function SectionHeading({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="mb-4 flex items-baseline gap-3">
+      <h2 className="font-mono text-[11px] uppercase tracking-[0.24em] text-zinc-500">
+        {children}
+      </h2>
+      <span aria-hidden className="h-px flex-1 bg-white/[0.06]" />
+    </div>
+  );
+}
+
+function ActionPill({ action }: { action: 'allow' | 'deny' }) {
+  const tone =
+    action === 'allow'
+      ? 'border-bamboo-400/40 bg-bamboo-500/[0.08] text-bamboo-300'
+      : 'border-red-400/40 bg-red-500/[0.08] text-red-300';
+  const dot = action === 'allow' ? 'bg-bamboo-400' : 'bg-red-400';
+  return (
+    <span
+      className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 font-mono text-[10px] uppercase tracking-[0.16em] ${tone}`}
+    >
+      <span className={`h-1.5 w-1.5 rounded-full ${dot}`} aria-hidden />
+      {action}
+    </span>
+  );
+}
+
+function RuleField({ label, values }: { label: string; values: string[] }) {
+  return (
+    <div>
+      <dt className="font-mono text-[10px] uppercase tracking-[0.22em] text-zinc-500">
+        {label}
+      </dt>
+      <dd className="mt-1.5 flex flex-wrap gap-1.5">
+        {values.length === 0 ? (
+          <span className="font-mono text-[11px] text-zinc-600">—</span>
+        ) : (
+          values.map((v, i) => (
+            <code
+              key={i}
+              className="rounded border border-white/[0.06] bg-white/[0.02] px-1.5 py-0.5 font-mono text-[11px] text-zinc-300"
+            >
+              {v}
+            </code>
+          ))
+        )}
+      </dd>
     </div>
   );
 }

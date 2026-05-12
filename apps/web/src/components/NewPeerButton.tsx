@@ -57,8 +57,9 @@ export function NewPeerButton({ tenantSlug }: { tenantSlug: string }) {
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className="rounded-md bg-bamboo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-bamboo-700 dark:bg-bamboo-500 dark:hover:bg-bamboo-400"
+        className="group inline-flex items-center gap-2 rounded-md border border-bamboo-400/40 bg-bamboo-500/[0.08] px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.18em] text-bamboo-200 transition hover:border-bamboo-400/60 hover:bg-bamboo-500/[0.14]"
       >
+        <span aria-hidden className="text-bamboo-400">+</span>
         {t('button')}
       </button>
       {open && (

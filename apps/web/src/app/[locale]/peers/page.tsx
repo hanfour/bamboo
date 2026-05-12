@@ -4,6 +4,7 @@ import { useTranslations } from 'next-intl';
 import { NewPeerButton } from '@/components/NewPeerButton';
 import { PeersView } from '@/components/PeersView';
 import { FetchErrorState } from '@/components/FetchErrorState';
+import { PageHeader } from '@/components/PageHeader';
 import { Link } from '@/i18n/routing';
 import { fetchMe, fetchPeer, fetchPeerEvents, fetchPeers } from '@/lib/api';
 import type { FetchResult, Peer, PeerEvent } from '@/lib/types';
@@ -24,10 +25,6 @@ export default async function PeersPage({
     fetchMe(),
   ]);
 
-  // The peer table is the page's primary purpose. If we can't load it
-  // we surface the auth / network state instead of an empty table that
-  // would lie about there being no peers. The selectedPeer drawer state
-  // already handles its own variants downstream (see PeerDrawer).
   if (peers.kind !== 'ok') {
     return <FetchErrorState kind={peers.kind} />;
   }
@@ -59,19 +56,22 @@ function Peers({
   const t = useTranslations('peers');
   const tKeys = useTranslations('preAuthKeys');
   return (
-    <div className="space-y-6">
-      <header className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold tracking-tight">{t('title')}</h1>
-        <div className="flex items-center gap-3">
-          <Link
-            href="/preauth-keys"
-            className="text-xs text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
-          >
-            {tKeys('manageLink')}
-          </Link>
-          <NewPeerButton tenantSlug={tenantSlug} />
-        </div>
-      </header>
+    <div>
+      <PageHeader
+        kicker="peers · 節點"
+        title={t('title')}
+        meta={
+          <>
+            <Link
+              href="/preauth-keys"
+              className="hidden font-mono text-[11px] uppercase tracking-[0.18em] text-zinc-500 transition hover:text-zinc-200 sm:inline-block"
+            >
+              {tKeys('manageLink')} →
+            </Link>
+            <NewPeerButton tenantSlug={tenantSlug} />
+          </>
+        }
+      />
       <PeersView
         peers={peers}
         selectedPeer={selectedPeer}

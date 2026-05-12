@@ -23,25 +23,27 @@ export function PreAuthKeyTable({ keys }: { keys: PreAuthKey[] }) {
   const t = useTranslations('preAuthKeys');
   if (keys.length === 0) {
     return (
-      <p className="rounded-lg border border-dashed border-zinc-300 p-8 text-center text-sm text-zinc-500 dark:border-zinc-700 dark:text-zinc-400">
+      <p className="rounded-md border border-dashed border-white/[0.08] px-6 py-12 text-center text-sm text-zinc-500">
         {t('empty')}
       </p>
     );
   }
   return (
-    <div className="overflow-x-auto rounded-lg border border-zinc-200 dark:border-zinc-800">
+    <div className="overflow-x-auto rounded-md border border-white/[0.06] bg-white/[0.01]">
       <table className="w-full text-sm">
-        <thead className="bg-zinc-50 text-left text-xs font-medium uppercase tracking-wide text-zinc-500 dark:bg-zinc-900 dark:text-zinc-400">
-          <tr>
-            <th className="px-4 py-3">{t('columns.description')}</th>
-            <th className="px-4 py-3">{t('columns.status')}</th>
-            <th className="px-4 py-3">{t('columns.kind')}</th>
-            <th className="px-4 py-3">{t('columns.useCount')}</th>
-            <th className="px-4 py-3">{t('columns.createdAt')}</th>
-            <th className="px-4 py-3 sr-only">{t('columns.actions')}</th>
+        <thead>
+          <tr className="border-b border-white/[0.06] text-left">
+            <Th>{t('columns.description')}</Th>
+            <Th>{t('columns.status')}</Th>
+            <Th>{t('columns.kind')}</Th>
+            <Th>{t('columns.useCount')}</Th>
+            <Th>{t('columns.createdAt')}</Th>
+            <Th>
+              <span className="sr-only">{t('columns.actions')}</span>
+            </Th>
           </tr>
         </thead>
-        <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800">
+        <tbody className="divide-y divide-white/[0.04]">
           {keys.map((k) => (
             <PreAuthKeyRow key={k.id} k={k} />
           ))}
@@ -51,26 +53,36 @@ export function PreAuthKeyTable({ keys }: { keys: PreAuthKey[] }) {
   );
 }
 
+function Th({ children }: { children: React.ReactNode }) {
+  return (
+    <th className="px-5 py-3.5 font-mono text-[10px] font-medium uppercase tracking-[0.22em] text-zinc-500">
+      {children}
+    </th>
+  );
+}
+
 function PreAuthKeyRow({ k }: { k: PreAuthKey }) {
   const t = useTranslations('preAuthKeys');
   return (
-    <tr className="text-zinc-700 dark:text-zinc-300">
-      <td className="px-4 py-3 text-zinc-900 dark:text-zinc-100">
-        {k.description || <span className="text-zinc-400">—</span>}
+    <tr className="text-zinc-300 hover:bg-white/[0.02]">
+      <td className="px-5 py-4 text-zinc-100">
+        {k.description || <span className="text-zinc-600">—</span>}
       </td>
-      <td className="px-4 py-3">
+      <td className="px-5 py-4">
         <StatusBadge status={statusOf(k)} t={t} />
       </td>
-      <td className="px-4 py-3 text-xs text-zinc-500 dark:text-zinc-400">
+      <td className="px-5 py-4 font-mono text-[11px] uppercase tracking-[0.16em] text-zinc-500">
         {k.reusable ? t('kind.reusable') : t('kind.oneShot')}
       </td>
-      <td className="px-4 py-3 text-xs font-mono">{k.useCount}</td>
-      <td className="px-4 py-3 text-xs text-zinc-500 dark:text-zinc-400">
+      <td className="px-5 py-4 font-mono text-[12px] text-zinc-300">{k.useCount}</td>
+      <td className="px-5 py-4 font-mono text-[11px] text-zinc-500">
         {formatTimestamp(k.createdAt)}
       </td>
-      <td className="px-4 py-3 text-right">
+      <td className="px-5 py-4 text-right">
         {statusOf(k) === 'revoked' ? (
-          <span className="text-xs text-zinc-400">{t('actions.alreadyRevoked')}</span>
+          <span className="font-mono text-[11px] uppercase tracking-[0.18em] text-zinc-600">
+            {t('actions.alreadyRevoked')}
+          </span>
         ) : (
           <RevokeButton id={k.id} />
         )}
@@ -102,7 +114,7 @@ function RevokeButton({ id }: { id: string }) {
               }
             });
           }}
-          className="rounded-md border border-red-600 bg-red-600 px-2 py-1 text-xs font-medium text-white hover:bg-red-700 disabled:opacity-50"
+          className="rounded-md border border-red-400/40 bg-red-500/[0.10] px-2.5 py-1 font-mono text-[11px] uppercase tracking-[0.18em] text-red-300 transition hover:bg-red-500/[0.16] disabled:opacity-50"
         >
           {pending ? t('actions.working') : t('actions.confirmRevoke')}
         </button>
@@ -113,12 +125,12 @@ function RevokeButton({ id }: { id: string }) {
             setConfirming(false);
             setError(null);
           }}
-          className="rounded-md border border-zinc-200 px-2 py-1 text-xs text-zinc-700 hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-900"
+          className="rounded-md border border-white/[0.08] px-2.5 py-1 font-mono text-[11px] uppercase tracking-[0.18em] text-zinc-400 transition hover:bg-white/[0.04] disabled:opacity-50"
         >
           {t('actions.cancel')}
         </button>
         {error && (
-          <span className="text-xs text-red-600 dark:text-red-400" title={error}>
+          <span className="text-xs text-red-300" title={error}>
             ⚠
           </span>
         )}
@@ -129,7 +141,7 @@ function RevokeButton({ id }: { id: string }) {
     <button
       type="button"
       onClick={() => setConfirming(true)}
-      className="rounded-md border border-red-200 px-2 py-1 text-xs text-red-700 hover:bg-red-50 dark:border-red-900/50 dark:text-red-400 dark:hover:bg-red-950/40"
+      className="rounded-md border border-white/[0.08] px-2.5 py-1 font-mono text-[11px] uppercase tracking-[0.18em] text-zinc-400 transition hover:border-red-400/30 hover:bg-red-500/[0.06] hover:text-red-300"
     >
       {t('actions.revoke')}
     </button>
@@ -143,15 +155,34 @@ function StatusBadge({
   status: Status;
   t: ReturnType<typeof useTranslations>;
 }) {
-  const tone: Record<Status, string> = {
-    revoked: 'bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400',
-    expired: 'bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400',
-    used: 'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300',
-    reusable: 'bg-bamboo-100 text-bamboo-800 dark:bg-bamboo-900/40 dark:text-bamboo-300',
-    pending: 'bg-bamboo-100 text-bamboo-800 dark:bg-bamboo-900/40 dark:text-bamboo-300',
+  const tone: Record<Status, { wrap: string; dot: string }> = {
+    revoked: {
+      wrap: 'border-white/[0.08] bg-white/[0.02] text-zinc-500',
+      dot: 'bg-zinc-600',
+    },
+    expired: {
+      wrap: 'border-white/[0.08] bg-white/[0.02] text-zinc-500',
+      dot: 'bg-zinc-600',
+    },
+    used: {
+      wrap: 'border-amber-400/40 bg-amber-500/[0.08] text-amber-300',
+      dot: 'bg-amber-400',
+    },
+    reusable: {
+      wrap: 'border-bamboo-400/40 bg-bamboo-500/[0.08] text-bamboo-300',
+      dot: 'bg-bamboo-400',
+    },
+    pending: {
+      wrap: 'border-bamboo-400/40 bg-bamboo-500/[0.08] text-bamboo-300',
+      dot: 'bg-bamboo-400',
+    },
   };
+  const { wrap, dot } = tone[status];
   return (
-    <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${tone[status]}`}>
+    <span
+      className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 font-mono text-[10px] uppercase tracking-[0.16em] ${wrap}`}
+    >
+      <span className={`h-1.5 w-1.5 rounded-full ${dot}`} aria-hidden />
       {t(`status.${status}`)}
     </span>
   );

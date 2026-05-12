@@ -16,26 +16,26 @@ export function PeerTable({ peers, selectedId, onSelect }: Props) {
 
   if (peers.length === 0) {
     return (
-      <p className="rounded-lg border border-dashed border-zinc-300 p-8 text-center text-sm text-zinc-500 dark:border-zinc-700 dark:text-zinc-400">
+      <p className="rounded-md border border-dashed border-white/[0.08] px-6 py-12 text-center text-sm text-zinc-500">
         {t('empty')}
       </p>
     );
   }
 
   return (
-    <div className="overflow-x-auto rounded-lg border border-zinc-200 dark:border-zinc-800">
+    <div className="overflow-x-auto rounded-md border border-white/[0.06] bg-white/[0.01]">
       <table className="w-full text-sm">
-        <thead className="bg-zinc-50 text-left text-xs font-medium uppercase tracking-wide text-zinc-500 dark:bg-zinc-900 dark:text-zinc-400">
-          <tr>
-            <th className="px-4 py-3">{t('columns.hostname')}</th>
-            <th className="px-4 py-3 font-mono normal-case">{t('columns.ip')}</th>
-            <th className="px-4 py-3">{t('columns.tags')}</th>
-            <th className="px-4 py-3">{t('columns.os')}</th>
-            <th className="px-4 py-3">{t('columns.status')}</th>
-            <th className="px-4 py-3">{t('columns.lastSeen')}</th>
+        <thead>
+          <tr className="border-b border-white/[0.06] text-left">
+            <Th>{t('columns.hostname')}</Th>
+            <Th mono>{t('columns.ip')}</Th>
+            <Th>{t('columns.tags')}</Th>
+            <Th>{t('columns.os')}</Th>
+            <Th>{t('columns.status')}</Th>
+            <Th>{t('columns.lastSeen')}</Th>
           </tr>
         </thead>
-        <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800">
+        <tbody className="divide-y divide-white/[0.04]">
           {peers.map((p) => {
             const isSelected = p.id === selectedId;
             return (
@@ -51,33 +51,42 @@ export function PeerTable({ peers, selectedId, onSelect }: Props) {
                 tabIndex={0}
                 role="button"
                 aria-pressed={isSelected}
-                className={`cursor-pointer text-zinc-700 transition-colors focus:outline-none focus:ring-1 focus:ring-bamboo-500 dark:text-zinc-300 ${
+                className={`cursor-pointer text-zinc-300 transition-colors focus:outline-none focus:ring-1 focus:ring-bamboo-400/40 ${
                   isSelected
-                    ? 'bg-bamboo-50 hover:bg-bamboo-100 dark:bg-bamboo-900/20 dark:hover:bg-bamboo-900/30'
-                    : 'hover:bg-zinc-50 dark:hover:bg-zinc-900'
+                    ? 'bg-bamboo-500/[0.06] hover:bg-bamboo-500/[0.08]'
+                    : 'hover:bg-white/[0.03]'
                 }`}
               >
-                <td className="px-4 py-3 font-medium text-zinc-900 dark:text-zinc-100">
-                  {p.hostname}
-                </td>
-                <td className="px-4 py-3 font-mono text-xs">{p.ip}</td>
-                <td className="px-4 py-3">
-                  <div className="flex flex-wrap gap-1">
-                    {p.tags.map((tag) => (
-                      <span
-                        key={tag}
-                        className="rounded bg-zinc-100 px-2 py-0.5 text-xs text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
-                      >
-                        {tag}
-                      </span>
-                    ))}
+                <td className="px-5 py-4 text-zinc-100">
+                  <div className="flex items-center gap-2">
+                    {isSelected ? (
+                      <span aria-hidden className="h-3 w-px bg-bamboo-400" />
+                    ) : null}
+                    <span className="font-medium">{p.hostname}</span>
                   </div>
                 </td>
-                <td className="px-4 py-3 text-xs text-zinc-500 dark:text-zinc-400">{p.os}</td>
-                <td className="px-4 py-3">
+                <td className="px-5 py-4 font-mono text-[12px] text-zinc-300">{p.ip}</td>
+                <td className="px-5 py-4">
+                  <div className="flex flex-wrap gap-1">
+                    {p.tags.length === 0 ? (
+                      <span className="font-mono text-[10px] text-zinc-600">—</span>
+                    ) : (
+                      p.tags.map((tag) => (
+                        <span
+                          key={tag}
+                          className="rounded border border-white/[0.06] px-1.5 py-0.5 font-mono text-[10px] text-zinc-300"
+                        >
+                          {tag}
+                        </span>
+                      ))
+                    )}
+                  </div>
+                </td>
+                <td className="px-5 py-4 text-[12px] text-zinc-500">{p.os}</td>
+                <td className="px-5 py-4">
                   <StatusBadge status={p.status} label={t(`status.${p.status}`)} />
                 </td>
-                <td className="px-4 py-3 text-xs text-zinc-500 dark:text-zinc-400">
+                <td className="px-5 py-4 font-mono text-[11px] text-zinc-500">
                   {p.lastSeenAt ? formatRelative(p.lastSeenAt) : '—'}
                 </td>
               </tr>
@@ -89,14 +98,34 @@ export function PeerTable({ peers, selectedId, onSelect }: Props) {
   );
 }
 
+function Th({ children, mono = false }: { children: React.ReactNode; mono?: boolean }) {
+  return (
+    <th
+      className={`px-5 py-3.5 font-mono text-[10px] font-medium uppercase tracking-[0.22em] text-zinc-500 ${
+        mono ? 'normal-case tracking-[0.18em]' : ''
+      }`}
+    >
+      {children}
+    </th>
+  );
+}
+
 function StatusBadge({ status, label }: { status: Peer['status']; label: string }) {
   const tone = {
-    online: 'bg-bamboo-100 text-bamboo-800 dark:bg-bamboo-900/40 dark:text-bamboo-300',
-    offline: 'bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400',
-    disabled: 'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300',
+    online: 'border-bamboo-400/40 bg-bamboo-500/[0.08] text-bamboo-300',
+    offline: 'border-white/[0.08] bg-white/[0.02] text-zinc-500',
+    disabled: 'border-amber-400/40 bg-amber-500/[0.08] text-amber-300',
+  }[status];
+  const dot = {
+    online: 'bg-bamboo-400',
+    offline: 'bg-zinc-600',
+    disabled: 'bg-amber-400',
   }[status];
   return (
-    <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${tone}`}>
+    <span
+      className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 font-mono text-[10px] uppercase tracking-[0.16em] ${tone}`}
+    >
+      <span className={`h-1.5 w-1.5 rounded-full ${dot}`} aria-hidden />
       {label}
     </span>
   );

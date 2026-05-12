@@ -4,36 +4,49 @@ import { useTranslations } from 'next-intl';
 import type { ActivityEvent } from '@/lib/types';
 
 // ActivityFeed renders the tenant-wide audit log on the dashboard.
-// Mirrors the per-peer Timeline (PeerDrawer.tsx) layout — newest-
-// first cards with action label + actor + relative time + diff —
-// but is its own component because the keys live in a different
-// i18n namespace (dashboard.activity vs peers.drawer.timeline) and
-// the resource line (peer / policy / etc.) is unique to the
-// tenant-wide view.
+// Layout: vertical timeline rail (hairline) with each event as a row
+// containing a small dot marker, the action label, a relative-time
+// mono badge, and the actor + resource pill on a second line.
+// Mirrors the per-peer Timeline (PeerDrawer.tsx) but its own
+// component because the i18n namespace differs.
 export function ActivityFeed({ events }: { events: ActivityEvent[] }) {
   const t = useTranslations('dashboard.activity');
   if (events.length === 0) {
-    return <p className="text-sm text-zinc-500 dark:text-zinc-400">{t('empty')}</p>;
+    return (
+      <p className="rounded-md border border-dashed border-white/[0.08] px-6 py-10 text-center text-sm text-zinc-500">
+        {t('empty')}
+      </p>
+    );
   }
   return (
-    <ol className="space-y-3">
-      {events.map((e) => (
-        <li
-          key={e.id}
-          className="rounded-md border border-zinc-200 px-3 py-2 dark:border-zinc-800"
-        >
-          <div className="flex items-baseline justify-between gap-2 text-sm">
-            <span className="font-medium text-zinc-900 dark:text-zinc-100">
+    <ol className="relative space-y-0">
+      <span
+        aria-hidden
+        className="absolute bottom-2 left-[7px] top-2 w-px bg-white/[0.06]"
+      />
+      {events.map((e, idx) => (
+        <li key={e.id} className="group relative pl-6 py-3">
+          <span
+            aria-hidden
+            className="absolute left-[3px] top-[18px] h-2 w-2 rounded-full bg-zinc-700 ring-4 ring-ink-950 group-hover:bg-bamboo-400"
+          />
+          <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+            <span className="text-sm text-zinc-100">
               {actionLabel(t, e.action)}
             </span>
-            <span className="shrink-0 text-xs text-zinc-500 dark:text-zinc-400">
+            <span className="font-mono text-[10px] uppercase tracking-[0.20em] text-zinc-500">
               {formatRelative(e.occurredAt)}
             </span>
           </div>
-          <div className="mt-0.5 flex flex-wrap items-baseline gap-x-3 gap-y-0.5 text-xs text-zinc-500 dark:text-zinc-400">
+          <div className="mt-1 flex flex-wrap items-baseline gap-x-3 gap-y-0.5 text-[11px] text-zinc-500">
             <span>{actorLabel(t, e)}</span>
-            {e.resourceType && <ResourcePill type={e.resourceType} id={e.resourceId} />}
+            {e.resourceType && (
+              <ResourcePill type={e.resourceType} id={e.resourceId} />
+            )}
           </div>
+          {idx < events.length - 1 ? (
+            <span aria-hidden className="sr-only" />
+          ) : null}
         </li>
       ))}
     </ol>
@@ -41,14 +54,11 @@ export function ActivityFeed({ events }: { events: ActivityEvent[] }) {
 }
 
 function ResourcePill({ type, id }: { type: string; id?: string }) {
-  // Render the resource as "<type>/<short-id>" to keep cards
-  // scannable. Full uuids are rarely useful at a glance; the click-
-  // through (when added) will use the full id.
   const short = id ? id.slice(0, 8) : '';
   return (
-    <span className="rounded bg-zinc-100 px-1.5 py-0.5 font-mono text-[10px] text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300">
+    <span className="rounded border border-white/[0.06] px-1.5 py-0.5 font-mono text-[10px] text-zinc-400">
       {type}
-      {short && <span className="ml-0.5 opacity-70">/{short}</span>}
+      {short && <span className="ml-0.5 text-zinc-600">/{short}</span>}
     </span>
   );
 }
