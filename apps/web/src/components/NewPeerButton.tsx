@@ -57,7 +57,7 @@ export function NewPeerButton({ tenantSlug }: { tenantSlug: string }) {
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className="rounded-md bg-bamboo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-bamboo-700 dark:bg-bamboo-500 dark:hover:bg-bamboo-400"
+        className="rounded-md bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-zinc-700 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
       >
         {t('button')}
       </button>

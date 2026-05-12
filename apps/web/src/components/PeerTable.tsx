@@ -25,19 +25,22 @@ export function PeerTable({ peers, selectedId, onSelect }: Props) {
   return (
     <div className="overflow-x-auto rounded-lg border border-zinc-200 dark:border-zinc-800">
       <table className="w-full text-sm">
-        <thead className="bg-zinc-50 text-left text-xs font-medium uppercase tracking-wide text-zinc-500 dark:bg-zinc-900 dark:text-zinc-400">
+        <thead className="border-b border-zinc-200 text-left text-xs font-medium uppercase tracking-wide text-zinc-500 dark:border-zinc-800 dark:text-zinc-400">
           <tr>
-            <th className="px-4 py-3">{t('columns.hostname')}</th>
-            <th className="px-4 py-3 font-mono normal-case">{t('columns.ip')}</th>
-            <th className="px-4 py-3">{t('columns.tags')}</th>
-            <th className="px-4 py-3">{t('columns.os')}</th>
-            <th className="px-4 py-3">{t('columns.status')}</th>
-            <th className="px-4 py-3">{t('columns.lastSeen')}</th>
+            <th className="px-4 py-3 font-medium">{t('columns.hostname')}</th>
+            <th className="px-4 py-3 font-mono font-medium normal-case">{t('columns.ip')}</th>
+            <th className="px-4 py-3 font-medium">{t('columns.tags')}</th>
+            <th className="px-4 py-3 font-medium">{t('columns.os')}</th>
+            <th className="px-4 py-3 font-medium">{t('columns.status')}</th>
+            <th className="px-4 py-3 font-medium">{t('columns.lastSeen')}</th>
           </tr>
         </thead>
         <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800">
           {peers.map((p) => {
             const isSelected = p.id === selectedId;
+            // Selected-row treatment: a 2px bamboo-500 stripe on the
+            // left edge (single accent) plus a zinc-50 fill — no
+            // bamboo-tinted background so the row stays Muji-neutral.
             return (
               <tr
                 key={p.id}
@@ -51,9 +54,9 @@ export function PeerTable({ peers, selectedId, onSelect }: Props) {
                 tabIndex={0}
                 role="button"
                 aria-pressed={isSelected}
-                className={`cursor-pointer text-zinc-700 transition-colors focus:outline-none focus:ring-1 focus:ring-bamboo-500 dark:text-zinc-300 ${
+                className={`relative cursor-pointer text-zinc-700 transition-colors focus:outline-none focus:ring-1 focus:ring-bamboo-500 dark:text-zinc-300 ${
                   isSelected
-                    ? 'bg-bamboo-50 hover:bg-bamboo-100 dark:bg-bamboo-900/20 dark:hover:bg-bamboo-900/30'
+                    ? 'bg-zinc-50 hover:bg-zinc-100 before:absolute before:inset-y-0 before:left-0 before:w-0.5 before:bg-bamboo-500 dark:bg-zinc-900 dark:hover:bg-zinc-800'
                     : 'hover:bg-zinc-50 dark:hover:bg-zinc-900'
                 }`}
               >
@@ -66,7 +69,7 @@ export function PeerTable({ peers, selectedId, onSelect }: Props) {
                     {p.tags.map((tag) => (
                       <span
                         key={tag}
-                        className="rounded bg-zinc-100 px-2 py-0.5 text-xs text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
+                        className="rounded border border-zinc-200 px-2 py-0.5 text-xs text-zinc-600 dark:border-zinc-700 dark:text-zinc-400"
                       >
                         {tag}
                       </span>
@@ -90,13 +93,18 @@ export function PeerTable({ peers, selectedId, onSelect }: Props) {
 }
 
 function StatusBadge({ status, label }: { status: Peer['status']; label: string }) {
-  const tone = {
-    online: 'bg-bamboo-100 text-bamboo-800 dark:bg-bamboo-900/40 dark:text-bamboo-300',
-    offline: 'bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400',
-    disabled: 'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300',
+  // Dot + label pattern (Cloudflare / Linear style). The dot is the
+  // only color signal: bamboo-500 for online (the brand accent reads
+  // as "alive"), solid zinc-400 for offline, hollow zinc dot for
+  // disabled. No filled pill backgrounds, no amber tint.
+  const dot = {
+    online: 'bg-bamboo-500',
+    offline: 'bg-zinc-400 dark:bg-zinc-500',
+    disabled: 'border border-zinc-400 bg-transparent dark:border-zinc-500',
   }[status];
   return (
-    <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${tone}`}>
+    <span className="inline-flex items-center gap-2 text-xs text-zinc-700 dark:text-zinc-300">
+      <span aria-hidden className={`h-1.5 w-1.5 rounded-full ${dot}`} />
       {label}
     </span>
   );

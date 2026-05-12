@@ -31,13 +31,13 @@ export function PreAuthKeyTable({ keys }: { keys: PreAuthKey[] }) {
   return (
     <div className="overflow-x-auto rounded-lg border border-zinc-200 dark:border-zinc-800">
       <table className="w-full text-sm">
-        <thead className="bg-zinc-50 text-left text-xs font-medium uppercase tracking-wide text-zinc-500 dark:bg-zinc-900 dark:text-zinc-400">
+        <thead className="border-b border-zinc-200 text-left text-xs font-medium uppercase tracking-wide text-zinc-500 dark:border-zinc-800 dark:text-zinc-400">
           <tr>
-            <th className="px-4 py-3">{t('columns.description')}</th>
-            <th className="px-4 py-3">{t('columns.status')}</th>
-            <th className="px-4 py-3">{t('columns.kind')}</th>
-            <th className="px-4 py-3">{t('columns.useCount')}</th>
-            <th className="px-4 py-3">{t('columns.createdAt')}</th>
+            <th className="px-4 py-3 font-medium">{t('columns.description')}</th>
+            <th className="px-4 py-3 font-medium">{t('columns.status')}</th>
+            <th className="px-4 py-3 font-medium">{t('columns.kind')}</th>
+            <th className="px-4 py-3 font-medium">{t('columns.useCount')}</th>
+            <th className="px-4 py-3 font-medium">{t('columns.createdAt')}</th>
             <th className="px-4 py-3 sr-only">{t('columns.actions')}</th>
           </tr>
         </thead>
@@ -85,6 +85,11 @@ function RevokeButton({ id }: { id: string }) {
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
 
+  // Muji destructive-action treatment: never solid red. Revoke trigger
+  // is a plain outlined button whose text colors to red-600 only on
+  // hover. Confirm is an outlined red border + red-700 text — solid
+  // enough to signal "this is the destructive step" without breaking
+  // the Muji flat palette.
   if (confirming) {
     return (
       <span className="inline-flex items-center gap-2">
@@ -102,7 +107,7 @@ function RevokeButton({ id }: { id: string }) {
               }
             });
           }}
-          className="rounded-md border border-red-600 bg-red-600 px-2 py-1 text-xs font-medium text-white hover:bg-red-700 disabled:opacity-50"
+          className="rounded-md border border-red-300 px-2 py-1 text-xs font-medium text-red-700 transition-colors hover:border-red-400 hover:bg-red-50 disabled:opacity-50 dark:border-red-900/50 dark:text-red-400 dark:hover:bg-red-950/40"
         >
           {pending ? t('actions.working') : t('actions.confirmRevoke')}
         </button>
@@ -113,7 +118,7 @@ function RevokeButton({ id }: { id: string }) {
             setConfirming(false);
             setError(null);
           }}
-          className="rounded-md border border-zinc-200 px-2 py-1 text-xs text-zinc-700 hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-900"
+          className="rounded-md border border-zinc-300 px-2 py-1 text-xs text-zinc-700 transition-colors hover:border-zinc-400 hover:text-zinc-900 disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:border-zinc-600 dark:hover:text-zinc-100"
         >
           {t('actions.cancel')}
         </button>
@@ -129,7 +134,7 @@ function RevokeButton({ id }: { id: string }) {
     <button
       type="button"
       onClick={() => setConfirming(true)}
-      className="rounded-md border border-red-200 px-2 py-1 text-xs text-red-700 hover:bg-red-50 dark:border-red-900/50 dark:text-red-400 dark:hover:bg-red-950/40"
+      className="rounded-md border border-zinc-300 px-2 py-1 text-xs text-zinc-700 transition-colors hover:border-red-300 hover:text-red-700 dark:border-zinc-700 dark:text-zinc-300 dark:hover:border-red-900/50 dark:hover:text-red-400"
     >
       {t('actions.revoke')}
     </button>
@@ -143,15 +148,20 @@ function StatusBadge({
   status: Status;
   t: ReturnType<typeof useTranslations>;
 }) {
-  const tone: Record<Status, string> = {
-    revoked: 'bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400',
-    expired: 'bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400',
-    used: 'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300',
-    reusable: 'bg-bamboo-100 text-bamboo-800 dark:bg-bamboo-900/40 dark:text-bamboo-300',
-    pending: 'bg-bamboo-100 text-bamboo-800 dark:bg-bamboo-900/40 dark:text-bamboo-300',
+  // Same dot + label pattern as PeerTable. bamboo-500 dot reserved for
+  // the two "alive" states (reusable, pending). Terminal states use
+  // various zinc tones; revoked gets a hollow dot to communicate
+  // "struck off / closed".
+  const dot: Record<Status, string> = {
+    revoked: 'border border-zinc-400 bg-transparent dark:border-zinc-500',
+    expired: 'bg-zinc-300 dark:bg-zinc-600',
+    used: 'bg-zinc-500 dark:bg-zinc-400',
+    reusable: 'bg-bamboo-500',
+    pending: 'border border-bamboo-500 bg-transparent',
   };
   return (
-    <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${tone[status]}`}>
+    <span className="inline-flex items-center gap-2 text-xs text-zinc-700 dark:text-zinc-300">
+      <span aria-hidden className={`h-1.5 w-1.5 rounded-full ${dot[status]}`} />
       {t(`status.${status}`)}
     </span>
   );
