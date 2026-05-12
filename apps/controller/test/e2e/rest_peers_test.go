@@ -52,8 +52,10 @@ func TestRESTRegister_HappyPath(t *testing.T) {
 	if got.Self.Hostname != "rest-mac-1" {
 		t.Errorf("Self.Hostname = %q, want rest-mac-1", got.Self.Hostname)
 	}
-	if got.PolicyRevision == 0 {
-		t.Error("PolicyRevision should be >= 1 after register")
+	// No policy has been authored, so revision is the new "no policy"
+	// sentinel (0). Once PutPolicy fires, this becomes monotonic.
+	if got.PolicyRevision != 0 {
+		t.Errorf("PolicyRevision = %d, want 0 (no policy authored)", got.PolicyRevision)
 	}
 }
 
@@ -97,7 +99,8 @@ func TestRESTHeartbeat_HappyPath(t *testing.T) {
 		t.Fatal("register did not return self.id")
 	}
 
-	// Heartbeat with a stale revision should report policyChanged=true.
+	// With no policy authored, current revision is 0 and a client
+	// reporting knownPolicyRevision=0 is up-to-date.
 	hbResp := postJSON(t, f.httpURL+"/api/v1/peers/heartbeat", map[string]any{
 		"peerId":              reg.Self.ID,
 		"knownPolicyRevision": int64(0),
@@ -112,11 +115,11 @@ func TestRESTHeartbeat_HappyPath(t *testing.T) {
 	if err := json.Unmarshal(hbResp.body, &hb); err != nil {
 		t.Fatalf("decode hb: %v", err)
 	}
-	if !hb.PolicyChanged {
-		t.Errorf("heartbeat with revision 0 should report policyChanged=true; got %+v", hb)
+	if hb.PolicyChanged {
+		t.Errorf("heartbeat with matching revision 0 should report policyChanged=false; got %+v", hb)
 	}
-	if hb.CurrentPolicyRevision == 0 {
-		t.Errorf("heartbeat returned currentPolicyRevision=0")
+	if hb.CurrentPolicyRevision != 0 {
+		t.Errorf("heartbeat returned currentPolicyRevision=%d, want 0", hb.CurrentPolicyRevision)
 	}
 }
 
