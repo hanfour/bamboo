@@ -35,17 +35,25 @@ public struct BambooTunnelConfig: Codable, Equatable {
     public let address: String            // tunnel IPv4, e.g. "100.64.0.5/32"
     public let dnsServers: [String]
     public let mtu: UInt16?
+    /// UDP port WireGuard listens on locally. The same port is used
+    /// for STUN discovery so the advertised endpoint matches what
+    /// other peers can actually dial through this host's NAT.
+    /// 0 means "let the kernel pick" — pre-Finding-#4 behaviour,
+    /// kept for backwards compatibility with stored configs.
+    public let wgListenPort: UInt16
     public let peers: [BambooPeerConfig]
 
     public init(privateKey: String,
                 address: String,
                 dnsServers: [String] = [],
                 mtu: UInt16? = nil,
+                wgListenPort: UInt16 = 0,
                 peers: [BambooPeerConfig] = []) {
         self.privateKey = privateKey
         self.address = address
         self.dnsServers = dnsServers
         self.mtu = mtu
+        self.wgListenPort = wgListenPort
         self.peers = peers
     }
 }
@@ -75,6 +83,9 @@ public enum TunnelConfigurationBuilder {
         interface.dns = config.dnsServers.compactMap { DNSServer(from: $0) }
         if let mtu = config.mtu {
             interface.mtu = mtu
+        }
+        if config.wgListenPort != 0 {
+            interface.listenPort = config.wgListenPort
         }
 
         var peers: [PeerConfiguration] = []
