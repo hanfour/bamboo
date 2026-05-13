@@ -312,6 +312,17 @@
       "link": "前往 Pre-auth keys"
     }
   },
+  "invite": {
+    "title": "邀請函",
+    "subtitle": "管理員邀請你加入 bamboo 租戶。請以收到此邀請的電子郵件帳號登入；登入後系統會自動接受邀請並建立帳號。",
+    "signInWithGoogle": "以 Google 登入接受邀請",
+    "tokenMissing": {
+      "title": "缺少邀請 token",
+      "body": "這個連結沒有 ?token 參數。請向管理員索取完整的邀請連結。"
+    },
+    "emailHint": "登入時請使用邀請信中的電子郵件，否則系統會拒絕。",
+    "expiryHint": "邀請有時效，過期需請管理員重新建立。"
+  },
   "common": {
     "ago": "{value} 前",
     "never": "從未",
