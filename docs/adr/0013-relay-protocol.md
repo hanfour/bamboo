@@ -182,7 +182,7 @@ Same objection as subnet-relay-peer.
 
 ## Implementation plan
 
-In this PR (JJJJ-A):
+## Shipped (JJJJ-A + JJJJ-B, status: live)
 
 - ADR (this document).
 - Migration `00003_relay_servers.sql` with the schema above.
@@ -190,20 +190,18 @@ In this PR (JJJJ-A):
 - Controller `Register` populates `RegisterResponse.relay_servers`.
 - `POST /api/v1/admin/relays` REST endpoint (admin-only via the
   authenticated user's `is_admin` flag).
-- `apps/relay/cmd/relay/` Go binary skeleton: TLS listener, frame
-  parser, in-memory session map, packet forwarder. **No JWT auth in
-  this PR — dev-mode pass-through is acceptable for v0.** Auth lands
-  in JJJJ-B.
-
-Deferred to JJJJ-B (next PR / next session):
-
-- JWT auth on relay CLIENT_HELLO.
+- `apps/relay/cmd/relay/` Go binary: TLS listener, frame parser,
+  in-memory session map, packet forwarder.
+- HMAC-SHA256 auth on relay CLIENT_HELLO via
+  `apps/controller/internal/auth/relay_token.go` +
+  `POST /api/v1/relay-token`. Claims bind to (tenant_id, peer_id,
+  wireguard_public_key) so the relay can refuse impersonation.
 - Go CLI relay client (`clients/core/relay/`).
 - Apple Swift relay client (`Shared/RelayClient.swift`).
 - TunnelManager integration: when a peer's only reachable endpoint
   is the relay, configure WireGuard endpoint to the local proxy port.
 
-Deferred to JJJJ-C:
+## Deferred to JJJJ-C
 
 - Relay server health check + multi-relay failover.
 - Per-relay bandwidth metering for capacity planning.
