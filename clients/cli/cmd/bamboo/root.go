@@ -11,12 +11,13 @@ import (
 
 // Shared flags.
 var (
-	flagAddr     string
-	flagTenant   string
-	flagAuthKey  string
-	flagIface    string
-	flagHostname string
-	flagLogJSON  bool
+	flagAddr         string
+	flagTenant       string
+	flagAuthKey      string
+	flagIface        string
+	flagHostname     string
+	flagLogJSON      bool
+	flagWGListenPort uint16
 )
 
 var rootCmd = &cobra.Command{
@@ -47,6 +48,7 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&flagIface, "iface", "bamboo0", "WireGuard interface name")
 	rootCmd.PersistentFlags().StringVar(&flagHostname, "hostname", defaultHostname(), "peer hostname to register")
 	rootCmd.PersistentFlags().BoolVar(&flagLogJSON, "log-json", false, "emit JSON-formatted logs (default: text)")
+	rootCmd.PersistentFlags().Uint16Var(&flagWGListenPort, "wg-listen-port", 0, "WireGuard UDP listen port; 0 = pick a free port (the same port is used for STUN discovery so the advertised endpoint matches what other peers can actually dial)")
 
 	rootCmd.AddCommand(upCmd)
 	rootCmd.AddCommand(downCmd)

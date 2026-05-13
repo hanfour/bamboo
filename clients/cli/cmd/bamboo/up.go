@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -57,12 +58,35 @@ func runUp(cmd *cobra.Command, _ []string) error {
 	}
 	defer func() { _ = cli.Close() }()
 
+	// Decide the WireGuard listen port BEFORE STUN discovery so the
+	// STUN binding socket and the eventual WG socket share the same
+	// 5-tuple. NATs allocate external mappings keyed on the internal
+	// (src_ip, src_port); using two different internal source ports
+	// for STUN and WG produces an advertised endpoint that other
+	// peers can't actually dial. See Finding #4 in
+	// docs/development/project-understanding-2026-05-13.md.
+	//
+	// pickFreeUDPPort briefly binds + closes a UDP socket to learn a
+	// free ephemeral port. There is a small race window between the
+	// bind/close pair and WireGuard taking the same port, but in
+	// practice nothing else opens UDP on this host between those
+	// microseconds, and WG's Apply will return a clear error if it
+	// loses the race rather than silently mis-binding.
+	wgPort := flagWGListenPort
+	if wgPort == 0 {
+		wgPort, err = pickFreeUDPPort()
+		if err != nil {
+			return fmt.Errorf("pick wg listen port: %w", err)
+		}
+	}
+	slog.Info("wireguard listen port chosen", "port", wgPort)
+
 	// session holds the controller-issued peer-bound bearer for the
 	// CLI process lifetime. Populated on every Register; consumed by
 	// the relay-token mint and the authedAdapter that wraps heartbeat
 	// / watch outgoing metadata.
 	session := &peerSession{}
-	resp, err := registerWithController(ctx, priv, session)
+	resp, err := registerWithController(ctx, priv, session, wgPort)
 	if err != nil {
 		return err
 	}
@@ -76,6 +100,10 @@ func runUp(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return fmt.Errorf("build wireguard config: %w", err)
 	}
+	// Override the kernel-default listen port with the one we picked
+	// pre-Register; this is what the STUN-discovered endpoint already
+	// names externally, so the NAT mapping will line up.
+	cfg.ListenPort = wgPort
 
 	// Optional: open a relay-server session as a *fallback* path.
 	// Triggered by BAMBOO_RELAY_URL env var. The relay is opened
@@ -129,12 +157,13 @@ func runUp(cmd *cobra.Command, _ []string) error {
 	adapter := newAuthedAdapter(clientsync.AdaptClient(cli.Coordinator), session)
 
 	refresh := func(refreshCtx context.Context) (*bamboov1.RegisterResponse, error) {
-		return registerWithController(refreshCtx, priv, session)
+		return registerWithController(refreshCtx, priv, session, wgPort)
 	}
+	discover := func() []string { return discoverEndpoints(wgPort) }
 
 	daemonCtx, daemonCancel := context.WithCancel(cmd.Context())
 	defer daemonCancel()
-	go clientsync.RunHeartbeat(daemonCtx, adapter, resp.GetSelf().GetId(), discoverEndpoints)
+	go clientsync.RunHeartbeat(daemonCtx, adapter, resp.GetSelf().GetId(), discover)
 	go clientsync.RunWatchPeers(daemonCtx, adapter, dev, priv, cache, resp.GetSelf().GetId(), refresh)
 	if relayClient != nil {
 		reapply := &deviceReapplier{dev: dev, base: cfg}
@@ -150,8 +179,9 @@ func runUp(cmd *cobra.Command, _ []string) error {
 
 // registerWithController posts a Register call over REST carrying
 // either the pre-auth-key credential (if --auth-key is set) or the
-// dev tenant-slug fallback. STUN-discovered endpoints are included
-// so other peers in the tenant can dial this peer directly.
+// dev tenant-slug fallback. STUN discovery binds the same UDP port
+// WireGuard will listen on so the advertised endpoint is one other
+// peers can actually dial through this host's NAT.
 //
 // We use REST instead of the gRPC Register stub so the response
 // carries the peer-session bearer token. Heartbeat / WatchPeers
@@ -162,7 +192,7 @@ func runUp(cmd *cobra.Command, _ []string) error {
 // When the controller returns no token (older deployment without
 // PR A), session.Token() stays whatever it was, and the slug-only
 // fallback path keeps working for relay-token mint.
-func registerWithController(ctx context.Context, priv wg.PrivateKey, session *peerSession) (*bamboov1.RegisterResponse, error) {
+func registerWithController(ctx context.Context, priv wg.PrivateKey, session *peerSession, wgPort uint16) (*bamboov1.RegisterResponse, error) {
 	resp, token, exp, err := restRegister(
 		ctx,
 		flagHostname,
@@ -171,7 +201,7 @@ func registerWithController(ctx context.Context, priv wg.PrivateKey, session *pe
 		Version,
 		flagAuthKey,
 		flagTenant,
-		discoverEndpoints(),
+		discoverEndpoints(wgPort),
 	)
 	if err != nil {
 		return nil, err
@@ -184,18 +214,46 @@ func registerWithController(ctx context.Context, priv wg.PrivateKey, session *pe
 }
 
 // discoverEndpoints returns the STUN-observed public host:port for
-// this peer, or nil if discovery fails. We deliberately swallow errors
-// here: failure to discover an endpoint should not block tunnel
-// bring-up. Callers that want stricter behavior can look at the log.
-func discoverEndpoints() []string {
-	addr, err := stun.Discover(stun.DefaultServer, 2*time.Second)
+// this peer, or nil if discovery fails. We deliberately swallow
+// errors here: failure to discover an endpoint should not block
+// tunnel bring-up. Callers that want stricter behavior can look at
+// the log.
+//
+// The bind uses 0.0.0.0:<wgPort> so the STUN socket and the
+// eventual WireGuard socket share the same internal source port.
+// Most NAT types map an external port keyed on the internal source
+// port — discovering with a different port would yield an endpoint
+// other peers can't actually dial. See Finding #4.
+func discoverEndpoints(wgPort uint16) []string {
+	local := fmt.Sprintf("0.0.0.0:%d", wgPort)
+	addr, err := stun.DiscoverFrom(local, stun.DefaultServer, 2*time.Second)
 	if err != nil {
 		slog.Warn("stun discovery failed; tunnel will rely on peer-initiated handshake",
-			"server", stun.DefaultServer, "err", err)
+			"server", stun.DefaultServer, "wg_port", wgPort, "err", err)
 		return nil
 	}
-	slog.Info("stun discovered endpoint", "endpoint", addr.String())
+	slog.Info("stun discovered endpoint", "endpoint", addr.String(), "wg_port", wgPort)
 	return []string{addr.String()}
+}
+
+// pickFreeUDPPort opens an ephemeral UDP socket, reads back the port
+// the OS assigned, then closes it. The returned port is what the
+// caller will hand to STUN (via DiscoverFrom) and to WireGuard (via
+// DeviceConfig.ListenPort). The brief close/reopen window is a
+// race; in practice nothing else is racing for UDP ports on a host
+// running this CLI and WG will fail loudly if it does lose the
+// race (rather than silently picking a different port).
+func pickFreeUDPPort() (uint16, error) {
+	conn, err := net.ListenUDP("udp", &net.UDPAddr{Port: 0})
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = conn.Close() }()
+	port := conn.LocalAddr().(*net.UDPAddr).Port
+	if port <= 0 || port > 0xFFFF {
+		return 0, fmt.Errorf("invalid picked port %d", port)
+	}
+	return uint16(port), nil
 }
 
 // maybeOpenRelay opens a relay client when BAMBOO_RELAY_URL is set
