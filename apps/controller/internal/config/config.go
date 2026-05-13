@@ -6,9 +6,16 @@ package config
 import (
 	"fmt"
 	"os"
+	"strconv"
 
 	"gopkg.in/yaml.v3"
 )
+
+// parseInt is a thin wrapper so applyEnvOverrides can swallow the
+// import without forcing strconv on every test file. Returns an
+// error on non-numeric input so the caller can fall through to the
+// file value rather than silently zeroing the field.
+func parseInt(s string) (int, error) { return strconv.Atoi(s) }
 
 // Config is the top-level controller configuration.
 type Config struct {
@@ -18,6 +25,33 @@ type Config struct {
 	ClickHouse ClickHouseConfig `yaml:"clickhouse"`
 	Auth       AuthConfig       `yaml:"auth"`
 	WGSync     WGSyncConfig     `yaml:"wgsync"`
+	SMTP       SMTPConfig       `yaml:"smtp"`
+}
+
+// SMTPConfig configures the optional outbound SMTP relay used for
+// invitation emails. When Host is empty the controller skips email
+// delivery and falls back to "admin shares the token out-of-band"
+// (the API response still includes the plaintext token; just no email
+// is sent). Phase A target is a single relay shared across tenants;
+// per-tenant SMTP belongs in a future SaaS-mode follow-up.
+type SMTPConfig struct {
+	// Host (and Port, default 587) of the SMTP relay. Empty disables
+	// email delivery entirely.
+	Host string `yaml:"host"`
+	Port int    `yaml:"port"`
+	// User / Pass for PLAIN auth. Empty pair disables auth (useful for
+	// a sidecar relay on the same host that trusts loopback).
+	User string `yaml:"user"`
+	Pass string `yaml:"pass"`
+	// From is the literal envelope-from + display From: header. Should
+	// match the relay's policy (some relays bounce mismatched From).
+	From string `yaml:"from"`
+	// PublicBaseURL is the URL invitees should visit, e.g.
+	// https://bamboo.miilink.net. Used to build the /invite?token=...
+	// link in the email body. Falls back to Auth.OIDC.BaseURL when
+	// empty (which is usually the same value on a single-domain
+	// deploy).
+	PublicBaseURL string `yaml:"public_base_url"`
 }
 
 // WGSyncConfig configures the wg-state reporter that mirrors host
@@ -182,6 +216,28 @@ func (c *Config) applyEnvOverrides() {
 	}
 	if v := os.Getenv("BAMBOO_BASE_URL"); v != "" {
 		c.Auth.OIDC.BaseURL = v
+	}
+	if v := os.Getenv("BAMBOO_SMTP_HOST"); v != "" {
+		c.SMTP.Host = v
+	}
+	if v := os.Getenv("BAMBOO_SMTP_PORT"); v != "" {
+		// Best-effort parse; invalid ints fall back to the file value /
+		// the zero value (validate-on-use catches the latter).
+		if n, err := parseInt(v); err == nil && n > 0 {
+			c.SMTP.Port = n
+		}
+	}
+	if v := os.Getenv("BAMBOO_SMTP_USER"); v != "" {
+		c.SMTP.User = v
+	}
+	if v := os.Getenv("BAMBOO_SMTP_PASS"); v != "" {
+		c.SMTP.Pass = v
+	}
+	if v := os.Getenv("BAMBOO_SMTP_FROM"); v != "" {
+		c.SMTP.From = v
+	}
+	if v := os.Getenv("BAMBOO_SMTP_PUBLIC_BASE_URL"); v != "" {
+		c.SMTP.PublicBaseURL = v
 	}
 	if v := os.Getenv("BAMBOO_WG_STATE_PATH"); v != "" {
 		c.WGSync.StatePath = v

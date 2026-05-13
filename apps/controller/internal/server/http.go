@@ -15,9 +15,11 @@ import (
 	"github.com/google/uuid"
 	"github.com/hanfour/bamboo/apps/controller/internal/auth"
 	"github.com/hanfour/bamboo/apps/controller/internal/clickhouse"
+	"github.com/hanfour/bamboo/apps/controller/internal/config"
 	"github.com/hanfour/bamboo/apps/controller/internal/db"
 	"github.com/hanfour/bamboo/apps/controller/internal/db/repo"
 	"github.com/hanfour/bamboo/apps/controller/internal/handlers"
+	"github.com/hanfour/bamboo/apps/controller/internal/mail"
 )
 
 // HTTPServer hosts the OIDC redirect / callback routes plus a thin
@@ -37,6 +39,8 @@ type HTTPServer struct {
 	keys        *repo.PreAuthKeys
 	dns         *repo.TenantDNS
 	invitations *repo.UserInvitations
+	mailer      *mail.Sender
+	publicURL   string // for /invite links in invitation email; falls back to baseURL
 	traces      *clickhouse.Traces
 	anomalies   *clickhouse.Anomalies
 	coord       *handlers.CoordinatorHandler
@@ -74,12 +78,15 @@ func NewHTTPServer(
 		keys:        repo.NewPreAuthKeys(pool),
 		dns:         repo.NewTenantDNS(pool),
 		invitations: repo.NewUserInvitations(pool),
-		traces:      clickhouse.NewTraces(ch),
-		anomalies:   clickhouse.NewAnomalies(ch),
-		coord:       coord,
-		secret:      secret,
-		baseURL:     baseURL,
-		ttl:         ttl,
+		// Default mailer is the no-op sender — server boot calls
+		// SetMailer to wire in the real SMTP relay when configured.
+		mailer:    mail.New(config.SMTPConfig{}),
+		traces:    clickhouse.NewTraces(ch),
+		anomalies: clickhouse.NewAnomalies(ch),
+		coord:     coord,
+		secret:    secret,
+		baseURL:   baseURL,
+		ttl:       ttl,
 	}
 	mux.HandleFunc("/auth/", h.routeAuth)
 	mux.HandleFunc("/auth/sign-out", h.handleSignOut)
@@ -133,6 +140,21 @@ func (h *HTTPServer) Handler() http.Handler {
 // cfg.Auth.RequireAuth (env: BAMBOO_REQUIRE_AUTH).
 func (h *HTTPServer) SetRequireAuth(require bool) {
 	h.requireAuth = require
+}
+
+// SetMailer wires the SMTP sender used by invitation email delivery
+// + the public base URL used to build the /invite link in the email
+// body. Called from server boot once SMTP config has been loaded.
+// Calling with a nil sender or empty publicURL leaves the prior
+// values in place (so a partial config update is a no-op rather
+// than a downgrade).
+func (h *HTTPServer) SetMailer(sender *mail.Sender, publicURL string) {
+	if sender != nil {
+		h.mailer = sender
+	}
+	if publicURL != "" {
+		h.publicURL = publicURL
+	}
 }
 
 // Run blocks until ctx is canceled or the listener errors.
