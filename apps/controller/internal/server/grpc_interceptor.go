@@ -16,14 +16,24 @@ import (
 // requireAuthUnaryInterceptor returns a gRPC unary interceptor that
 // rejects unauthenticated calls with codes.Unauthenticated when
 // require_auth=true. The whitelist covers methods whose own request
-// carries a credential (pre-auth-key) or that are part of the
-// unauthenticated onboarding / bootstrapping path:
+// carries a payload-borne credential (pre-auth-key, bearer field) or
+// that are part of the unauthenticated onboarding / bootstrapping
+// path:
 //
-//   - bamboo.v1.CoordinatorService/{Register,Heartbeat,WatchPeers}
-//     — peer-id + pre-auth-key flows. WatchPeers is streaming and
-//     handled by the matching stream interceptor below.
+//   - bamboo.v1.CoordinatorService/Register — credential lives on the
+//     RegisterRequest payload (pre_auth_key_secret or bearer_token).
+//     The CoordinatorHandler's resolveTenant rejects callers that
+//     supply neither when requireAuth is on, so the interceptor does
+//     not need to inspect the payload here.
 //   - bamboo.v1.AuthService/{StartOIDCFlow,CompleteOIDCFlow,
 //     RedeemPreAuthKey} — bootstrapping a session token.
+//
+// Heartbeat and WatchPeers used to be whitelisted on the assumption
+// that the peer_id alone was a sufficient identifier; the doc's
+// Finding #1 makes clear it isn't. They are now gated like every
+// other authenticated method: the caller must present either a
+// user-session JWT or a peer-session token issued at Register time
+// (see authedAdapter on the CLI side). verifyBearer accepts both.
 //
 // require_auth=false (the default) returns a passthrough so all dev
 // flows keep working unchanged. When sessionSec is empty the
@@ -42,8 +52,8 @@ func requireAuthUnaryInterceptor(requireAuth bool, sessionSec []byte) grpc.Unary
 }
 
 // requireAuthStreamInterceptor mirrors the unary interceptor for
-// streaming methods. WatchPeers is whitelisted; the interceptor exists
-// to cover any future streaming RPCs that need a bearer in prod mode.
+// streaming methods. WatchPeers is no longer whitelisted — see the
+// unary interceptor's comment.
 func requireAuthStreamInterceptor(requireAuth bool, sessionSec []byte) grpc.StreamServerInterceptor {
 	return func(srv any, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
 		if !requireAuth || isWhitelistedGRPCMethod(info.FullMethod) {
@@ -56,6 +66,12 @@ func requireAuthStreamInterceptor(requireAuth bool, sessionSec []byte) grpc.Stre
 	}
 }
 
+// verifyBearer accepts both a user-session JWT and a peer-session
+// token as a valid bearer. Domain separation in the HMAC inputs
+// makes the two token types mutually unforgeable: only one verify
+// path will accept any given signed body. Try peer-session first
+// because heartbeat / watch are far more frequent than user-session
+// calls and we want the common path fast.
 func verifyBearer(ctx context.Context, sessionSec []byte) error {
 	md, _ := metadata.FromIncomingContext(ctx)
 	var token string
@@ -71,17 +87,18 @@ func verifyBearer(ctx context.Context, sessionSec []byte) error {
 	if len(sessionSec) == 0 {
 		return status.Error(codes.Unauthenticated, "session signing not configured")
 	}
-	if _, err := auth.VerifySessionToken(sessionSec, token); err != nil {
-		return status.Error(codes.Unauthenticated, "invalid bearer token")
+	if _, err := auth.VerifyPeerSessionToken(sessionSec, token); err == nil {
+		return nil
 	}
-	return nil
+	if _, err := auth.VerifySessionToken(sessionSec, token); err == nil {
+		return nil
+	}
+	return status.Error(codes.Unauthenticated, "invalid bearer token")
 }
 
 func isWhitelistedGRPCMethod(fullMethod string) bool {
 	switch fullMethod {
 	case "/bamboo.v1.CoordinatorService/Register",
-		"/bamboo.v1.CoordinatorService/Heartbeat",
-		"/bamboo.v1.CoordinatorService/WatchPeers",
 		"/bamboo.v1.AuthService/StartOIDCFlow",
 		"/bamboo.v1.AuthService/CompleteOIDCFlow",
 		"/bamboo.v1.AuthService/RedeemPreAuthKey":

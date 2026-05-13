@@ -238,6 +238,41 @@ func bearerToken(r *http.Request) string {
 	return strings.TrimSpace(v[len(prefix):])
 }
 
+// peerCredentialAllows reports whether the request carries a
+// credential that proves the caller may act for the given peer_id.
+// Two paths are accepted:
+//
+//   - A peer-session bearer whose claim's peer_id equals expectedPeerID.
+//     Also re-validates the peer still exists, hasn't rotated pubkey,
+//     and hasn't been moved tenants (via usePeerSessionTenant).
+//   - A user-session JWT — admin driving a peer manually through the
+//     API. The user need only be authenticated; per-peer admin scope
+//     is enforced separately by requireAdmin where applicable.
+//
+// Returns false when no credential is present so callers can write
+// the 401. Designed to be called only when h.requireAuth is true;
+// callers must not skip the check on the assumption that "the dev
+// fallback still works" — that's exactly the hole Finding #1 closes.
+func (h *HTTPServer) peerCredentialAllows(r *http.Request, expectedPeerID string) bool {
+	if claims := h.peerSessionFromRequest(r); claims != nil {
+		// A peer-session bearer must carry the same peer_id the
+		// caller is acting on. A leaked token from one peer cannot
+		// be used to drive heartbeat / watch on a different peer.
+		if claims.PeerID.String() == expectedPeerID {
+			// Re-validate state (pubkey rotation, tenant move, etc.).
+			tenant, _ := h.usePeerSessionTenant(r)
+			if tenant != nil {
+				return true
+			}
+		}
+	}
+	authn, err := h.authenticate(r)
+	if err == nil && authn.claims != nil {
+		return true
+	}
+	return false
+}
+
 // peerSessionFromRequest extracts a peer-session bearer token from
 // the Authorization header and returns its verified claims. Returns
 // (nil, nil) when no bearer is present so callers can fall back to

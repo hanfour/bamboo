@@ -60,6 +60,15 @@ func (h *HTTPServer) routeRelayToken(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusUnauthorized, err)
 			return
 		}
+		// Prod-mode gate. Without a peer-session bearer the only
+		// acceptable credential is a verified user-session JWT —
+		// X-Tenant-Slug fallback is rejected. The /api/v1/relay-token
+		// route lives outside routeAPI's switch, so the gate must be
+		// re-applied here.
+		if h.requireAuth && authn.claims == nil {
+			writeError(w, http.StatusUnauthorized, errors.New("relay-token requires a peer-session bearer or user-session credential"))
+			return
+		}
 		tenant, err = h.resolveTenant(r, authn)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err)

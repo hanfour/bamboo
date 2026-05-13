@@ -46,7 +46,8 @@ type fixture struct {
 	tenantSlug string // unique per test, prevents cross-test interference
 	httpURL    string // base URL of the in-process HTTP fixture
 	httpSrv    *httptest.Server
-	httpAPI    *server.HTTPServer // for per-test config knobs (e.g. SetRequireAuth)
+	httpAPI    *server.HTTPServer           // for per-test config knobs (e.g. SetRequireAuth)
+	coordSrv   *handlers.CoordinatorHandler // server-side handler, for SetRequireAuth in tests
 }
 
 // startFixture brings up an in-process controller against a real Postgres
@@ -108,6 +109,7 @@ func startFixture(t *testing.T) *fixture {
 		httpURL:    httpSrv.URL,
 		httpSrv:    httpSrv,
 		httpAPI:    httpAPI,
+		coordSrv:   coord,
 	}
 
 	t.Cleanup(func() {
@@ -160,10 +162,13 @@ func buildHTTPMux(pool *db.Pool, coord *handlers.CoordinatorHandler) (http.Handl
 }
 
 // enableRequireAuth flips the fixture into prod-mode auth so the next
-// HTTP request that lacks a JWT (and isn't on the /api/v1/me allowlist
-// or the peer-id-only paths) returns 401.
+// HTTP request that lacks a credential (and isn't on the /api/v1/me
+// allowlist) returns 401. Also flips the CoordinatorHandler so the
+// REST register adapter rejects slug-only callers — both knobs read
+// from the same env var in production wiring.
 func (f *fixture) enableRequireAuth() {
 	f.httpAPI.SetRequireAuth(true)
+	f.coordSrv.SetRequireAuth(true)
 }
 
 // mintJWT creates a user in the fixture's tenant and returns a session

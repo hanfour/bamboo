@@ -52,6 +52,7 @@ func New(cfg *config.Config, pool *db.Pool, ch *clickhouse.Conn) (*Server, error
 
 	httpSrv := NewHTTPServer(cfg.Server.HTTPAddr, pool, providers, ch, secret, cfg.Auth.OIDC.BaseURL, ttl, coordHandler)
 	httpSrv.SetRequireAuth(cfg.Auth.RequireAuth)
+	coordHandler.SetRequireAuth(cfg.Auth.RequireAuth)
 
 	return &Server{
 		cfg:  cfg,

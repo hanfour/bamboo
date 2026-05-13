@@ -34,6 +34,22 @@ type CoordinatorHandler struct {
 	auth     *AuthHandler
 	bus      *events.Bus
 	pool     *db.Pool
+	// requireAuth mirrors HTTPServer.requireAuth. When true, Register
+	// rejects callers that present neither a pre-auth-key credential
+	// nor a bearer-token credential — the x-tenant-slug metadata
+	// fallback is no longer enough. Default false keeps dev / local
+	// workflows working. Wired from cfg.Auth.RequireAuth via
+	// SetRequireAuth.
+	requireAuth bool
+}
+
+// SetRequireAuth flips the handler into prod-mode credential checking.
+// Coordinator-specific because the REST adapter delegates here for
+// peer onboarding; HTTPServer.SetRequireAuth applies the same gate to
+// admin REST endpoints. Both knobs read from the same env var so a
+// production deployment turns them on together.
+func (h *CoordinatorHandler) SetRequireAuth(require bool) {
+	h.requireAuth = require
 }
 
 // NewCoordinatorHandler constructs the coordinator handler. The auth
@@ -283,8 +299,17 @@ func (h *CoordinatorHandler) SubscribePeer(ctx context.Context, peerIDStr string
 
 // resolveTenant chooses the tenant for a Register call by precedence:
 //  1. pre_auth_key_secret credential -> tenant from the key
-//  2. bearer_token credential -> Unimplemented (Sprint 2 #11)
-//  3. x-tenant-slug metadata fallback (dev convenience)
+//  2. bearer_token credential -> resolved via the AuthHandler
+//  3. x-tenant-slug metadata fallback (dev convenience only — rejected
+//     in prod mode where requireAuth=true)
+//
+// The prod-mode rejection is the gate the project-understanding doc
+// Finding #1 calls for: a caller that knows a tenant slug should not
+// be able to register a peer just because they know the slug. The
+// caller must hold either a pre-auth-key (the canonical headless
+// onboarding credential) or a bearer/session token issued by the
+// controller. The REST adapter has its own corresponding check; this
+// path covers gRPC Register.
 func (h *CoordinatorHandler) resolveTenant(ctx context.Context, req *bamboov1.RegisterRequest) (*repo.Tenant, error) {
 	if secret := req.GetPreAuthKeySecret(); secret != "" {
 		key, err := h.auth.redeemAndReturnKey(ctx, secret)
@@ -300,6 +325,10 @@ func (h *CoordinatorHandler) resolveTenant(ctx context.Context, req *bamboov1.Re
 
 	if token := req.GetBearerToken(); token != "" {
 		return h.auth.resolveBearerToken(ctx, token)
+	}
+
+	if h.requireAuth {
+		return nil, status.Error(codes.PermissionDenied, "Register requires a pre-auth key or bearer credential when require_auth is enabled")
 	}
 
 	slug := tenantSlugFromMetadata(ctx)
