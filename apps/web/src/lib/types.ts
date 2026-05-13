@@ -163,3 +163,20 @@ export type DNSConfig = {
   updatedAt: string;
   updatedBy?: string;
 };
+
+// Invitation is one row from /api/v1/invitations (admin-only). The
+// plaintext token is shown only on the mint response — list rows
+// have only the bcrypt hash on the server, so this type doesn't
+// carry it. Status (pending / accepted / revoked / expired) is
+// derived in the renderer from acceptedAt / revokedAt / expiresAt;
+// same idiom as PreAuthKey.
+export type Invitation = {
+  id: string;
+  email: string;
+  isAdmin: boolean;
+  invitedBy?: string;
+  createdAt: string;
+  expiresAt: string;
+  acceptedAt?: string;
+  revokedAt?: string;
+};

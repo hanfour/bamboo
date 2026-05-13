@@ -227,7 +227,47 @@
       "github": "GitHub",
       "fallback": "Local"
     },
-    "empty": "No users yet. The first account to sign in via OIDC becomes admin."
+    "empty": "No users yet. The first account to sign in via OIDC becomes admin.",
+    "newInvite": {
+      "button": "Invite user",
+      "formTitle": "Invite a new user",
+      "formHint": "Creates an invitation record. A one-time token is generated on submit; the redeem flow is still in progress, so hold off on sharing the token until that PR lands.",
+      "emailLabel": "Email",
+      "emailPlaceholder": "name@example.com",
+      "isAdminLabel": "Grant admin role",
+      "isAdminHint": "Admins can invite members, manage ACL, and revoke keys. Default is regular member.",
+      "submit": "Create invitation",
+      "cancel": "Cancel",
+      "working": "Creating…",
+      "error": "Failed:",
+      "errorDuplicate": "An active invitation already exists for this email. Revoke the existing one first.",
+      "resultTitle": "Invitation created",
+      "resultHint": "The invitation token below is shown only once.",
+      "tokenLabel": "Invitation token",
+      "oneShotWarning": "If you lose this token, revoke the invitation and create a new one — there's no way to retrieve it.",
+      "redeemPendingWarning": "⚠ Redeem flow is not yet shipped — the invitee can't use this token to sign up yet. Wait for the accept-flow PR before sharing.",
+      "copy": "Copy",
+      "copied": "Copied",
+      "done": "Done"
+    },
+    "invitations": {
+      "title": "Invitations",
+      "empty": "No invitations yet. Click \"Invite user\" above to create the first.",
+      "columns": {
+        "email": "Email",
+        "role": "Role",
+        "status": "Status",
+        "invitedBy": "Invited by",
+        "createdAt": "Created",
+        "expiresAt": "Expires"
+      },
+      "status": {
+        "pending": "Pending",
+        "accepted": "Accepted",
+        "revoked": "Revoked",
+        "expired": "Expired"
+      }
+    }
   },
   "dns": {
     "title": "DNS",

@@ -27,6 +27,7 @@ import type {
   ActivityEvent,
   DNSConfig,
   FetchResult,
+  Invitation,
   Peer,
   PeerEvent,
   PreAuthKey,
@@ -203,6 +204,17 @@ export async function fetchPeer(id: string): Promise<FetchResult<Peer>> {
 // variant of FetchErrorState when there's no session at all.
 export async function fetchDNS(): Promise<FetchResult<DNSConfig>> {
   return fetchResult<DNSConfig>('/api/v1/dns');
+}
+
+// fetchInvitations returns every invitation in the tenant (pending +
+// history). Admin-only on the wire — 403 surfaces as forbidden.
+// Token is never present in list rows (the controller has only the
+// bcrypt hash); plaintext is shown once at mint time via the
+// inviteUserAction return.
+export async function fetchInvitations(): Promise<FetchResult<Invitation[]>> {
+  const r = await fetchResult<{ invitations: Invitation[] }>('/api/v1/invitations');
+  if (r.kind !== 'ok') return r;
+  return { kind: 'ok', value: r.value.invitations ?? [] };
 }
 
 export async function fetchUsers(): Promise<FetchResult<User[]>> {
