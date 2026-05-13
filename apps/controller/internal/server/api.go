@@ -147,9 +147,11 @@ func (h *HTTPServer) routeAPI(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Tenant-scoped invitations.
-	//   GET  /api/v1/invitations  → list (admin)
-	//   POST /api/v1/invitations  → mint (admin)
-	// Sub-paths (accept / revoke per-id) land in a follow-up.
+	//   GET  /api/v1/invitations               → list (admin)
+	//   POST /api/v1/invitations               → mint (admin)
+	//   POST /api/v1/invitations/{id}/revoke   → revoke (admin)
+	// Accept is handled by the OIDC callback flow (handleCallback in
+	// server/http.go), not a REST endpoint.
 	if r.URL.Path == "/api/v1/invitations" {
 		switch r.Method {
 		case http.MethodGet:
@@ -159,6 +161,19 @@ func (h *HTTPServer) routeAPI(w http.ResponseWriter, r *http.Request) {
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
+		return
+	}
+	if rest, ok := strings.CutPrefix(r.URL.Path, "/api/v1/invitations/"); ok && rest != "" {
+		// {id}/revoke is the only sub-path. Anything else is 404.
+		if id, found := strings.CutSuffix(rest, "/revoke"); found && id != "" && !strings.Contains(id, "/") {
+			if r.Method != http.MethodPost {
+				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+				return
+			}
+			h.apiRevokeInvitation(w, r, authn, tenant, id)
+			return
+		}
+		http.NotFound(w, r)
 		return
 	}
 
@@ -1421,6 +1436,90 @@ func (h *HTTPServer) apiListInvitations(w http.ResponseWriter, r *http.Request, 
 		out = append(out, invitationToJSON(inv))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"invitations": out})
+}
+
+// apiRevokeInvitation flips a pending invitation to revoked. Admin-
+// only. Idempotency: ErrNotFound from the repo means either the row
+// is unknown OR it's already terminal (accepted / revoked). We
+// surface that as 404 so the UI can fall back to a refetch; the
+// distinction between "never existed" and "already terminal" isn't
+// useful to the operator and would require an extra round-trip to
+// disambiguate.
+func (h *HTTPServer) apiRevokeInvitation(w http.ResponseWriter, r *http.Request, authn *authnContext, tenant *repo.Tenant, idStr string) {
+	if !h.requireAdmin(w, r, authn, tenant, "user.invite.revoke") {
+		return
+	}
+	id, err := uuid.Parse(idStr)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	// Cross-tenant guard: re-fetch the row and reject when it belongs
+	// to a different tenant. Without this, an admin in tenant A could
+	// revoke an invite in tenant B by guessing its id (low probability
+	// since uuids, but defense-in-depth).
+	inv, err := h.invitations.GetByID(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			http.NotFound(w, r)
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if inv.TenantID != tenant.ID {
+		http.NotFound(w, r)
+		return
+	}
+
+	// MarkRevoked's WHERE only flips pending rows. Already-accepted or
+	// already-revoked rows return ErrNotFound — we surface 404 so the
+	// caller refetches and sees the current state.
+	var actorID uuid.UUID
+	if authn != nil && authn.claims != nil {
+		actorID = authn.claims.UserID
+	}
+	if err := h.invitations.MarkRevoked(r.Context(), id, actorID); err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			http.NotFound(w, r)
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+
+	// Audit row mirrors user.invite.accept; activity feed groups them.
+	if h.audits != nil {
+		_ = h.audits.Insert(r.Context(), &repo.AuditEvent{
+			TenantID:     &tenant.ID,
+			ActorType:    "user",
+			ActorID:      pointerIfNonZero(actorID),
+			Action:       "user.invite.revoke",
+			ResourceType: "user_invitation",
+			ResourceID:   &id,
+			Diff:         marshalDiffJSON(map[string]any{"email": inv.Email}),
+		})
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// pointerIfNonZero returns &id when id is non-zero, nil otherwise.
+// Audit rows want NULL actor_id for dev-fallback callers (no JWT)
+// rather than the zero uuid, so the activity feed doesn't render
+// "actor: 00000000-..." for system-issued mutations.
+func pointerIfNonZero(id uuid.UUID) *uuid.UUID {
+	if id == uuid.Nil {
+		return nil
+	}
+	return &id
+}
+
+// marshalDiffJSON is a thin wrapper around json.Marshal that drops
+// the error — audit Diff is best-effort and we'd rather record a
+// nil diff than fail the whole write.
+func marshalDiffJSON(v map[string]any) []byte {
+	b, _ := json.Marshal(v)
+	return b
 }
 
 func invitationToJSON(inv *repo.UserInvitation) apiInvitationJSON {

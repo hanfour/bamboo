@@ -118,6 +118,31 @@ func (r *UserInvitations) MarkAccepted(ctx context.Context, id, userID uuid.UUID
 	return nil
 }
 
+// MarkRevoked atomically flips a pending invitation to revoked. The
+// WHERE guards against revoking an already-accepted row (a redeemed
+// invite is history — revoking it wouldn't unmake the user) or
+// double-revoking. ErrNotFound when there's no eligible row, so the
+// handler can return 404 / 409 to distinguish "already revoked" from
+// "never existed". Accepted by the WHERE clause means the row stays
+// terminal in its current state and the caller can move on.
+func (r *UserInvitations) MarkRevoked(ctx context.Context, id, userID uuid.UUID) error {
+	tag, err := r.pool.Exec(ctx, `
+		UPDATE user_invitations
+		   SET revoked_at = now(),
+		       revoked_by = $2
+		 WHERE id = $1
+		   AND accepted_at IS NULL
+		   AND revoked_at IS NULL
+	`, id, userID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 // ListByTenant returns every invitation in the tenant ordered by
 // creation time (newest first). Accepted + revoked rows are included
 // so the admin Users page can show history; the renderer derives
