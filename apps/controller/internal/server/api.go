@@ -177,6 +177,22 @@ func (h *HTTPServer) routeAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// /api/v1/policy accepts GET (read) + PUT (admin update). Lives
+	// outside the GET-only switch below so the PUT body parser can
+	// run. Other admin-write endpoints follow the same pattern
+	// (preauth-keys, invitations).
+	if r.URL.Path == "/api/v1/policy" {
+		switch r.Method {
+		case http.MethodGet:
+			h.apiPolicy(w, r, tenant)
+		case http.MethodPut:
+			h.apiPutPolicy(w, r, authn, tenant)
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+		return
+	}
+
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -189,8 +205,6 @@ func (h *HTTPServer) routeAPI(w http.ResponseWriter, r *http.Request) {
 		h.apiOverview(w, r, tenant)
 	case "/api/v1/peers":
 		h.apiPeers(w, r, tenant)
-	case "/api/v1/policy":
-		h.apiPolicy(w, r, tenant)
 	case "/api/v1/recommendations":
 		h.apiRecommendations(w, r, tenant)
 	case "/api/v1/activity":
@@ -1137,6 +1151,102 @@ func (h *HTTPServer) apiPolicy(w http.ResponseWriter, r *http.Request, tenant *r
 		UpdatedAt: &rec.UpdatedAt,
 		Rules:     rules,
 	})
+}
+
+// apiPutPolicyReq mirrors the gRPC PutPolicy contract. expectedRevision
+// is optional optimistic-concurrency control: when non-zero, the
+// repo's Put returns ErrRevisionMismatch if the persisted revision
+// has advanced under us. The UI either supplies the revision from
+// the row it loaded, or sends 0 to force-write.
+type apiPutPolicyReq struct {
+	HCLSource        string `json:"hclSource"`
+	ExpectedRevision int64  `json:"expectedRevision,omitempty"`
+}
+
+// apiPutPolicy validates + persists a new policy revision. Admin-only.
+// HCL is parsed BEFORE the DB write so invalid policies surface as
+// 400 with the parser error (the Web ACL editor renders it inline).
+// The events-bus PolicyChanged notification is NOT published here —
+// the gRPC PutPolicy is what real clients hit and already publishes;
+// keeping the REST side simple avoids a dual-publish race when both
+// surfaces run for the same tenant.
+func (h *HTTPServer) apiPutPolicy(w http.ResponseWriter, r *http.Request, authn *authnContext, tenant *repo.Tenant) {
+	if !h.requireAdmin(w, r, authn, tenant, "policy.update") {
+		return
+	}
+	var req apiPutPolicyReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("decode body: %w", err))
+		return
+	}
+	parsed, parseErr := policy.Parse("policy.hcl", req.HCLSource)
+	if parseErr != nil {
+		// 400 with the bare parser message so the editor can show line /
+		// column info verbatim.
+		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid policy: %v", parseErr))
+		return
+	}
+
+	var updatedBy *uuid.UUID
+	if authn != nil && authn.claims != nil {
+		uid := authn.claims.UserID
+		updatedBy = &uid
+	}
+
+	rec, err := h.policies.Put(r.Context(), tenant.ID, req.HCLSource, updatedBy, req.ExpectedRevision)
+	if errors.Is(err, repo.ErrRevisionMismatch) {
+		// 409 means "someone else saved while you were editing".
+		// The Web UI should refetch and ask the operator to merge.
+		writeError(w, http.StatusConflict, fmt.Errorf("expected_revision does not match current"))
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+
+	if h.audits != nil {
+		_ = h.audits.Insert(r.Context(), &repo.AuditEvent{
+			TenantID:     &tenant.ID,
+			ActorType:    "user",
+			ActorID:      pointerIfNonZero(claimsUserID(authn)),
+			Action:       "policy.update",
+			ResourceType: "policy",
+			Diff: marshalDiffJSON(map[string]any{
+				"revision":  rec.Revision,
+				"rules":     len(parsed.Rules),
+				"hcl_bytes": len(rec.HCLSource),
+			}),
+		})
+	}
+
+	rules := []apiACLRuleJSON{}
+	for _, ru := range parsed.Rules {
+		rules = append(rules, apiACLRuleJSON{
+			ID:           ru.ID,
+			Action:       ru.Action.String(),
+			Description:  ru.Description,
+			Sources:      formatPolicySources(ru.Sources),
+			Destinations: formatPolicyDestinations(ru.Destinations),
+		})
+	}
+	writeJSON(w, http.StatusOK, apiPolicyJSON{
+		TenantID:  rec.TenantID.String(),
+		Revision:  rec.Revision,
+		HCLSource: rec.HCLSource,
+		UpdatedAt: &rec.UpdatedAt,
+		Rules:     rules,
+	})
+}
+
+// claimsUserID returns the claimed user uuid or uuid.Nil when authn
+// is empty (dev-fallback path). Mirrors pointerIfNonZero's
+// boilerplate-avoidance role for the audit-row callers.
+func claimsUserID(authn *authnContext) uuid.UUID {
+	if authn == nil || authn.claims == nil {
+		return uuid.Nil
+	}
+	return authn.claims.UserID
 }
 
 type apiRecommendationJSON struct {
