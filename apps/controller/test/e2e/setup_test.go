@@ -46,8 +46,8 @@ type fixture struct {
 	tenantSlug string // unique per test, prevents cross-test interference
 	httpURL    string // base URL of the in-process HTTP fixture
 	httpSrv    *httptest.Server
-	httpAPI    *server.HTTPServer            // for per-test config knobs (e.g. SetRequireAuth)
-	coordSrv   *handlers.CoordinatorHandler  // server-side handler, for SetRequireAuth in tests
+	httpAPI    *server.HTTPServer           // for per-test config knobs (e.g. SetRequireAuth)
+	coordSrv   *handlers.CoordinatorHandler // server-side handler, for SetRequireAuth in tests
 }
 
 // startFixture brings up an in-process controller against a real Postgres
