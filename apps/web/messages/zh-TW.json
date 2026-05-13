@@ -11,6 +11,7 @@
     "dns": "DNS",
     "preAuthKeys": "Pre-auth keys",
     "acl": "存取政策",
+    "logs": "日誌",
     "settings": "設定",
     "signOut": "登出"
   },
@@ -309,6 +310,24 @@
     },
     "neverUpdated": "預設值（尚未自訂）",
     "lastUpdated": "最後更新"
+  },
+  "logs": {
+    "title": "日誌",
+    "subtitle": "本租戶內各節點最近的政策判定紀錄。每一筆 allow / deny 都會附上命中的規則，方便正式環境的存取稽核。",
+    "empty": "尚無日誌事件。等節點開始握手並交換流量後，判定紀錄會出現於此。",
+    "columns": {
+      "occurredAt": "時間",
+      "source": "來源",
+      "destination": "目的地",
+      "port": "Port",
+      "action": "判定",
+      "rule": "命中規則"
+    },
+    "action": {
+      "allow": "允許",
+      "deny": "拒絕"
+    },
+    "noRule": "—"
   },
   "settings": {
     "title": "設定",

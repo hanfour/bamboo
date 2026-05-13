@@ -11,6 +11,7 @@
     "dns": "DNS",
     "preAuthKeys": "Pre-auth keys",
     "acl": "Access Policy",
+    "logs": "Logs",
     "settings": "Settings",
     "signOut": "Sign out"
   },
@@ -309,6 +310,24 @@
     },
     "neverUpdated": "Default (never customized)",
     "lastUpdated": "Last updated"
+  },
+  "logs": {
+    "title": "Logs",
+    "subtitle": "Recent policy-evaluation traces from peers in this tenant. Allow/deny decisions are recorded with the matching rule so you can audit access in production.",
+    "empty": "No log events recorded yet. Once peers begin handshaking and exchanging traffic, decisions will appear here.",
+    "columns": {
+      "occurredAt": "Time",
+      "source": "Source",
+      "destination": "Destination",
+      "port": "Port",
+      "action": "Decision",
+      "rule": "Matched rule"
+    },
+    "action": {
+      "allow": "Allow",
+      "deny": "Deny"
+    },
+    "noRule": "—"
   },
   "settings": {
     "title": "Settings",

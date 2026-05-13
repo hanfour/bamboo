@@ -28,6 +28,7 @@ import type {
   DNSConfig,
   FetchResult,
   Invitation,
+  LogEvent,
   Peer,
   PeerEvent,
   PreAuthKey,
@@ -215,6 +216,19 @@ export async function fetchInvitations(): Promise<FetchResult<Invitation[]>> {
   const r = await fetchResult<{ invitations: Invitation[] }>('/api/v1/invitations');
   if (r.kind !== 'ok') return r;
   return { kind: 'ok', value: r.value.invitations ?? [] };
+}
+
+// fetchLogs reads recent policy-evaluation traces for the tenant.
+// Member-readable; dev environments without ClickHouse return an
+// empty list and the page renders an empty-state.
+export async function fetchLogs(opts: { sinceHours?: number; limit?: number } = {}): Promise<FetchResult<LogEvent[]>> {
+  const params = new URLSearchParams();
+  if (opts.sinceHours) params.set('sinceHours', String(opts.sinceHours));
+  if (opts.limit) params.set('limit', String(opts.limit));
+  const qs = params.toString();
+  const r = await fetchResult<{ logs: LogEvent[] }>(`/api/v1/logs${qs ? `?${qs}` : ''}`);
+  if (r.kind !== 'ok') return r;
+  return { kind: 'ok', value: r.value.logs ?? [] };
 }
 
 export async function fetchUsers(): Promise<FetchResult<User[]>> {

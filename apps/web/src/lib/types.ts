@@ -131,6 +131,21 @@ export type AclPolicy = {
   updatedBy?: string;
 };
 
+// LogEvent is one row from /api/v1/logs — a policy-evaluation
+// trace recorded by the controller when a peer attempted (or
+// completed) a connection. Member-readable; the UI surfaces them
+// in a Tailscale-style /admin/logs timeline.
+export type LogEvent = {
+  id: string;
+  occurredAt: string;
+  source: string;
+  destination: string;
+  port: number;
+  protocol: string;
+  action: 'allow' | 'deny';
+  matchedRuleId?: string;
+};
+
 // User is one row from /api/v1/users (admin-only list). Role is
 // derived in the UI from isAdmin — there's no third tier yet
 // (owner / admin / member from the design doc are conceptual;
