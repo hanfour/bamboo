@@ -27,7 +27,7 @@ export function Sidebar() {
   const { open, setOpen } = useDrawer();
 
   const items: Array<{
-    href: '/' | '/peers' | '/users' | '/acl' | '/dns' | '/settings';
+    href: '/' | '/peers' | '/users' | '/acl' | '/dns' | '/logs' | '/settings';
     label: string;
     icon: React.ReactNode;
   }> = [
@@ -36,6 +36,7 @@ export function Sidebar() {
     { href: '/users', label: t('users'), icon: <UsersIcon /> },
     { href: '/acl', label: t('acl'), icon: <ShieldIcon /> },
     { href: '/dns', label: t('dns'), icon: <GlobeIcon /> },
+    { href: '/logs', label: t('logs'), icon: <LogsIcon /> },
     // Pre-auth keys lives under Settings now (matches Tailscale's IA);
     // /preauth-keys route still exists, just reached via Settings →
     // Pre-auth keys card.
@@ -207,6 +208,30 @@ function GearIcon() {
     >
       <circle cx="12" cy="12" r="3" />
       <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3h.1a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8v.1a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z" />
+    </svg>
+  );
+}
+
+function LogsIcon() {
+  // Document outline with three horizontal text lines — line-art so it
+  // sits in the same 1.5px stroke family as the other rail icons.
+  // Reads as "log entries / a stream of records" without conflicting
+  // with ShieldIcon (ACL) or ServerIcon (Peers).
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="h-5 w-5"
+    >
+      <path d="M6 3h9l4 4v14a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1Z" />
+      <path d="M14 3v5h5" />
+      <path d="M8 13h8" />
+      <path d="M8 17h8" />
+      <path d="M8 9h3" />
     </svg>
   );
 }
