@@ -152,12 +152,12 @@ public final class ConnectionViewModel: ObservableObject {
                 log.warning("stun discovery failed: \(String(describing: error), privacy: .public)")
             }
 
-            let client = BambooClient(
+            let bootstrapClient = BambooClient(
                 baseURL: url,
                 bearerToken: keychain.getString(for: BambooKeychainKey.sessionToken),
                 tenantSlug: tenantSlug
             )
-            let resp = try await client.register(.init(
+            let resp = try await bootstrapClient.register(.init(
                 hostname: hostname,
                 wireguardPublicKey: publicKey,
                 os: currentOSName(),
@@ -166,6 +166,17 @@ public final class ConnectionViewModel: ObservableObject {
                 tenantSlug: tenantSlug,
                 endpoints: discoveredEndpoints.isEmpty ? nil : discoveredEndpoints
             ))
+
+            // Once Register returns, prefer the peer-session bearer
+            // for every subsequent peer-bound call (heartbeat / watch
+            // / relay-token). Older controllers that predate the auth
+            // train omit the token; in that case `client` is just
+            // `bootstrapClient` and the dev slug fallback continues to
+            // work.
+            let client = bootstrapClient.withPeerSessionToken(resp.peerSessionToken)
+            if let tok = resp.peerSessionToken, !tok.isEmpty {
+                log.log("peer session token issued (expires=\(resp.peerSessionExpiresAt ?? 0, privacy: .public))")
+            }
 
             // Optional: when relayURL is set, route every peer
             // through the relay server. Useful on networks where
@@ -222,7 +233,12 @@ public final class ConnectionViewModel: ObservableObject {
             // re-reports our endpoint; watcher streams peer changes
             // and triggers a tunnel rebuild on endpoint updates.
             await heartbeat.start(client: client, peerID: resp.self_.id)
-            let bearer = keychain.getString(for: BambooKeychainKey.sessionToken)
+            // Watch is peer-bound: prefer the peer-session token the
+            // controller just minted. Fall back to the user-session
+            // bearer for older controllers (and for admin-driven dev
+            // sessions); the controller resolves whichever matches.
+            let bearer = resp.peerSessionToken
+                ?? keychain.getString(for: BambooKeychainKey.sessionToken)
             let slug = self.tenantSlug
             await watcher.start(baseURL: url, peerID: resp.self_.id,
                                 bearerToken: bearer, tenantSlug: slug) { [weak self] event in
