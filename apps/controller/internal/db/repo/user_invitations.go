@@ -75,6 +75,49 @@ func (r *UserInvitations) Create(ctx context.Context, inv *UserInvitation) (*Use
 	return &out, nil
 }
 
+// GetByID returns the invitation row by primary key. ErrNotFound for
+// unknown / soft-deleted ids; the redeem path uses this to look up
+// the row referenced by the embedded id in the invite token.
+func (r *UserInvitations) GetByID(ctx context.Context, id uuid.UUID) (*UserInvitation, error) {
+	var inv UserInvitation
+	err := r.pool.QueryRow(ctx, `
+		SELECT id, tenant_id, email, is_admin, token_hash, invited_by,
+		       created_at, expires_at, accepted_at, accepted_by, revoked_at, revoked_by
+		FROM user_invitations
+		WHERE id = $1
+	`, id).Scan(
+		&inv.ID, &inv.TenantID, &inv.Email, &inv.IsAdmin, &inv.TokenHash, &inv.InvitedBy,
+		&inv.CreatedAt, &inv.ExpiresAt, &inv.AcceptedAt, &inv.AcceptedBy, &inv.RevokedAt, &inv.RevokedBy,
+	)
+	if err != nil {
+		return nil, asNotFound(err)
+	}
+	return &inv, nil
+}
+
+// MarkAccepted atomically flips the invitation to accepted by the
+// given user. Guarded against double-redeem via the WHERE clause —
+// returns ErrNotFound when the row was already accepted / revoked /
+// when no row matches, so concurrent OIDC callbacks racing for the
+// same invitation can't both create sessions.
+func (r *UserInvitations) MarkAccepted(ctx context.Context, id, userID uuid.UUID) error {
+	tag, err := r.pool.Exec(ctx, `
+		UPDATE user_invitations
+		   SET accepted_at = now(),
+		       accepted_by = $2
+		 WHERE id = $1
+		   AND accepted_at IS NULL
+		   AND revoked_at IS NULL
+	`, id, userID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 // ListByTenant returns every invitation in the tenant ordered by
 // creation time (newest first). Accepted + revoked rows are included
 // so the admin Users page can show history; the renderer derives

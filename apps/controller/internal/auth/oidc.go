@@ -198,13 +198,29 @@ func (g *GitHubProvider) Exchange(ctx context.Context, code, redirectURI string)
 // with the same secret used for session JWTs. The unsigned form is
 // base64-url for inclusion in URLs.
 type stateClaims struct {
-	Nonce     string `json:"n"`
-	Tenant    string `json:"t"`
+	Nonce  string `json:"n"`
+	Tenant string `json:"t"`
+	// Invite carries the invitation UUID (string) when the login was
+	// initiated via an invite link. Empty for regular sign-ins. The
+	// callback uses it to redeem the invitation atomically with user
+	// creation. It travels via the signed-and-HMAC'd state so a
+	// tampered link cannot inject a fake invite into a session.
+	Invite    string `json:"i,omitempty"`
 	ExpiresAt int64  `json:"exp"`
 }
 
+// OIDCStateClaims is the public projection of state contents returned
+// by VerifyOIDCState — Tenant always populated, Invite empty for
+// regular flows.
+type OIDCStateClaims struct {
+	Tenant string
+	Invite string
+}
+
 // IssueOIDCState returns a signed state token bound to a tenant slug.
-func IssueOIDCState(secret []byte, tenantSlug string, ttl time.Duration) (string, error) {
+// inviteID is the invitation UUID (string) when the login was started
+// via an invite link, or empty for a regular sign-in.
+func IssueOIDCState(secret []byte, tenantSlug, inviteID string, ttl time.Duration) (string, error) {
 	nonce := make([]byte, 16)
 	if _, err := rand.Read(nonce); err != nil {
 		return "", err
@@ -212,6 +228,7 @@ func IssueOIDCState(secret []byte, tenantSlug string, ttl time.Duration) (string
 	claims := stateClaims{
 		Nonce:     base64.RawURLEncoding.EncodeToString(nonce),
 		Tenant:    tenantSlug,
+		Invite:    inviteID,
 		ExpiresAt: time.Now().Add(ttl).Unix(),
 	}
 	body, err := json.Marshal(claims)
@@ -223,30 +240,35 @@ func IssueOIDCState(secret []byte, tenantSlug string, ttl time.Duration) (string
 	return enc + "." + base64.RawURLEncoding.EncodeToString(mac), nil
 }
 
-// VerifyOIDCState validates a state token and returns the bound tenant slug.
-func VerifyOIDCState(secret []byte, state string) (string, error) {
+// VerifyOIDCState validates a state token and returns the bound
+// tenant slug + optional invite id. Invite is empty for state tokens
+// minted without an invitation context.
+func VerifyOIDCState(secret []byte, state string) (OIDCStateClaims, error) {
+	var out OIDCStateClaims
 	body, sig, ok := splitOnDot(state)
 	if !ok {
-		return "", ErrInvalidToken
+		return out, ErrInvalidToken
 	}
 	gotSig, err := base64.RawURLEncoding.DecodeString(sig)
 	if err != nil {
-		return "", ErrInvalidToken
+		return out, ErrInvalidToken
 	}
 	want := signHMAC(secret, []byte(body))
 	if !constantTimeEqual(gotSig, want) {
-		return "", ErrInvalidToken
+		return out, ErrInvalidToken
 	}
 	rawBody, err := base64.RawURLEncoding.DecodeString(body)
 	if err != nil {
-		return "", ErrInvalidToken
+		return out, ErrInvalidToken
 	}
 	var claims stateClaims
 	if err := json.Unmarshal(rawBody, &claims); err != nil {
-		return "", ErrInvalidToken
+		return out, ErrInvalidToken
 	}
 	if time.Now().Unix() > claims.ExpiresAt {
-		return "", ErrInvalidToken
+		return out, ErrInvalidToken
 	}
-	return claims.Tenant, nil
+	out.Tenant = claims.Tenant
+	out.Invite = claims.Invite
+	return out, nil
 }
