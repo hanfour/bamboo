@@ -17,6 +17,7 @@ import (
 	"github.com/hanfour/bamboo/apps/controller/internal/db"
 	"github.com/hanfour/bamboo/apps/controller/internal/events"
 	"github.com/hanfour/bamboo/apps/controller/internal/handlers"
+	"github.com/hanfour/bamboo/apps/controller/internal/mail"
 	bamboov1 "github.com/hanfour/bamboo/proto/gen/go/bamboo/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
@@ -53,6 +54,10 @@ func New(cfg *config.Config, pool *db.Pool, ch *clickhouse.Conn) (*Server, error
 	httpSrv := NewHTTPServer(cfg.Server.HTTPAddr, pool, providers, ch, secret, cfg.Auth.OIDC.BaseURL, ttl, coordHandler)
 	httpSrv.SetRequireAuth(cfg.Auth.RequireAuth)
 	coordHandler.SetRequireAuth(cfg.Auth.RequireAuth)
+	// Wire SMTP. New() returns a no-op sender when SMTP is unconfigured;
+	// the public base URL for invite links falls back to the OIDC base
+	// when the SMTP-specific one isn't set (single-domain deploys).
+	httpSrv.SetMailer(mail.New(cfg.SMTP), cfg.SMTP.PublicBaseURL)
 
 	return &Server{
 		cfg:  cfg,

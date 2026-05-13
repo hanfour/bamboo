@@ -1350,6 +1350,11 @@ type apiInvitationJSON struct {
 	// once to the inviter, then thrown away — only the bcrypt hash
 	// persists. List rows leave this empty.
 	Token string `json:"token,omitempty"`
+	// EmailSent reports whether the invitation email was delivered
+	// to the relay. False either because SMTP is unconfigured (no-op
+	// sender) or delivery failed; in both cases the admin can copy
+	// Token and share it out-of-band. Set only on the mint response.
+	EmailSent bool `json:"emailSent,omitempty"`
 }
 
 type apiCreateInvitationReq struct {
@@ -1416,7 +1421,40 @@ func (h *HTTPServer) apiCreateInvitation(w http.ResponseWriter, r *http.Request,
 	}
 	out := invitationToJSON(created)
 	out.Token = plaintext
+
+	// Best-effort email delivery. Failures don't block the response —
+	// the admin always has the plaintext token in `out.Token` to copy
+	// + share manually. EmailSent on the wire lets the UI render the
+	// right copy ("we sent them an email" vs "copy this token").
+	if h.mailer != nil && h.mailer.Enabled() {
+		inviteURL := h.inviteLinkFor(plaintext)
+		inviterEmail := ""
+		if invitedBy != nil {
+			if u, ferr := h.users.GetByID(r.Context(), *invitedBy); ferr == nil {
+				inviterEmail = u.Email
+			}
+		}
+		sent, err := h.mailer.SendInvitation(created.Email, inviteURL, tenant.Slug, inviterEmail)
+		if err != nil {
+			slog.Warn("send invitation email", "err", err, "invitation_id", created.ID, "to", created.Email)
+		}
+		out.EmailSent = sent
+	}
+
 	writeJSON(w, http.StatusCreated, out)
+}
+
+// inviteLinkFor builds the /invite landing URL the email body links
+// to. We prefer the SMTP-specific publicURL when set; otherwise fall
+// back to the OIDC base URL (single-domain deploys make them the
+// same value). Locale prefix isn't applied here — the Web's
+// next-intl middleware handles language detection on the visit.
+func (h *HTTPServer) inviteLinkFor(token string) string {
+	base := h.publicURL
+	if base == "" {
+		base = h.baseURL
+	}
+	return fmt.Sprintf("%s/invite?token=%s", strings.TrimRight(base, "/"), token)
 }
 
 // apiListInvitations returns every invitation in the tenant. Admin-
