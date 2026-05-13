@@ -532,10 +532,11 @@ const KNOWN_ACTOR_TYPES = new Set<PeerEvent['actorType']>(['user', 'system', 'ap
 
 function actionLabel(t: ReturnType<typeof useTranslations>, action: string): string {
   if (KNOWN_TIMELINE_ACTIONS.has(action)) {
-    // The runtime cast is safe because we just checked the key is
-    // present in messages JSON; next-intl's typed-key generic would
-    // require a wider refactor of the messages typegen.
-    return t(`timeline.action.${action}` as never);
+    // next-intl treats "." as namespace nesting, so we can't key the
+    // JSON with `peer.register` literally. The audit log on the wire
+    // still uses dotted form; the i18n JSON uses `peer_register` and
+    // we translate at lookup time.
+    return t(`timeline.action.${action.replaceAll('.', '_')}` as never);
   }
   return action;
 }
