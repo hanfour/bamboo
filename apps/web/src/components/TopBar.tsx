@@ -4,32 +4,39 @@ import { getTranslations } from 'next-intl/server';
 
 import { Link } from '@/i18n/routing';
 import { fetchMe } from '@/lib/api';
-import { HeaderNav } from './HeaderNav';
+import { HamburgerButton } from './HamburgerButton';
 
 const CONTROLLER_BASE = process.env.BAMBOO_API_URL ?? 'http://localhost:8081';
 
-// Header is the top-bar chrome shared across every page.
+// TopBar is the thin chrome at the very top of every page.
 //
-// Design target: vendor-dashboard (Cloudflare / Google / Apple). Light-
-// mode-first, subtle hairline border, sans-serif system stack, one
-// muted brand accent (bamboo-500) used sparingly on the brand mark
-// and the active-route underline.
+// Design target: Google Account / Workspace Admin / GCP Console —
+// minimal top bar (brand + user only, no nav) paired with a left
+// sidebar (Sidebar.tsx) below. Differentiates from Tailscale's
+// horizontal-tab top bar so we don't read as a clone.
 //
-// Structure: brand · nav · user pill. Server-rendered for the user
-// pill's fetchMe() call; HeaderNav is a thin client-only sub-component
-// so it can read usePathname for the active-state indicator.
-export async function Header() {
+// Brand stays the Saira Stencil "bamboo" wordmark scoped via the
+// --font-wordmark CSS variable. User pill stays in the right corner;
+// when unauthenticated, the same slot renders an outlined Sign-in
+// link to the controller's Google OIDC flow.
+export async function TopBar() {
   const t = await getTranslations();
   const me = await fetchMe();
 
   return (
-    <header className="sticky top-0 z-30 border-b border-zinc-200 bg-white/95 backdrop-blur supports-[backdrop-filter]:bg-white/80 dark:border-zinc-800 dark:bg-zinc-950/95 dark:supports-[backdrop-filter]:bg-zinc-950/80">
-      <div className="mx-auto flex h-14 max-w-7xl items-center gap-8 px-6">
-        <Brand />
-        <HeaderNav />
-        <div className="ml-auto flex items-center gap-3 text-sm">
+    <header className="sticky top-0 z-30 h-14 border-b border-zinc-200 bg-white/95 backdrop-blur supports-[backdrop-filter]:bg-white/80 dark:border-zinc-800 dark:bg-zinc-950/95 dark:supports-[backdrop-filter]:bg-zinc-950/80">
+      <div className="flex h-full items-center justify-between px-6">
+        <div className="flex items-center gap-3">
+          <HamburgerButton />
+          <Brand />
+        </div>
+        <div className="flex items-center gap-3 text-sm">
           {me.authenticated && me.email ? (
-            <UserPill email={me.email} tenantSlug={me.tenantSlug} signOutLabel={t('auth.signOut')} />
+            <UserPill
+              email={me.email}
+              tenantSlug={me.tenantSlug}
+              signOutLabel={t('auth.signOut')}
+            />
           ) : (
             <a
               href={`${CONTROLLER_BASE}/auth/google/login`}
@@ -44,15 +51,6 @@ export async function Header() {
   );
 }
 
-// Brand is the wordmark only — "bamboo" set in Saira Stencil One.
-// No accompanying glyph; the various glyph drafts (Mahjong 二條,
-// 3×3 nine-grid) all read as either competitor-adjacent or decorative
-// noise at header scale. Plain wordmark stays distinctive enough on
-// its own thanks to the stencil cuts in the letterforms.
-//
-// The stencil font is scoped to this one element via the CSS variable
-// loaded in [locale]/layout.tsx; the rest of the site stays on the
-// system-sans stack.
 function Brand() {
   return (
     <Link
@@ -65,10 +63,6 @@ function Brand() {
   );
 }
 
-// UserPill replaces the previous "email + sign-out" pair with a
-// compact email + tenant + initial-avatar + sign-out. Plain link
-// for sign-out — a real dropdown can come later if the menu grows
-// beyond one item.
 function UserPill({
   email,
   tenantSlug,

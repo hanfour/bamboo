@@ -2,7 +2,13 @@ import type { Config } from 'tailwindcss';
 
 const config: Config = {
   content: ['./src/**/*.{ts,tsx}'],
-  darkMode: 'media',
+  // Dark mode is opt-in via a class on <html> rather than tracking the
+  // OS prefers-color-scheme media feature. The media-feature behavior
+  // caused the page to flip dark whenever DevTools (or the OS) declared
+  // a dark scheme, which the user explicitly didn't want. Once a real
+  // theme-toggle ships we add the class through it; until then dark
+  // styles are dormant and the page stays in its committed light look.
+  darkMode: 'class',
   theme: {
     extend: {
       fontFamily: {
@@ -10,18 +16,27 @@ const config: Config = {
         mono: ['var(--font-mono)', 'ui-monospace', 'monospace'],
       },
       colors: {
-        // Subtle bamboo green; tuned for both light and dark backgrounds.
+        // bamboo as weathered / aged bamboo — wabi-sabi taupe palette.
+        // Conceptual shift from "fresh green bamboo" to "seasoned bamboo
+        // brown"; the token name keeps the brand association while the
+        // hue moves to warm earth tones. 70% main bg (50) + 25% surfaces
+        // (100-300) + 5% accent (500) distribution is the design intent.
         bamboo: {
-          50: '#f1f8f3',
-          100: '#deeee2',
-          200: '#bedcc7',
-          300: '#90c2a2',
-          400: '#5fa078',
-          500: '#3d845b',
-          600: '#2d6948',
-          700: '#25543b',
-          800: '#1f4331',
-          900: '#1a3729',
+          50: '#FDF6EC',
+          100: '#F3EFE0',
+          200: '#EADBC8',
+          300: '#D9CBB0',
+          400: '#C5B091',
+          500: '#B59A7E',
+          600: '#9D8467',
+          700: '#806A52',
+          800: '#5F4F3D',
+          900: '#3D3327',
+        },
+        // Warm utility neutral for hairlines / dividers — pairs with
+        // the bamboo earth tones better than zinc's cool grey.
+        stone: {
+          300: '#D3D3D3',
         },
       },
     },
