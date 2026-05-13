@@ -433,7 +433,6 @@ func htmlEscape(s string) string {
 	return string(out)
 }
 
-
 // resolveInvite walks an invite token through the validation gauntlet
 // used by both the pre-OIDC `?invite=` handler and the post-OIDC
 // callback re-check: parse → lookup → not-revoked → not-accepted →

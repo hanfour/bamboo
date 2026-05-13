@@ -198,8 +198,8 @@ func (g *GitHubProvider) Exchange(ctx context.Context, code, redirectURI string)
 // with the same secret used for session JWTs. The unsigned form is
 // base64-url for inclusion in URLs.
 type stateClaims struct {
-	Nonce     string `json:"n"`
-	Tenant    string `json:"t"`
+	Nonce  string `json:"n"`
+	Tenant string `json:"t"`
 	// Invite carries the invitation UUID (string) when the login was
 	// initiated via an invite link. Empty for regular sign-ins. The
 	// callback uses it to redeem the invitation atomically with user
