@@ -6,21 +6,47 @@ import Foundation
 /// to talk to the bamboo controller. The shape of every method matches
 /// the controller's JSON wire format under apps/controller/internal/server/.
 ///
-/// Authentication precedence used here:
+/// Authentication precedence depends on the endpoint:
 ///
-///   - Bearer token (preferred; from completed OIDC sign-in)
-///   - X-Tenant-Slug header (dev fallback; controller resolves to the
-///     "default" tenant when neither is supplied)
-///   - Per-call preAuthKeySecret on register()
+///   - Peer-bound endpoints (heartbeat / watch / relay-token mint /
+///     re-register) prefer `peerSessionToken` — the controller-issued
+///     bearer received in RegisterResponse. Once prod-mode auth is on
+///     (BAMBOO_REQUIRE_AUTH=true) this is the only credential that
+///     keeps these calls working.
+///   - User-bound endpoints (`/me`) use `bearerToken` — the OIDC
+///     session JWT.
+///   - Register itself accepts pre-auth-key in the body OR either
+///     bearer above.
+///   - X-Tenant-Slug header is the dev fallback; the controller
+///     rejects it for peer-bound endpoints under prod mode.
 public struct BambooClient {
     public let baseURL: URL
     public var bearerToken: String?
+    /// Peer-bound bearer minted by the controller on Register. Sent on
+    /// heartbeat / watch / relay-token / re-register; absent until the
+    /// first successful register completes. The struct is a value
+    /// type, so consumers receive a fresh BambooClient with this
+    /// field set via `withPeerSessionToken(_:)`.
+    public var peerSessionToken: String?
     public var tenantSlug: String?
 
-    public init(baseURL: URL, bearerToken: String? = nil, tenantSlug: String? = nil) {
+    public init(baseURL: URL,
+                bearerToken: String? = nil,
+                peerSessionToken: String? = nil,
+                tenantSlug: String? = nil) {
         self.baseURL = baseURL
         self.bearerToken = bearerToken
+        self.peerSessionToken = peerSessionToken
         self.tenantSlug = tenantSlug
+    }
+
+    /// withPeerSessionToken returns a copy of this client with the
+    /// peer-bound bearer set. Used by ConnectionViewModel right after
+    /// register() returns the controller-issued token.
+    public func withPeerSessionToken(_ token: String?) -> BambooClient {
+        var copy = self
+        copy.peerSessionToken = token
+        return copy
     }
 
     public struct RegisterRequest: Encodable {
@@ -48,10 +74,15 @@ public struct BambooClient {
         public var self_: PeerJSON
         public var peers: [PeerJSON]
         public var policyRevision: Int64
+        /// Controller-issued peer-bound bearer (HMAC, ~24h TTL).
+        /// Optional in the wire shape: an older controller that
+        /// predates the prod-mode auth train omits these fields.
+        public var peerSessionToken: String?
+        public var peerSessionExpiresAt: Int64?
 
         enum CodingKeys: String, CodingKey {
             case self_ = "self"
-            case peers, policyRevision
+            case peers, policyRevision, peerSessionToken, peerSessionExpiresAt
         }
     }
 
@@ -87,41 +118,59 @@ public struct BambooClient {
     }
 
     public func register(_ req: RegisterRequest) async throws -> RegisterResponse {
-        return try await postJSON("/api/v1/peers/register", req)
+        // Register is the credential bootstrap: either a pre-auth-key
+        // lives on the body, or a user-session Bearer authenticates an
+        // admin-driven mint. Peer-session Bearer is valid too on
+        // re-register, so prefer it when present.
+        return try await postJSON("/api/v1/peers/register", req, peerBound: true)
     }
 
     public func heartbeat(_ req: HeartbeatRequest) async throws -> HeartbeatResponse {
-        return try await postJSON("/api/v1/peers/heartbeat", req)
+        return try await postJSON("/api/v1/peers/heartbeat", req, peerBound: true)
     }
 
     public func me() async throws -> MeResponse {
-        return try await getJSON("/api/v1/me")
+        // /me is strictly user-session — the controller looks up the
+        // user by claims.UserID, and a peer-session token has none.
+        return try await getJSON("/api/v1/me", peerBound: false)
     }
 
     public func relayToken(_ req: RelayTokenRequest) async throws -> RelayTokenResponse {
-        return try await postJSON("/api/v1/relay-token", req)
+        return try await postJSON("/api/v1/relay-token", req, peerBound: true)
     }
 
     // MARK: - private
 
-    private func getJSON<T: Decodable>(_ path: String) async throws -> T {
+    private func getJSON<T: Decodable>(_ path: String, peerBound: Bool) async throws -> T {
         var req = URLRequest(url: baseURL.appendingPathComponent(path))
         req.httpMethod = "GET"
-        applyHeaders(to: &req)
+        applyHeaders(to: &req, peerBound: peerBound)
         return try await sendAndDecode(req)
     }
 
-    private func postJSON<Req: Encodable, Resp: Decodable>(_ path: String, _ body: Req) async throws -> Resp {
+    private func postJSON<Req: Encodable, Resp: Decodable>(_ path: String, _ body: Req, peerBound: Bool) async throws -> Resp {
         var req = URLRequest(url: baseURL.appendingPathComponent(path))
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        applyHeaders(to: &req)
+        applyHeaders(to: &req, peerBound: peerBound)
         req.httpBody = try JSONEncoder().encode(body)
         return try await sendAndDecode(req)
     }
 
-    private func applyHeaders(to req: inout URLRequest) {
-        if let tok = bearerToken, !tok.isEmpty {
+    /// applyHeaders writes the Authorization + X-Tenant-Slug headers.
+    /// For peer-bound endpoints the peer-session bearer is preferred;
+    /// for user-bound endpoints only the OIDC user-session bearer is
+    /// sent. The slug header is always written when set — the
+    /// controller's prod-mode gate ignores it for peer-bound paths
+    /// but dev mode still relies on it.
+    private func applyHeaders(to req: inout URLRequest, peerBound: Bool) {
+        let chosen: String?
+        if peerBound {
+            chosen = peerSessionToken ?? bearerToken
+        } else {
+            chosen = bearerToken
+        }
+        if let tok = chosen, !tok.isEmpty {
             req.setValue("Bearer \(tok)", forHTTPHeaderField: "Authorization")
         }
         if let slug = tenantSlug, !slug.isEmpty {
