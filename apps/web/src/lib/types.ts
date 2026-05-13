@@ -146,3 +146,20 @@ export type User = {
   createdAt: string;
   updatedAt: string;
 };
+
+// DNSConfig is the tenant DNS surface from /api/v1/dns. tailnetName
+// is a derived display field; the rest map 1:1 to tenant_dns_config
+// columns. updatedAt = zero ISO string when no row has been written
+// (defaults are surfaced). PUT is not yet implemented — the UI shows
+// these as read-only with a "managed via API" hint.
+export type DNSConfig = {
+  tenantId: string;
+  tenantSlug: string;
+  tailnetName: string;
+  magicDnsEnabled: boolean;
+  globalNameservers: string[];
+  searchDomains: string[];
+  overrideDnsServers: boolean;
+  updatedAt: string;
+  updatedBy?: string;
+};

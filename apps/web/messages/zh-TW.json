@@ -8,6 +8,7 @@
     "dashboard": "總覽",
     "peers": "節點",
     "users": "成員",
+    "dns": "DNS",
     "preAuthKeys": "Pre-auth keys",
     "acl": "存取政策",
     "settings": "設定",
@@ -227,6 +228,28 @@
       "fallback": "本地"
     },
     "empty": "尚未有任何成員。第一個透過 OIDC 登入的帳號會成為管理員。"
+  },
+  "dns": {
+    "title": "DNS",
+    "subtitle": "管理租戶的 DNS 設定。目前為唯讀檢視；MagicDNS 與 nameserver 更新需透過 controller API 寫入。",
+    "tenantSection": "Tailnet",
+    "tenantName": "Tailnet 名稱",
+    "magicDnsSection": "MagicDNS",
+    "magicDnsEnabled": "啟用 MagicDNS",
+    "magicDnsHint": "啟用後，租戶內節點可用短主機名解析彼此（依 tailnet 命名空間）。",
+    "nameserversSection": "全域 Nameservers",
+    "nameserversEmpty": "尚未設定 — 節點將使用自身的本地 DNS。",
+    "searchDomainsSection": "搜尋網域",
+    "searchDomainsEmpty": "尚未設定。",
+    "overrideSection": "覆寫本地 DNS",
+    "overrideEnabled": "覆寫節點本地 DNS 設定",
+    "overrideHint": "啟用後，節點以租戶 nameservers 取代本機 DNS；停用時為合併。",
+    "status": {
+      "enabled": "已啟用",
+      "disabled": "未啟用"
+    },
+    "neverUpdated": "預設值（尚未自訂）",
+    "lastUpdated": "最後更新"
   },
   "settings": {
     "title": "設定",
