@@ -142,6 +142,10 @@ function DrawerBody({
       <Section title={t('sections.basic')}>
         <HostnameField peer={peer} onError={setError} />
         <Field label={t('fields.ip')} value={peer.ip} mono />
+        <Field
+          label={t('fields.owner')}
+          value={peer.ownerEmail ? (peer.ownerDisplayName || peer.ownerEmail) : '—'}
+        />
         <Field label={t('fields.os')} value={peer.os || '—'} />
         <Field label={t('fields.clientVersion')} value={peer.clientVersion || '—'} mono />
         <TagsField peer={peer} onError={setError} />

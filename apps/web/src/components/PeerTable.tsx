@@ -36,6 +36,7 @@ export function PeerTable({ peers, selectedId, onSelect }: Props) {
           <tr>
             <th className="px-4 py-3 font-medium">{t('columns.hostname')}</th>
             <th className="px-4 py-3 font-mono font-medium normal-case">{t('columns.ip')}</th>
+            <th className="px-4 py-3 font-medium">{t('columns.owner')}</th>
             <th className="px-4 py-3 font-medium">{t('columns.tags')}</th>
             <th className="px-4 py-3 font-medium">{t('columns.os')}</th>
             <th className="px-4 py-3 font-medium">{t('columns.status')}</th>
@@ -80,6 +81,17 @@ export function PeerTable({ peers, selectedId, onSelect }: Props) {
                       setExpandedId((curr) => (curr === p.id ? null : p.id));
                     }}
                   />
+                </td>
+                <td className="px-4 py-3 align-top text-xs text-zinc-500 dark:text-zinc-400">
+                  {p.ownerEmail ? (
+                    <span title={p.ownerEmail} className="truncate text-zinc-700 dark:text-zinc-300">
+                      {p.ownerDisplayName || p.ownerEmail}
+                    </span>
+                  ) : (
+                    <span className="text-zinc-400" title={t('ownerUnknown')}>
+                      {t('ownerUnknown')}
+                    </span>
+                  )}
                 </td>
                 <td className="px-4 py-3 align-top">
                   <div className="flex flex-wrap gap-1">

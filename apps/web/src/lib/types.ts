@@ -31,6 +31,12 @@ export type Peer = {
   // the reporter; absent = the peer has never handshook (UI shows
   // "尚未握手").
   lastHandshakeAt?: string;
+  // ownerEmail / ownerDisplayName populated when the peer was
+  // registered via a pre-auth key minted by a human admin. Absent
+  // for legacy peers and dev-fallback registrations (no user
+  // attribution available at register time).
+  ownerEmail?: string;
+  ownerDisplayName?: string;
 };
 
 // FetchResult is a discriminated union for read paths so the UI can
