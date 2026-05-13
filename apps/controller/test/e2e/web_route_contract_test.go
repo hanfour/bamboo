@@ -68,15 +68,16 @@ func TestWebRouteContract(t *testing.T) {
 		{method: http.MethodPost, path: "/api/v1/preauth-keys", noBody: true},
 		{method: http.MethodPost, path: "/api/v1/preauth-keys/" + dummyID + "/revoke", noBody: true},
 
-		// Routes added by the still-stacked Web train. Uncomment as
-		// each backend PR merges into main so the contract test
-		// starts enforcing them.
-		// {method: http.MethodGet, path: "/api/v1/users"},
-		// {method: http.MethodGet, path: "/api/v1/invitations"},
-		// {method: http.MethodPost, path: "/api/v1/invitations", noBody: true},
-		// {method: http.MethodPost, path: "/api/v1/invitations/" + dummyID + "/revoke", noBody: true},
-		// {method: http.MethodGet, path: "/api/v1/logs"},
-		// {method: http.MethodPut, path: "/api/v1/policy", noBody: true},
+		// Routes from the post-v0.1.7 Web train (#76 users, #83/#85/#87
+		// invitations, #81 DNS, #91 ACL PUT, #93 logs) — now live on
+		// main and actively enforced.
+		{method: http.MethodGet, path: "/api/v1/users"},
+		{method: http.MethodGet, path: "/api/v1/invitations"},
+		{method: http.MethodPost, path: "/api/v1/invitations", noBody: true},
+		{method: http.MethodPost, path: "/api/v1/invitations/" + dummyID + "/revoke", noBody: true},
+		{method: http.MethodGet, path: "/api/v1/logs"},
+		{method: http.MethodGet, path: "/api/v1/dns"},
+		{method: http.MethodPut, path: "/api/v1/policy", noBody: true},
 	}
 
 	// First probe a synthetic path that definitely doesn't exist so
