@@ -93,9 +93,29 @@ func (h *HTTPServer) apiPeersRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Prod-mode gate. A register call must carry at least one of:
+	//   - a pre-auth-key secret in the body
+	//   - a peer-session bearer (re-register from a CLI that already
+	//     holds a token; the coordinator handler re-validates against
+	//     the peer row)
+	//   - a user-session JWT (admin minting a peer through the API)
+	// Pure X-Tenant-Slug fallback is rejected. The CoordinatorHandler's
+	// resolveTenant applies the same gate when called over gRPC.
+	if h.requireAuth {
+		if body.PreAuthKeySecret == "" && h.peerSessionFromRequest(r) == nil {
+			authn, err := h.authenticate(r)
+			if err != nil || authn.claims == nil {
+				writeError(w, http.StatusUnauthorized, errors.New("register requires a pre-auth key, peer-session bearer, or user-session credential"))
+				return
+			}
+		}
+	}
+
 	// Forward x-tenant-slug from the explicit body field OR the
 	// X-Tenant-Slug header into the gRPC handler's metadata channel —
-	// the handler's resolveTenant reads from there.
+	// the handler's resolveTenant reads from there. In prod mode the
+	// resolveTenant gate ignores slug when no payload credential is
+	// present, so this header is only consulted in dev.
 	slug := body.TenantSlug
 	if slug == "" {
 		slug = r.Header.Get("X-Tenant-Slug")
@@ -190,6 +210,17 @@ func (h *HTTPServer) apiPeersHeartbeat(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, fmt.Errorf("decode request: %w", err))
 		return
 	}
+	// Prod-mode gate. Heartbeat is peer-id-scoped, so the credential
+	// must bind to *this* peer: either a peer-session bearer whose
+	// claim matches body.PeerID, or a user-session JWT (admin
+	// driving a peer manually). The previous slug-only path is
+	// rejected.
+	if h.requireAuth {
+		if !h.peerCredentialAllows(r, body.PeerID) {
+			writeError(w, http.StatusUnauthorized, errors.New("heartbeat requires a peer-session bearer matching the peerId, or a user-session credential"))
+			return
+		}
+	}
 	resp, err := h.coord.Heartbeat(r.Context(), &bamboov1.HeartbeatRequest{
 		PeerId:              body.PeerID,
 		KnownPolicyRevision: body.KnownPolicyRevision,
@@ -222,6 +253,14 @@ func (h *HTTPServer) apiPeersWatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	peerID := r.URL.Query().Get("peerId")
+	// Prod-mode gate. Same logic as heartbeat — watch is peer-id-
+	// scoped, so the credential must bind to this peer.
+	if h.requireAuth {
+		if !h.peerCredentialAllows(r, peerID) {
+			writeError(w, http.StatusUnauthorized, errors.New("watch requires a peer-session bearer matching the peerId, or a user-session credential"))
+			return
+		}
+	}
 	ch, cancel, err := h.coord.SubscribePeer(r.Context(), peerID)
 	if err != nil {
 		writeGRPCError(w, err)
