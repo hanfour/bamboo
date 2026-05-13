@@ -47,7 +47,7 @@ export function FetchErrorState({
       return (
         <ErrorCard
           className={className}
-          tone="info"
+          icon={<LockIcon />}
           title={t('unauthorized.title')}
           body={t('unauthorized.body')}
         >
@@ -58,7 +58,7 @@ export function FetchErrorState({
       return (
         <ErrorCard
           className={className}
-          tone="warn"
+          icon={<ShieldIcon />}
           title={t('forbidden.title')}
           body={t('forbidden.body')}
         />
@@ -67,7 +67,7 @@ export function FetchErrorState({
       return (
         <ErrorCard
           className={className}
-          tone="neutral"
+          icon={<QuestionIcon />}
           title={t('notFound.title')}
           body={t('notFound.body')}
         />
@@ -77,7 +77,7 @@ export function FetchErrorState({
       return (
         <ErrorCard
           className={className}
-          tone="danger"
+          icon={<CloudOffIcon />}
           title={t('unreachable.title')}
           body={t('unreachable.body')}
           // The retry button is a plain <a> that re-requests the same
@@ -88,7 +88,7 @@ export function FetchErrorState({
         >
           <RetryButton label={t('unreachable.retry')} />
           {message ? (
-            <p className="mt-2 text-xs font-mono text-zinc-500 dark:text-zinc-500">
+            <p className="mt-2 font-mono text-xs text-zinc-500 dark:text-zinc-500">
               {message}
             </p>
           ) : null}
@@ -98,35 +98,47 @@ export function FetchErrorState({
 }
 
 function ErrorCard({
-  tone,
+  icon,
   title,
   body,
   children,
   className,
 }: {
-  tone: 'info' | 'warn' | 'danger' | 'neutral';
+  icon: React.ReactNode;
   title: string;
   body: string;
   children?: React.ReactNode;
   className?: string;
 }) {
-  const palette = {
-    info: 'border-blue-300 bg-blue-50 text-blue-900 dark:border-blue-900/40 dark:bg-blue-950/30 dark:text-blue-100',
-    warn: 'border-amber-300 bg-amber-50 text-amber-900 dark:border-amber-900/40 dark:bg-amber-950/30 dark:text-amber-100',
-    danger:
-      'border-red-300 bg-red-50 text-red-900 dark:border-red-900/40 dark:bg-red-950/30 dark:text-red-100',
-    neutral:
-      'border-zinc-200 bg-zinc-50 text-zinc-900 dark:border-zinc-800 dark:bg-zinc-900/40 dark:text-zinc-100',
-  }[tone];
-
+  // Single neutral card for every variant — Muji direction: no tone
+  // tints. The outlined icon is the only state differentiator alongside
+  // the title copy itself. Hairline border, no fill on top of the page
+  // background, identical chrome to Header.
   return (
-    <div className={`rounded-lg border p-6 ${palette} ${className}`}>
-      <h2 className="text-base font-semibold tracking-tight">{title}</h2>
-      <p className="mt-1 text-sm">{body}</p>
-      {children ? <div className="mt-4">{children}</div> : null}
+    <div
+      className={`rounded-lg border border-zinc-200 bg-white p-6 dark:border-zinc-800 dark:bg-zinc-950 ${className}`}
+    >
+      <div className="flex items-start gap-3">
+        <span
+          aria-hidden
+          className="mt-0.5 inline-flex h-5 w-5 shrink-0 items-center justify-center text-zinc-500 dark:text-zinc-400"
+        >
+          {icon}
+        </span>
+        <div className="min-w-0">
+          <h2 className="text-base font-semibold tracking-tight text-zinc-900 dark:text-zinc-100">
+            {title}
+          </h2>
+          <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">{body}</p>
+          {children ? <div className="mt-4">{children}</div> : null}
+        </div>
+      </div>
     </div>
   );
 }
+
+const OUTLINED_BUTTON =
+  'inline-flex items-center rounded-md border border-zinc-300 px-3 py-1.5 text-sm font-medium text-zinc-700 transition-colors hover:border-zinc-400 hover:text-zinc-900 dark:border-zinc-700 dark:text-zinc-300 dark:hover:border-zinc-600 dark:hover:text-zinc-100';
 
 function SignInLinks({
   base,
@@ -147,10 +159,7 @@ function SignInLinks({
 
   return (
     <div className="flex flex-wrap gap-2">
-      <a
-        href={url('google')}
-        className="inline-flex items-center rounded-md border border-current/20 bg-white/60 px-3 py-1.5 text-sm font-medium hover:bg-white dark:bg-zinc-900/40 dark:hover:bg-zinc-900"
-      >
+      <a href={url('google')} className={OUTLINED_BUTTON}>
         {label} — Google
       </a>
     </div>
@@ -162,11 +171,80 @@ function RetryButton({ label }: { label: string }) {
   // the retry is a same-URL <a> the browser handles. The server-render
   // re-executes the fetcher.
   return (
-    <a
-      href=""
-      className="inline-flex items-center rounded-md border border-current/30 bg-white/60 px-3 py-1.5 text-sm font-medium hover:bg-white dark:bg-zinc-900/40 dark:hover:bg-zinc-900"
-    >
+    <a href="" className={OUTLINED_BUTTON}>
       {label}
     </a>
+  );
+}
+
+// Outlined icons (stroke-only, 1.5px) — single zinc tone, no fills.
+// Sized via the wrapping <span>; the SVGs themselves stretch to 100%.
+
+function LockIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="h-5 w-5"
+    >
+      <rect x="4" y="11" width="16" height="9" rx="2" />
+      <path d="M8 11V8a4 4 0 0 1 8 0v3" />
+    </svg>
+  );
+}
+
+function ShieldIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="h-5 w-5"
+    >
+      <path d="M12 3 5 6v6c0 4.5 3 8 7 9 4-1 7-4.5 7-9V6l-7-3Z" />
+    </svg>
+  );
+}
+
+function QuestionIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="h-5 w-5"
+    >
+      <circle cx="12" cy="12" r="9" />
+      <path d="M9.5 9a2.5 2.5 0 1 1 3.5 2.3c-.7.3-1 .8-1 1.7" />
+      <path d="M12 17h.01" />
+    </svg>
+  );
+}
+
+function CloudOffIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="h-5 w-5"
+    >
+      <path d="m3 3 18 18" />
+      <path d="M9.5 6.4A5 5 0 0 1 18 9a4 4 0 0 1 2.6 7" />
+      <path d="M5.7 9A4 4 0 0 0 7 17h9" />
+    </svg>
   );
 }
