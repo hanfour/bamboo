@@ -124,3 +124,19 @@ export type AclPolicy = {
   updatedAt: string;
   updatedBy?: string;
 };
+
+// User is one row from /api/v1/users (admin-only list). Role is
+// derived in the UI from isAdmin — there's no third tier yet
+// (owner / admin / member from the design doc are conceptual;
+// currently only admin/member exist on the wire). updatedAt
+// doubles as a "last activity" proxy since UpsertOIDC bumps it
+// on every login.
+export type User = {
+  id: string;
+  email: string;
+  displayName?: string;
+  oidcProvider?: string;
+  isAdmin?: boolean;
+  createdAt: string;
+  updatedAt: string;
+};

@@ -27,12 +27,13 @@ export function Sidebar() {
   const { open, setOpen } = useDrawer();
 
   const items: Array<{
-    href: '/' | '/peers' | '/acl' | '/settings';
+    href: '/' | '/peers' | '/users' | '/acl' | '/settings';
     label: string;
     icon: React.ReactNode;
   }> = [
     { href: '/', label: t('dashboard'), icon: <HomeIcon /> },
     { href: '/peers', label: t('peers'), icon: <ServerIcon /> },
+    { href: '/users', label: t('users'), icon: <UsersIcon /> },
     { href: '/acl', label: t('acl'), icon: <ShieldIcon /> },
     // Pre-auth keys lives under Settings now (matches Tailscale's IA);
     // /preauth-keys route still exists, just reached via Settings →
@@ -150,6 +151,25 @@ function ServerIcon() {
       <rect x="3" y="14" width="18" height="6" rx="1" />
       <path d="M7 7h.01" />
       <path d="M7 17h.01" />
+    </svg>
+  );
+}
+
+function UsersIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="h-5 w-5"
+    >
+      <circle cx="9" cy="8" r="3.5" />
+      <path d="M2.5 20a6.5 6.5 0 0 1 13 0" />
+      <path d="M17 11a3 3 0 1 0 0-6" />
+      <path d="M21.5 20a5.5 5.5 0 0 0-4.5-5.4" />
     </svg>
   );
 }
