@@ -44,7 +44,17 @@ public enum STUNClient {
     /// and returns the host:port the discovery socket presents to the
     /// outside world. timeoutSeconds applies to both the connect and
     /// read.
+    ///
+    /// localPort optionally pins the source UDP port the request goes
+    /// out on. The default 0 lets the OS pick an ephemeral port; that
+    /// works for discovery but the resulting external endpoint is keyed
+    /// on a port the WireGuard socket never listens on, so other peers
+    /// can't dial it. Callers that intend to advertise the discovered
+    /// endpoint as the peer's reachable address should pass the same
+    /// port WireGuard will listen on. See Finding #4 in
+    /// docs/development/project-understanding-2026-05-13.md.
     public static func discover(server: String = defaultServer,
+                                localPort: UInt16 = 0,
                                 timeoutSeconds: Double = 2.0) async throws -> String {
         let parts = server.split(separator: ":", maxSplits: 1).map(String.init)
         guard parts.count == 2, let port = UInt16(parts[1]) else {
@@ -54,7 +64,11 @@ public enum STUNClient {
         let nwPort = NWEndpoint.Port(rawValue: port) ?? .any
 
         let queue = DispatchQueue(label: "dev.hanfour.bamboo.stun")
-        let conn = NWConnection(host: host, port: nwPort, using: .udp)
+        let params: NWParameters = .udp
+        if localPort != 0, let lp = NWEndpoint.Port(rawValue: localPort) {
+            params.requiredLocalEndpoint = NWEndpoint.hostPort(host: .ipv4(.any), port: lp)
+        }
+        let conn = NWConnection(host: host, port: nwPort, using: params)
 
         let txID = generateTransactionID()
         let request = buildBindingRequest(transactionID: txID)

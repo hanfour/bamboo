@@ -105,22 +105,61 @@ public final class ConnectionViewModel: ObservableObject {
     }
 
     /// ensureRelay mints a relay-token, opens a RelayClient, waits
-    /// for SERVER_HELLO. Caller registers peers via addPeer.
+    /// for SERVER_HELLO. Caller registers peers via addPeer. wgPort
+    /// must match the port WireGuard binds locally so the relay
+    /// proxy delivers decrypted payloads to the right kernel socket.
     private func ensureRelay(client: BambooClient,
                              selfId: String,
                              selfPubKey: String,
-                             url: URL) async throws -> RelayClient {
+                             url: URL,
+                             wgPort: UInt16) async throws -> RelayClient {
         let resp = try await client.relayToken(.init(peerId: selfId,
                                                       wireguardPublicKey: selfPubKey))
         guard let selfKey = Data(base64Encoded: selfPubKey) else {
             throw BambooClientError.invalidResponse
         }
-        // WG listens on the standard 51820 by default; future PR
-        // makes this user-configurable.
         let r = RelayClient(selfKey: selfKey, token: resp.token,
-                            wgListenHost: "127.0.0.1", wgListenPort: 51820)
+                            wgListenHost: "127.0.0.1", wgListenPort: wgPort)
         try await r.dial(relayURL: url)
         return r
+    }
+
+    /// pickFreeUDPPort opens an ephemeral UDP socket so the OS picks
+    /// a free port, then closes it and returns the assigned number.
+    /// The close/reopen window is a race; in practice nothing else on
+    /// the host is racing for UDP ports while the connect flow runs,
+    /// and WireGuard's bind in the extension surfaces a clear error
+    /// if the port is taken — louder than silently picking a
+    /// different port.
+    private func pickFreeUDPPort() throws -> UInt16 {
+        let sock = socket(AF_INET, SOCK_DGRAM, 0)
+        guard sock >= 0 else {
+            throw ConnectionError.portPickFailed("socket")
+        }
+        defer { close(sock) }
+        var addr = sockaddr_in()
+        addr.sin_family = sa_family_t(AF_INET)
+        addr.sin_addr.s_addr = INADDR_ANY.bigEndian
+        addr.sin_port = 0
+        let bindRes = withUnsafePointer(to: &addr) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                Darwin.bind(sock, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+            }
+        }
+        guard bindRes == 0 else {
+            throw ConnectionError.portPickFailed("bind errno=\(errno)")
+        }
+        var bound = sockaddr_in()
+        var len = socklen_t(MemoryLayout<sockaddr_in>.size)
+        let nameRes = withUnsafeMutablePointer(to: &bound) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                getsockname(sock, $0, &len)
+            }
+        }
+        guard nameRes == 0 else {
+            throw ConnectionError.portPickFailed("getsockname errno=\(errno)")
+        }
+        return UInt16(bigEndian: bound.sin_port)
     }
 
     private func connectAsync() async {
@@ -139,13 +178,22 @@ public final class ConnectionViewModel: ObservableObject {
                 throw ConnectionError.invalidControllerURL
             }
 
+            // Pick the WireGuard listen port BEFORE STUN so STUN and
+            // WG share the same internal source port. NATs allocate
+            // external mappings keyed on (src_ip, src_port); using
+            // different ports for STUN vs WG yields an advertised
+            // endpoint other peers can't actually dial. See Finding
+            // #4 in docs/development/project-understanding-2026-05-13.md.
+            let wgPort = try pickFreeUDPPort()
+            log.log("wireguard listen port chosen \(wgPort, privacy: .public)")
+
             // Best-effort STUN discovery so other peers in the tenant
             // learn how to reach us. Failure is logged but does not
             // block the tunnel — we still get a working self-tunnel
             // and other peers can dial us once their handshake retries.
             var discoveredEndpoints: [String] = []
             do {
-                let endpoint = try await STUNClient.discover()
+                let endpoint = try await STUNClient.discover(localPort: wgPort)
                 discoveredEndpoints = [endpoint]
                 log.log("stun discovered \(endpoint, privacy: .public)")
             } catch {
@@ -188,7 +236,8 @@ public final class ConnectionViewModel: ObservableObject {
                     let r = try await ensureRelay(client: client,
                                                    selfId: resp.self_.id,
                                                    selfPubKey: publicKey,
-                                                   url: url)
+                                                   url: url,
+                                                   wgPort: wgPort)
                     for p in resp.peers {
                         if let pkData = Data(base64Encoded: p.wireguardPublicKey) {
                             let proxyAddr = try await r.addPeer(pkData)
@@ -216,6 +265,7 @@ public final class ConnectionViewModel: ObservableObject {
                 address: "\(resp.self_.ip)/32",
                 dnsServers: [],
                 mtu: 1280,
+                wgListenPort: wgPort,
                 peers: peers
             )
 
@@ -300,6 +350,7 @@ public final class ConnectionViewModel: ObservableObject {
             address: "\(selfIPv4)/32",
             dnsServers: prevConfig.dnsServers,
             mtu: prevConfig.mtu,
+            wgListenPort: prevConfig.wgListenPort,
             peers: peers
         )
         self.lastConfig = config
@@ -352,10 +403,12 @@ public final class ConnectionViewModel: ObservableObject {
 
 private enum ConnectionError: Error, CustomStringConvertible {
     case invalidControllerURL
+    case portPickFailed(String)
 
     var description: String {
         switch self {
         case .invalidControllerURL: return "controller URL is not a valid URL"
+        case .portPickFailed(let reason): return "could not pick a free UDP port: \(reason)"
         }
     }
 }
