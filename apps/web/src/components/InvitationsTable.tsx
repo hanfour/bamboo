@@ -2,7 +2,9 @@
 
 'use client';
 
+import { useState, useTransition } from 'react';
 import { useTranslations } from 'next-intl';
+import { revokeInvitationAction } from '@/lib/actions';
 import type { Invitation } from '@/lib/types';
 
 type Status = 'pending' | 'accepted' | 'revoked' | 'expired';
@@ -13,10 +15,9 @@ type Status = 'pending' | 'accepted' | 'revoked' | 'expired';
 // timestamps — the controller intentionally doesn't ship a status
 // column, same as preauth keys.
 //
-// No revoke column for v1: the backend revoke endpoint is on the
-// follow-up roadmap (see PR #83 description). When it lands, the
-// revoke button drops into the rightmost column with the same
-// outlined-on-hover-red pattern as RevokeButton in PreAuthKeyTable.
+// Revoke action lives in the rightmost column, only rendered for
+// pending invitations. Accepted / revoked / expired rows show "—"
+// to keep the column aligned without an active control.
 export function InvitationsTable({ invitations }: { invitations: Invitation[] }) {
   const t = useTranslations('users.invitations');
   if (invitations.length === 0) {
@@ -37,6 +38,7 @@ export function InvitationsTable({ invitations }: { invitations: Invitation[] })
             <th className="px-4 py-3 font-medium">{t('columns.invitedBy')}</th>
             <th className="px-4 py-3 font-medium">{t('columns.createdAt')}</th>
             <th className="px-4 py-3 font-medium">{t('columns.expiresAt')}</th>
+            <th className="px-4 py-3 font-medium sr-only">{t('columns.actions')}</th>
           </tr>
         </thead>
         <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800">
@@ -51,6 +53,7 @@ export function InvitationsTable({ invitations }: { invitations: Invitation[] })
 
 function InvitationRow({ inv }: { inv: Invitation }) {
   const tRole = useTranslations('users.role');
+  const tActions = useTranslations('users.invitations.actions');
   const status = statusOf(inv);
   return (
     <tr className="text-zinc-700 dark:text-zinc-300">
@@ -74,7 +77,76 @@ function InvitationRow({ inv }: { inv: Invitation }) {
       <td className="px-4 py-3 align-top text-xs text-zinc-500 dark:text-zinc-400">
         {formatTimestamp(inv.expiresAt)}
       </td>
+      <td className="px-4 py-3 align-top text-right">
+        {status === 'pending' ? (
+          <RevokeButton id={inv.id} />
+        ) : (
+          <span className="text-xs text-zinc-400">{tActions('noAction')}</span>
+        )}
+      </td>
     </tr>
+  );
+}
+
+function RevokeButton({ id }: { id: string }) {
+  // Two-stage confirm pattern mirrors PreAuthKeyTable.RevokeButton —
+  // first click reveals 確定撤銷 / 取消, second click on confirm fires
+  // the action. Avoids a full modal for one destructive verb. Default
+  // is outlined zinc with red text-on-hover; confirm is outlined
+  // red-300. Never a solid red fill — Muji discipline.
+  const t = useTranslations('users.invitations.actions');
+  const [confirming, setConfirming] = useState(false);
+  const [pending, startTransition] = useTransition();
+  const [error, setError] = useState<string | null>(null);
+
+  if (confirming) {
+    return (
+      <span className="inline-flex items-center gap-2">
+        <button
+          type="button"
+          disabled={pending}
+          onClick={() => {
+            startTransition(async () => {
+              const res = await revokeInvitationAction(id);
+              if (res.ok) {
+                setError(null);
+                setConfirming(false);
+              } else {
+                setError(res.error);
+              }
+            });
+          }}
+          className="rounded-md border border-red-300 px-2 py-1 text-xs font-medium text-red-700 transition-colors hover:border-red-400 hover:bg-red-50 disabled:opacity-50 dark:border-red-900/50 dark:text-red-400 dark:hover:bg-red-950/40"
+        >
+          {pending ? t('working') : t('confirmRevoke')}
+        </button>
+        <button
+          type="button"
+          disabled={pending}
+          onClick={() => {
+            setConfirming(false);
+            setError(null);
+          }}
+          className="rounded-md border border-zinc-300 px-2 py-1 text-xs text-zinc-700 transition-colors hover:border-zinc-400 hover:text-zinc-900 disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:border-zinc-600 dark:hover:text-zinc-100"
+        >
+          {t('cancel')}
+        </button>
+        {error && (
+          <span className="text-xs text-red-600 dark:text-red-400" title={error}>
+            ⚠
+          </span>
+        )}
+      </span>
+    );
+  }
+  return (
+    <button
+      type="button"
+      onClick={() => setConfirming(true)}
+      className="rounded-md border border-zinc-300 px-2 py-1 text-xs text-zinc-700 transition-colors hover:border-red-300 hover:text-red-700 dark:border-zinc-700 dark:text-zinc-300 dark:hover:border-red-900/50 dark:hover:text-red-400"
+    >
+      {t('revoke')}
+    </button>
   );
 }
 

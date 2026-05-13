@@ -259,13 +259,21 @@
         "status": "Status",
         "invitedBy": "Invited by",
         "createdAt": "Created",
-        "expiresAt": "Expires"
+        "expiresAt": "Expires",
+        "actions": "Actions"
       },
       "status": {
         "pending": "Pending",
         "accepted": "Accepted",
         "revoked": "Revoked",
         "expired": "Expired"
+      },
+      "actions": {
+        "revoke": "Revoke",
+        "confirmRevoke": "Confirm revoke",
+        "cancel": "Cancel",
+        "working": "Working…",
+        "noAction": "—"
       }
     }
   },
