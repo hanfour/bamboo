@@ -260,12 +260,12 @@ func (r *deviceReapplier) Reapply(ctx context.Context, overrides map[string]stri
 //
 // Credential precedence:
 //
-//   1. Authorization: Bearer <peer-session-token> — the controller-
-//      issued peer-bound bearer captured at Register time. This is
-//      the path the prod-mode gate follow-up will require.
-//   2. X-Tenant-Slug header — legacy dev fallback. Kept so this
-//      command still works against an older controller that does not
-//      yet issue peer session tokens.
+//  1. Authorization: Bearer <peer-session-token> — the controller-
+//     issued peer-bound bearer captured at Register time. This is
+//     the path the prod-mode gate follow-up will require.
+//  2. X-Tenant-Slug header — legacy dev fallback. Kept so this
+//     command still works against an older controller that does not
+//     yet issue peer session tokens.
 //
 // Both headers may be sent simultaneously; the controller resolves
 // tenant from the bearer when valid and falls through to the slug
