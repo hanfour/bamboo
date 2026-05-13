@@ -111,7 +111,7 @@ func (h *HTTPServer) routeAPI(w http.ResponseWriter, r *http.Request) {
 			}
 			return
 		}
-		http.NotFound(w, r)
+		writeRouteMissing(w)
 		return
 	}
 
@@ -142,7 +142,7 @@ func (h *HTTPServer) routeAPI(w http.ResponseWriter, r *http.Request) {
 			h.apiRevokePreAuthKey(w, r, authn, tenant, id)
 			return
 		}
-		http.NotFound(w, r)
+		writeRouteMissing(w)
 		return
 	}
 
@@ -165,8 +165,19 @@ func (h *HTTPServer) routeAPI(w http.ResponseWriter, r *http.Request) {
 	case "/api/v1/activity":
 		h.apiActivity(w, r, tenant)
 	default:
-		http.NotFound(w, r)
+		writeRouteMissing(w)
 	}
+}
+
+// writeRouteMissing writes the canonical "no REST route matched"
+// response. Distinct from handler-level 404s (which are still
+// http.NotFound, used for resource lookups under a known route)
+// because clients need to tell "controller doesn't know this URL"
+// apart from "controller knows the URL but the resource is gone".
+// The contract test in test/e2e/web_route_contract_test.go pins
+// this distinction so Web→Controller route drift surfaces in CI.
+func writeRouteMissing(w http.ResponseWriter) {
+	writeError(w, http.StatusNotFound, errors.New("route not registered"))
 }
 
 // authnContext is what authenticate produces. claims is non-nil when a
