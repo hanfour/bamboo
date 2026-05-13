@@ -125,7 +125,11 @@ export async function mintPreAuthKeyAction(input: {
 // — the controller stores only the bcrypt hash, so subsequent GETs
 // will not return it. `duplicate` is set on 409 so the UI can render
 // a friendlier "already invited this address" message instead of the
-// generic status-code error.
+// generic status-code error. `emailSent` is true when the controller
+// successfully handed the invite email to its SMTP relay; false when
+// SMTP is unconfigured OR delivery failed. The UI uses it to choose
+// between "we emailed them" and "copy this token and share it
+// manually" copy.
 export type InviteResult =
   | {
       ok: true;
@@ -133,6 +137,7 @@ export type InviteResult =
       email: string;
       token: string;
       expiresAt: string;
+      emailSent: boolean;
     }
   | { ok: false; error: string; duplicate?: boolean };
 
@@ -172,6 +177,7 @@ export async function inviteUserAction(input: {
       email: string;
       token: string;
       expiresAt: string;
+      emailSent?: boolean;
     };
     revalidatePath('/[locale]/users', 'page');
     return {
@@ -180,6 +186,7 @@ export async function inviteUserAction(input: {
       email: body.email,
       token: body.token,
       expiresAt: body.expiresAt,
+      emailSent: Boolean(body.emailSent),
     };
   } catch (e) {
     return { ok: false, error: (e as Error).message };

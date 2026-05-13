@@ -30,6 +30,7 @@ export function InviteUserButton() {
     email: string;
     token: string;
     expiresAt: string;
+    emailSent: boolean;
   } | null>(null);
 
   function close() {
@@ -54,6 +55,7 @@ export function InviteUserButton() {
           email: res.email,
           token: res.token,
           expiresAt: res.expiresAt,
+          emailSent: res.emailSent,
         });
       } else {
         setError({ msg: res.error, duplicate: Boolean(res.duplicate) });
@@ -77,6 +79,7 @@ export function InviteUserButton() {
               email={result.email}
               token={result.token}
               expiresAt={result.expiresAt}
+              emailSent={result.emailSent}
               onDone={close}
             />
           ) : (
@@ -216,33 +219,41 @@ function ResultView({
   email,
   token,
   expiresAt,
+  emailSent,
   onDone,
 }: {
   email: string;
   token: string;
   expiresAt: string;
+  emailSent: boolean;
   onDone: () => void;
 }) {
   const t = useTranslations('users.newInvite');
+  // Top hint flips on whether the controller's SMTP relay accepted
+  // the invite email. When sent, the token below is a backup the
+  // admin can still copy if email gets stuck in spam. When not sent
+  // (SMTP unconfigured or relay failure), we surface that honestly
+  // so the admin knows they need to share the token manually.
   return (
     <div className="space-y-4">
-      <p className="text-sm text-zinc-700 dark:text-zinc-300">{t('resultHint')}</p>
+      <p className="text-sm text-zinc-700 dark:text-zinc-300">
+        {emailSent ? t('resultHintEmailed', { email }) : t('resultHint')}
+      </p>
+      {!emailSent && (
+        <p className="text-xs text-zinc-500 dark:text-zinc-400">{t('emailNotConfigured')}</p>
+      )}
       <p className="text-xs text-zinc-500 dark:text-zinc-400">
         {t('emailLabel')}: <span className="font-medium">{email}</span>
       </p>
 
       <CopyableField label={t('tokenLabel')} value={token} mono secret />
 
-      <p className="text-xs text-zinc-500 dark:text-zinc-400">
-        {t('formHint').split('；')[0] /* short "expires" line could go here later */}
-      </p>
       <p className="font-mono text-[11px] text-zinc-400 dark:text-zinc-500">{expiresAt}</p>
 
-      {/* Honest "redeem flow not shipped" warning — see plan §Context */}
-      <div className="rounded-md border border-amber-300 px-3 py-2 text-xs text-amber-700 dark:border-amber-900/50 dark:text-amber-400">
-        {t('redeemPendingWarning')}
-      </div>
-
+      {/* Redeem-flow warning is now informational rather than a
+          blocker — accept-flow shipped in #85. Kept the copy until
+          we audit that staging confirms end-to-end works. Future
+          PR removes the warning entirely. */}
       <div className="rounded-md border border-amber-300 px-3 py-2 text-xs text-amber-700 dark:border-amber-900/50 dark:text-amber-400">
         {t('oneShotWarning')}
       </div>

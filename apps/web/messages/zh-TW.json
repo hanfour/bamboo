@@ -243,9 +243,11 @@
       "errorDuplicate": "此電子郵件已有未處理的邀請。撤銷舊邀請後再試。",
       "resultTitle": "邀請已建立",
       "resultHint": "下方的邀請 token 只會顯示一次。",
+      "resultHintEmailed": "已寄出邀請信至 {email}。下方 token 為備援，必要時可手動分享。",
       "tokenLabel": "邀請 token",
       "oneShotWarning": "若遺失此 token，請撤銷後重新建立 — 無法回復。",
       "redeemPendingWarning": "⚠ Redeem 流程尚未上線：對方目前無法用此 token 註冊。等到 accept-flow PR 上線再分享。",
+      "emailNotConfigured": "SMTP 尚未設定，未自動寄信。請手動複製 token 分享給對方。",
       "copy": "複製",
       "copied": "已複製",
       "done": "完成"

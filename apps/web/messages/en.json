@@ -243,9 +243,11 @@
       "errorDuplicate": "An active invitation already exists for this email. Revoke the existing one first.",
       "resultTitle": "Invitation created",
       "resultHint": "The invitation token below is shown only once.",
+      "resultHintEmailed": "Invitation email sent to {email}. The token below is a backup — share manually only if needed.",
       "tokenLabel": "Invitation token",
       "oneShotWarning": "If you lose this token, revoke the invitation and create a new one — there's no way to retrieve it.",
       "redeemPendingWarning": "⚠ Redeem flow is not yet shipped — the invitee can't use this token to sign up yet. Wait for the accept-flow PR before sharing.",
+      "emailNotConfigured": "SMTP is not configured, so no email was sent. Copy the token below and share it with the invitee manually.",
       "copy": "Copy",
       "copied": "Copied",
       "done": "Done"
