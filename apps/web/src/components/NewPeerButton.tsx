@@ -185,7 +185,7 @@ function FormView({
       <p className="-mt-2 text-xs text-zinc-500 dark:text-zinc-400">{t('reusableHint')}</p>
 
       {error && (
-        <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-900/50 dark:bg-red-950/40 dark:text-red-300">
+        <div className="rounded-md border border-red-300 px-3 py-2 text-sm text-red-700 dark:border-red-900/50 dark:text-red-400">
           {t('error')} {error}
         </div>
       )}
@@ -195,14 +195,14 @@ function FormView({
           type="button"
           onClick={onCancel}
           disabled={pending}
-          className="rounded-md border border-zinc-200 px-3 py-1.5 text-sm text-zinc-700 hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-900"
+          className="rounded-md border border-zinc-300 px-3 py-1.5 text-sm text-zinc-700 transition-colors hover:border-zinc-400 hover:text-zinc-900 disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:border-zinc-600 dark:hover:text-zinc-100"
         >
           {t('cancel')}
         </button>
         <button
           type="submit"
           disabled={pending}
-          className="rounded-md border border-bamboo-600 bg-bamboo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-bamboo-700 disabled:opacity-50"
+          className="rounded-md bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-zinc-700 disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
         >
           {pending ? t('working') : t('submit')}
         </button>
@@ -275,7 +275,7 @@ function ResultView({
         </div>
       </details>
 
-      <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/40 dark:text-amber-300">
+      <div className="rounded-md border border-amber-300 px-3 py-2 text-xs text-amber-700 dark:border-amber-900/50 dark:text-amber-400">
         {t('oneShotWarning')}
       </div>
 
@@ -283,7 +283,7 @@ function ResultView({
         <button
           type="button"
           onClick={onDone}
-          className="rounded-md border border-bamboo-600 bg-bamboo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-bamboo-700"
+          className="rounded-md bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-zinc-700 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
         >
           {t('done')}
         </button>
