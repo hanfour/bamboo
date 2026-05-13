@@ -239,6 +239,53 @@ export async function revokePreAuthKeyAction(id: string): Promise<ActionResult> 
   }
 }
 
+// PolicySaveResult includes the new revision on success so the editor
+// can present "saved (revision N)" feedback and update its
+// optimistic-concurrency baseline. On parse error the controller
+// returns 400 with the parser message in the response body; we
+// surface it verbatim under `error` so the editor renders it inline
+// near the textarea. `staleRevision` is true on 409 — the UI shows
+// "someone else saved; refresh to merge" instead of the bare error.
+export type PolicySaveResult =
+  | { ok: true; revision: number }
+  | { ok: false; error: string; staleRevision?: boolean };
+
+// setPolicyAction sends a new HCL policy to the controller. The
+// expectedRevision parameter is the policy.revision the editor
+// loaded with — when non-zero, the controller's Put returns 409 if
+// another admin saved in the meantime. We treat that as a soft error
+// the UI handles, not a transport failure.
+export async function setPolicyAction(input: {
+  hclSource: string;
+  expectedRevision: number;
+}): Promise<PolicySaveResult> {
+  try {
+    const res = await fetch(`${BASE}/api/v1/policy`, {
+      method: 'PUT',
+      headers: await buildHeaders(),
+      body: JSON.stringify({
+        hclSource: input.hclSource,
+        expectedRevision: input.expectedRevision,
+      }),
+      cache: 'no-store',
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      const staleRevision = res.status === 409;
+      return {
+        ok: false,
+        error: text || `${res.status} ${res.statusText}`,
+        ...(staleRevision ? { staleRevision: true } : {}),
+      };
+    }
+    const body = (await res.json()) as { revision: number };
+    revalidatePath('/[locale]/acl', 'page');
+    return { ok: true, revision: body.revision };
+  } catch (e) {
+    return { ok: false, error: (e as Error).message };
+  }
+}
+
 export async function deletePeerAction(id: string): Promise<ActionResult> {
   try {
     const res = await fetch(`${BASE}/api/v1/peers/${encodeURIComponent(id)}`, {

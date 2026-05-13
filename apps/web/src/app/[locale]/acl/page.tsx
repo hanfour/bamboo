@@ -3,6 +3,7 @@
 import { useTranslations } from 'next-intl';
 import { fetchPolicy, fetchRecommendations, type ApiRecommendation } from '@/lib/api';
 import type { AclPolicy } from '@/lib/types';
+import { AclEditor } from '@/components/AclEditor';
 import { FetchErrorState } from '@/components/FetchErrorState';
 
 export default async function AclPage() {
@@ -51,38 +52,23 @@ function Acl({
 
   return (
     <div className="space-y-6">
-      <header className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">{t('title')}</h1>
-          <p className="text-sm text-zinc-500 dark:text-zinc-400">
-            {t('revision')}: <span className="font-mono">{policy.revision}</span>
-            {policy.updatedAt && (
-              <>
-                {' · '}
-                {t('lastUpdated')}:{' '}
-                <time dateTime={policy.updatedAt}>
-                  {new Date(policy.updatedAt).toLocaleString()}
-                </time>
-              </>
-            )}
-          </p>
-        </div>
-        <button
-          type="button"
-          className="rounded-md border border-zinc-300 px-3 py-1.5 text-sm font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-900"
-        >
-          {t('edit')}
-        </button>
+      <header>
+        <h1 className="text-2xl font-semibold tracking-tight">{t('title')}</h1>
+        <p className="text-sm text-zinc-500 dark:text-zinc-400">
+          {t('revision')}: <span className="font-mono">{policy.revision}</span>
+          {policy.updatedAt && (
+            <>
+              {' · '}
+              {t('lastUpdated')}:{' '}
+              <time dateTime={policy.updatedAt}>
+                {new Date(policy.updatedAt).toLocaleString()}
+              </time>
+            </>
+          )}
+        </p>
       </header>
 
-      <section className="space-y-2">
-        <h2 className="text-sm font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
-          {t('viewSource')}
-        </h2>
-        <pre className="overflow-x-auto rounded-lg border border-zinc-200 bg-zinc-50 p-4 font-mono text-xs leading-relaxed text-zinc-800 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-200">
-          <code>{policy.hclSource}</code>
-        </pre>
-      </section>
+      <AclEditor hclSource={policy.hclSource} revision={policy.revision} />
 
       <section className="space-y-2">
         <h2 className="text-sm font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">

@@ -206,7 +206,16 @@
       "destinations": "目的地",
       "timeWindow": "時段"
     },
-    "empty": "尚未設定存取政策。新租戶預設允許全部，正式上線前請收緊。"
+    "empty": "尚未設定存取政策。新租戶預設允許全部，正式上線前請收緊。",
+    "editor": {
+      "save": "儲存",
+      "cancel": "取消",
+      "working": "儲存中…",
+      "errorPrefix": "儲存失敗：",
+      "staleRevision": "另一位管理員剛剛更新了政策。請取消後重新載入頁面再合併你的修改。",
+      "savedRevision": "已儲存為版本 {revision}",
+      "placeholder": "在此編輯 HCL 政策..."
+    }
   },
   "users": {
     "title": "成員",

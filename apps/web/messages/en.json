@@ -206,7 +206,16 @@
       "destinations": "Destinations",
       "timeWindow": "Time window"
     },
-    "empty": "No access policy is configured. New tenants start with allow-all; tighten before going to production."
+    "empty": "No access policy is configured. New tenants start with allow-all; tighten before going to production.",
+    "editor": {
+      "save": "Save",
+      "cancel": "Cancel",
+      "working": "Saving…",
+      "errorPrefix": "Save failed:",
+      "staleRevision": "Another admin just updated the policy. Cancel, refresh the page, then merge your changes.",
+      "savedRevision": "Saved as revision {revision}",
+      "placeholder": "Edit HCL policy here..."
+    }
   },
   "users": {
     "title": "Users",
