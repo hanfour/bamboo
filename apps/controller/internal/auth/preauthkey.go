@@ -27,6 +27,12 @@ import (
 // our keys from other tokens at a glance and is checked when parsing.
 const SecretPrefix = "bka_"
 
+// InviteSecretPrefix is prepended to every user-invitation token. Same
+// format as a PreAuthKey secret (id + random, bcrypt-hashed at rest)
+// but with a different prefix so a leaked token can be classified
+// without DB lookup.
+const InviteSecretPrefix = "bki_"
+
 // b32 is base32 lowercase, no padding — friendly to copy/paste and shells.
 var b32 = base32.StdEncoding.WithPadding(base32.NoPadding)
 
@@ -47,6 +53,26 @@ func GenerateSecret(keyID uuid.UUID) (plaintext, hash string, err error) {
 	encodedRnd := strings.ToLower(b32.EncodeToString(rnd))
 	plaintext = SecretPrefix + encodedID + "_" + encodedRnd
 
+	h, err := bcrypt.GenerateFromPassword([]byte(plaintext), bcrypt.DefaultCost)
+	if err != nil {
+		return "", "", fmt.Errorf("bcrypt: %w", err)
+	}
+	return plaintext, string(h), nil
+}
+
+// GenerateInviteToken mints a user-invitation token tied to the given
+// invitation id. Same shape as GenerateSecret but uses the invitation
+// prefix. The plaintext is shown to the inviter once at creation; the
+// bcrypt hash goes to user_invitations.token_hash.
+func GenerateInviteToken(invitationID uuid.UUID) (plaintext, hash string, err error) {
+	const randomBytes = 24
+	rnd := make([]byte, randomBytes)
+	if _, err := rand.Read(rnd); err != nil {
+		return "", "", fmt.Errorf("read random: %w", err)
+	}
+	encodedID := strings.ToLower(b32.EncodeToString(invitationID[:]))
+	encodedRnd := strings.ToLower(b32.EncodeToString(rnd))
+	plaintext = InviteSecretPrefix + encodedID + "_" + encodedRnd
 	h, err := bcrypt.GenerateFromPassword([]byte(plaintext), bcrypt.DefaultCost)
 	if err != nil {
 		return "", "", fmt.Errorf("bcrypt: %w", err)
