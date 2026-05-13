@@ -1,0 +1,206 @@
+// SPDX-License-Identifier: Apache-2.0
+
+package main
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"os"
+	"strings"
+	"sync"
+	"time"
+
+	clientsync "github.com/hanfour/bamboo/clients/cli/internal/sync"
+	bamboov1 "github.com/hanfour/bamboo/proto/gen/go/bamboo/v1"
+	"google.golang.org/grpc/metadata"
+)
+
+// peerSession holds the controller-issued peer-bound bearer token for
+// the lifetime of the running CLI process. The token is minted on
+// Register and on every re-register (idempotent on pubkey, so the
+// controller refreshes it without allocating a new IP). The CLI
+// presents it on:
+//
+//   - REST POST /api/v1/relay-token   — replaces the X-Tenant-Slug
+//     header fallback. Once the controller's prod-mode gate (#1 / #3
+//     follow-up) lands, this is the only credential channel that
+//     keeps relay fallback working.
+//   - gRPC Heartbeat / WatchPeers      — the Bearer is informational
+//     today (the interceptor whitelists those methods), and becomes
+//     load-bearing once the gate lands.
+//
+// Reads and writes are guarded with a RWMutex. The CLI is single-
+// process so contention is minimal; the lock exists to make the
+// happens-before relationship explicit when refresh() rotates the
+// token mid-watch.
+type peerSession struct {
+	mu        sync.RWMutex
+	token     string
+	expiresAt time.Time
+}
+
+func (s *peerSession) set(token string, expiresAt time.Time) {
+	s.mu.Lock()
+	s.token = token
+	s.expiresAt = expiresAt
+	s.mu.Unlock()
+}
+
+// Token returns the current bearer or "" when no token has been
+// minted yet (e.g. talking to an old controller without PR A).
+func (s *peerSession) Token() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.token
+}
+
+// restRegisterResponse is the JSON shape of the controller's
+// POST /api/v1/peers/register, including PR A's new
+// peerSessionToken + peerSessionExpiresAt fields. We model only the
+// fields the CLI uses; the wire format keeps additional ones, which
+// json decoders ignore.
+type restRegisterResponse struct {
+	Self                 restPeer   `json:"self"`
+	Peers                []restPeer `json:"peers"`
+	PolicyRevision       int64      `json:"policyRevision"`
+	PeerSessionToken     string     `json:"peerSessionToken,omitempty"`
+	PeerSessionExpiresAt int64      `json:"peerSessionExpiresAt,omitempty"`
+}
+
+type restPeer struct {
+	ID                 string   `json:"id"`
+	TenantID           string   `json:"tenantId"`
+	Hostname           string   `json:"hostname"`
+	IP                 string   `json:"ip"`
+	WireguardPublicKey string   `json:"wireguardPublicKey"`
+	OS                 string   `json:"os,omitempty"`
+	ClientVersion      string   `json:"clientVersion,omitempty"`
+	Endpoints          []string `json:"endpoints,omitempty"`
+	AllowedIps         []string `json:"allowedIps,omitempty"`
+}
+
+// restRegister calls POST /api/v1/peers/register and returns the
+// response shaped as bamboov1.RegisterResponse so downstream code
+// (wg.BuildDeviceConfig, cache.Replace, etc.) keeps using the proto
+// getters without a refactor. Idempotent on wireguard_public_key on
+// the controller, so refresh() can call this repeatedly to rotate
+// the bearer without provisioning a new IP.
+func restRegister(ctx context.Context, hostname, wgPublicKey, osName, version, preAuthKey, tenantSlug string, endpoints []string) (*bamboov1.RegisterResponse, string, time.Time, error) {
+	base := controllerHTTPBase()
+	body, err := json.Marshal(map[string]any{
+		"hostname":           hostname,
+		"wireguardPublicKey": wgPublicKey,
+		"os":                 osName,
+		"clientVersion":      version,
+		"preAuthKeySecret":   preAuthKey,
+		"tenantSlug":         tenantSlug,
+		"endpoints":          endpoints,
+	})
+	if err != nil {
+		return nil, "", time.Time{}, err
+	}
+	u, err := url.JoinPath(base, "/api/v1/peers/register")
+	if err != nil {
+		return nil, "", time.Time{}, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, bytes.NewReader(body))
+	if err != nil {
+		return nil, "", time.Time{}, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, "", time.Time{}, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp.Body)
+		return nil, "", time.Time{}, fmt.Errorf("register http %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
+	}
+	var rj restRegisterResponse
+	if err := json.NewDecoder(resp.Body).Decode(&rj); err != nil {
+		return nil, "", time.Time{}, fmt.Errorf("decode register response: %w", err)
+	}
+	out := &bamboov1.RegisterResponse{
+		Self:           restPeerToProto(rj.Self),
+		Peers:          restPeersToProto(rj.Peers),
+		PolicyRevision: rj.PolicyRevision,
+	}
+	var exp time.Time
+	if rj.PeerSessionExpiresAt > 0 {
+		exp = time.Unix(rj.PeerSessionExpiresAt, 0)
+	}
+	return out, rj.PeerSessionToken, exp, nil
+}
+
+func restPeerToProto(p restPeer) *bamboov1.Peer {
+	if p.ID == "" {
+		return nil
+	}
+	return &bamboov1.Peer{
+		Id:                 p.ID,
+		TenantId:           p.TenantID,
+		Hostname:           p.Hostname,
+		WireguardPublicKey: p.WireguardPublicKey,
+		Ip:                 p.IP,
+		Os:                 p.OS,
+		ClientVersion:      p.ClientVersion,
+		Endpoints:          p.Endpoints,
+		AllowedIps:         p.AllowedIps,
+	}
+}
+
+func restPeersToProto(in []restPeer) []*bamboov1.Peer {
+	out := make([]*bamboov1.Peer, 0, len(in))
+	for _, p := range in {
+		out = append(out, restPeerToProto(p))
+	}
+	return out
+}
+
+// controllerHTTPBase returns the controller's HTTP base URL, the
+// counterpart of flagAddr (which is gRPC). Defaults to localhost:8081
+// in dev — matches the make local-up port wiring.
+func controllerHTTPBase() string {
+	base := os.Getenv("BAMBOO_CONTROLLER_HTTP_URL")
+	if base == "" {
+		base = "http://localhost:8081"
+	}
+	return base
+}
+
+// authedAdapter wraps a CoordinatorClient so that every Heartbeat /
+// WatchPeers call carries the current peer-session bearer as gRPC
+// outgoing metadata. The controller's interceptor today whitelists
+// these methods (so the bearer is ignored), but the prod-mode gate
+// follow-up will start enforcing them — this wiring ensures that
+// landing the gate does not break in-flight CLIs.
+type authedAdapter struct {
+	inner   clientsync.CoordinatorClient
+	session *peerSession
+}
+
+func newAuthedAdapter(inner clientsync.CoordinatorClient, session *peerSession) clientsync.CoordinatorClient {
+	return &authedAdapter{inner: inner, session: session}
+}
+
+func (a *authedAdapter) WatchPeers(ctx context.Context, in *bamboov1.WatchPeersRequest) (clientsync.WatchStream, error) {
+	return a.inner.WatchPeers(a.authCtx(ctx), in)
+}
+
+func (a *authedAdapter) Heartbeat(ctx context.Context, in *bamboov1.HeartbeatRequest) (*bamboov1.HeartbeatResponse, error) {
+	return a.inner.Heartbeat(a.authCtx(ctx), in)
+}
+
+func (a *authedAdapter) authCtx(ctx context.Context) context.Context {
+	tok := a.session.Token()
+	if tok == "" {
+		return ctx
+	}
+	return metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+tok)
+}
