@@ -238,6 +238,66 @@ func bearerToken(r *http.Request) string {
 	return strings.TrimSpace(v[len(prefix):])
 }
 
+// peerSessionFromRequest extracts a peer-session bearer token from
+// the Authorization header and returns its verified claims. Returns
+// (nil, nil) when no bearer is present so callers can fall back to
+// other auth paths (user-session JWT, X-Tenant-Slug). Returns (nil,
+// nil) also when the bearer fails peer-session verification — the
+// same header is shared with user-session JWTs, and only one of the
+// two should succeed for a given token; the caller's authenticate()
+// path handles the user-session case independently.
+//
+// A token whose signature is valid but whose embedded peer is missing
+// or has been moved to a different tenant produces a non-nil claims
+// pointer; callers must validate the peer still exists and matches
+// before trusting the claim (see usePeerSessionTenant).
+func (h *HTTPServer) peerSessionFromRequest(r *http.Request) *auth.PeerSessionClaims {
+	tok := bearerToken(r)
+	if tok == "" {
+		return nil
+	}
+	claims, err := auth.VerifyPeerSessionToken(h.secret, tok)
+	if err != nil {
+		return nil
+	}
+	return claims
+}
+
+// usePeerSessionTenant returns the tenant identified by a peer-
+// session bearer, after verifying the claimed peer still exists and
+// still belongs to the claimed tenant with the claimed wireguard
+// pubkey. This is the path callers like heartbeat / watch / relay-
+// token take when an explicit user session is absent: they trust the
+// peer-bound credential the controller itself minted at Register
+// time, rather than the unauthenticated X-Tenant-Slug header.
+//
+// Returns (nil, nil) when no peer session bearer is present so
+// callers can fall through to resolveTenant's existing behavior. A
+// token whose embedded peer no longer matches the database state
+// (deleted, re-keyed, or moved tenants) is treated as absent — the
+// controller refuses to trust a stale credential.
+func (h *HTTPServer) usePeerSessionTenant(r *http.Request) (*repo.Tenant, *auth.PeerSessionClaims) {
+	claims := h.peerSessionFromRequest(r)
+	if claims == nil {
+		return nil, nil
+	}
+	peer, err := h.peers.GetByID(r.Context(), claims.PeerID)
+	if err != nil || peer == nil {
+		return nil, nil
+	}
+	if peer.TenantID != claims.TenantID {
+		return nil, nil
+	}
+	if claims.WGPublicKey != "" && peer.WireGuardPublicKey != claims.WGPublicKey {
+		return nil, nil
+	}
+	tenant, err := h.tenants.GetByID(r.Context(), claims.TenantID)
+	if err != nil || tenant == nil {
+		return nil, nil
+	}
+	return tenant, claims
+}
+
 // resolveTenant uses the JWT claims when present (production path) and
 // otherwise falls back to the X-Tenant-Slug header (dev path).
 func (h *HTTPServer) resolveTenant(r *http.Request, authn *authnContext) (*repo.Tenant, error) {

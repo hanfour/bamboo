@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/hanfour/bamboo/apps/controller/internal/auth"
+	"github.com/hanfour/bamboo/apps/controller/internal/db/repo"
 )
 
 // /api/v1/relay-token mints a short-lived JWT a peer presents to the
@@ -41,16 +42,31 @@ func (h *HTTPServer) routeRelayToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	authn, err := h.authenticate(r)
-	if err != nil {
-		writeError(w, http.StatusUnauthorized, err)
-		return
+	// Peer-session bearer is the preferred credential here: a token
+	// minted at Register time, bound to (tenant_id, peer_id,
+	// wireguard_public_key). When present we resolve tenant from the
+	// token's claim — no X-Tenant-Slug header trust path. We fall
+	// through to authenticate() / resolveTenant() so user-session
+	// JWTs (admin minting on behalf of a peer) still work today, and
+	// so dev environments without prod gates remain usable.
+	var (
+		tenant      *repo.Tenant
+		peerSession *auth.PeerSessionClaims
+	)
+	tenant, peerSession = h.usePeerSessionTenant(r)
+	if tenant == nil {
+		authn, err := h.authenticate(r)
+		if err != nil {
+			writeError(w, http.StatusUnauthorized, err)
+			return
+		}
+		tenant, err = h.resolveTenant(r, authn)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
 	}
-	tenant, err := h.resolveTenant(r, authn)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
+	_ = peerSession
 
 	var body relayTokenRequest
 	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<14)).Decode(&body); err != nil {
