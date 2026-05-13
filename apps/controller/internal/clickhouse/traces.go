@@ -194,3 +194,43 @@ func (t *Traces) RuleObservations(ctx context.Context, tenantID uuid.UUID, since
 	}
 	return out, rows.Err()
 }
+
+// ListRecent returns the most-recent evaluation traces for a tenant,
+// newest first, capped by limit. Used by the admin /api/v1/logs
+// endpoint to render a connection-event timeline (Tailscale parity
+// for /admin/logs). When ClickHouse is unconfigured the method
+// returns an empty slice + nil error — the UI treats that as "no
+// events yet" rather than hard-erroring.
+func (t *Traces) ListRecent(ctx context.Context, tenantID uuid.UUID, since time.Time, limit int) ([]EvaluationTrace, error) {
+	if !t.c.IsConfigured() {
+		return nil, nil
+	}
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	rows, err := t.c.driver().Query(ctx, `
+		SELECT id, tenant_id, occurred_at, source, destination,
+		       port, protocol, action, matched_rule_id
+		FROM evaluation_traces
+		WHERE tenant_id = ?
+		  AND occurred_at >= ?
+		ORDER BY occurred_at DESC
+		LIMIT ?
+	`, tenantID, since, uint64(limit))
+	if err != nil {
+		return nil, fmt.Errorf("query recent traces: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []EvaluationTrace
+	for rows.Next() {
+		var e EvaluationTrace
+		if err := rows.Scan(
+			&e.ID, &e.TenantID, &e.OccurredAt, &e.Source, &e.Destination,
+			&e.Port, &e.Protocol, &e.Action, &e.MatchedRuleID,
+		); err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}

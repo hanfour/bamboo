@@ -213,6 +213,8 @@ func (h *HTTPServer) routeAPI(w http.ResponseWriter, r *http.Request) {
 		h.apiDNS(w, r, authn, tenant)
 	case "/api/v1/users":
 		h.apiUsers(w, r, authn, tenant)
+	case "/api/v1/logs":
+		h.apiLogs(w, r, tenant)
 	default:
 		writeRouteMissing(w)
 	}
@@ -792,6 +794,69 @@ func (h *HTTPServer) apiPeerEvents(w http.ResponseWriter, r *http.Request, tenan
 
 // apiActivity implements GET /api/v1/activity?limit=N. Tenant-wide
 // audit feed, newest first; powers the dashboard's recentActivity
+// apiLogJSON is one connection-event row from /api/v1/logs. Maps
+// 1:1 to clickhouse.EvaluationTrace — every policy evaluation the
+// controller wrote during peer registration / heartbeat. The Web
+// UI renders this as a Tailscale-style /admin/logs timeline.
+type apiLogJSON struct {
+	ID            string    `json:"id"`
+	OccurredAt    time.Time `json:"occurredAt"`
+	Source        string    `json:"source"`
+	Destination   string    `json:"destination"`
+	Port          uint16    `json:"port"`
+	Protocol      string    `json:"protocol"`
+	Action        string    `json:"action"` // "allow" | "deny"
+	MatchedRuleID string    `json:"matchedRuleId,omitempty"`
+}
+
+// apiLogs returns recent policy-evaluation traces for the tenant.
+// Query params:
+//
+//	?sinceHours=N  (default 24) — window backward from now
+//	?limit=N       (default 100, cap 500) — max rows
+//
+// Member-readable (any authed caller in the tenant can see what was
+// allowed / denied); writes don't exist for this resource. When
+// ClickHouse is unconfigured the Traces.ListRecent path returns nil
+// and we ship an empty list — UI renders the empty state rather
+// than a hard error, so dev environments without ClickHouse remain
+// usable.
+func (h *HTTPServer) apiLogs(w http.ResponseWriter, r *http.Request, tenant *repo.Tenant) {
+	sinceHours := 24
+	if v := r.URL.Query().Get("sinceHours"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 7*24 {
+			sinceHours = n
+		}
+	}
+	limit := 100
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 500 {
+			limit = n
+		}
+	}
+	since := time.Now().UTC().Add(-time.Duration(sinceHours) * time.Hour)
+
+	events, err := h.traces.ListRecent(r.Context(), tenant.ID, since, limit)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	out := make([]apiLogJSON, 0, len(events))
+	for _, e := range events {
+		out = append(out, apiLogJSON{
+			ID:            e.ID.String(),
+			OccurredAt:    e.OccurredAt,
+			Source:        e.Source,
+			Destination:   e.Destination,
+			Port:          e.Port,
+			Protocol:      e.Protocol,
+			Action:        e.Action,
+			MatchedRuleID: e.MatchedRuleID,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"logs": out})
+}
+
 // section. Distinct from /peers/{id}/events because activity here
 // spans all resource types (peer, policy, pre_auth_key, ...), so
 // the wire shape includes resourceType + resourceId.
