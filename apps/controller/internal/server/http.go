@@ -32,6 +32,7 @@ type HTTPServer struct {
 	relays      *repo.Relays
 	audits      *repo.AuditLogs
 	keys        *repo.PreAuthKeys
+	dns         *repo.TenantDNS
 	traces      *clickhouse.Traces
 	anomalies   *clickhouse.Anomalies
 	coord       *handlers.CoordinatorHandler
@@ -67,6 +68,7 @@ func NewHTTPServer(
 		relays:    repo.NewRelays(pool),
 		audits:    repo.NewAuditLogs(pool),
 		keys:      repo.NewPreAuthKeys(pool),
+		dns:       repo.NewTenantDNS(pool),
 		traces:    clickhouse.NewTraces(ch),
 		anomalies: clickhouse.NewAnomalies(ch),
 		coord:     coord,

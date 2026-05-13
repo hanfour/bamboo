@@ -164,6 +164,8 @@ func (h *HTTPServer) routeAPI(w http.ResponseWriter, r *http.Request) {
 		h.apiRecommendations(w, r, tenant)
 	case "/api/v1/activity":
 		h.apiActivity(w, r, tenant)
+	case "/api/v1/dns":
+		h.apiDNS(w, r, authn, tenant)
 	default:
 		writeRouteMissing(w)
 	}
@@ -1184,6 +1186,61 @@ type apiOverviewJSON struct {
 	OfflinePeers   int    `json:"offlinePeers"`
 	PolicyRevision int64  `json:"policyRevision"`
 	RecommendCount int    `json:"recommendationCount"`
+}
+
+// apiDNSJSON is the wire shape for /api/v1/dns. tailnetName is a
+// derived display field (tenant.slug for now) so the UI can show a
+// stable identifier without us committing to a generated name like
+// Tailscale's tail{N}.ts.net format. magicDnsEnabled / nameservers /
+// searchDomains map 1:1 to tenant_dns_config columns. updatedBy is
+// the user-id string when set; empty when defaults are surfaced for
+// an unwritten row.
+type apiDNSJSON struct {
+	TenantID           string    `json:"tenantId"`
+	TenantSlug         string    `json:"tenantSlug"`
+	TailnetName        string    `json:"tailnetName"`
+	MagicDNSEnabled    bool      `json:"magicDnsEnabled"`
+	GlobalNameservers  []string  `json:"globalNameservers"`
+	SearchDomains      []string  `json:"searchDomains"`
+	OverrideDNSServers bool      `json:"overrideDnsServers"`
+	UpdatedAt          time.Time `json:"updatedAt"`
+	UpdatedBy          string    `json:"updatedBy,omitempty"`
+}
+
+// apiDNS returns the tenant's DNS settings. Read is member-readable
+// (any authed caller in the tenant can see the resolver config);
+// mutation lives in a future PUT handler that lands once the data-
+// plane MagicDNS implementation is real. Today we just expose the
+// stored values so the admin Settings → DNS page can render them.
+//
+// When no row exists yet, Get returns a defaults-populated record
+// with UpdatedAt zero-valued; the handler still 200s.
+func (h *HTTPServer) apiDNS(w http.ResponseWriter, r *http.Request, _ *authnContext, tenant *repo.Tenant) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
+		writeError(w, http.StatusMethodNotAllowed, fmt.Errorf("method not allowed"))
+		return
+	}
+	cfg, err := h.dns.Get(r.Context(), tenant.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	updatedBy := ""
+	if cfg.UpdatedBy != nil {
+		updatedBy = cfg.UpdatedBy.String()
+	}
+	writeJSON(w, http.StatusOK, apiDNSJSON{
+		TenantID:           tenant.ID.String(),
+		TenantSlug:         tenant.Slug,
+		TailnetName:        tenant.Slug,
+		MagicDNSEnabled:    cfg.MagicDNSEnabled,
+		GlobalNameservers:  cfg.GlobalNameservers,
+		SearchDomains:      cfg.SearchDomains,
+		OverrideDNSServers: cfg.OverrideDNSServers,
+		UpdatedAt:          cfg.UpdatedAt,
+		UpdatedBy:          updatedBy,
+	})
 }
 
 func (h *HTTPServer) apiOverview(w http.ResponseWriter, r *http.Request, tenant *repo.Tenant) {
