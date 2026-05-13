@@ -7,12 +7,23 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
+	"time"
 
+	"github.com/google/uuid"
+	"github.com/hanfour/bamboo/apps/controller/internal/auth"
 	bamboov1 "github.com/hanfour/bamboo/proto/gen/go/bamboo/v1"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 )
+
+// peerSessionTokenTTL is how long a Register-issued peer session
+// token is valid before the client must re-register (or, once renewal
+// is wired, refresh via Heartbeat). 24h matches the OIDC session TTL
+// and gives long-running clients a predictable rotation cadence
+// without forcing churn on every heartbeat.
+const peerSessionTokenTTL = 24 * time.Hour
 
 // REST adapters for the Coordinator service. The Apple clients (and
 // any future REST-only consumer) use these instead of speaking gRPC,
@@ -57,6 +68,18 @@ type peerRegisterResponse struct {
 	Self           peerJSON   `json:"self"`
 	Peers          []peerJSON `json:"peers"`
 	PolicyRevision int64      `json:"policyRevision"`
+	// PeerSessionToken is a short-lived HMAC-signed token bound to the
+	// peer (tenant_id + peer_id + wireguard_public_key) that the
+	// caller presents as Authorization: Bearer on subsequent peer-
+	// mutation endpoints (heartbeat, watch, relay-token mint). Optional
+	// in v1: the controller still honors the legacy X-Tenant-Slug
+	// fallback when this is absent, so existing clients keep working
+	// during the rollout. Once all clients submit the token, a future
+	// PR will tighten the require-auth gate to require it. Empty when
+	// the controller fails to mint (logged server-side) so clients can
+	// degrade rather than fail registration.
+	PeerSessionToken     string `json:"peerSessionToken,omitempty"`
+	PeerSessionExpiresAt int64  `json:"peerSessionExpiresAt,omitempty"`
 }
 
 func (h *HTTPServer) apiPeersRegister(w http.ResponseWriter, r *http.Request) {
@@ -103,11 +126,50 @@ func (h *HTTPServer) apiPeersRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, peerRegisterResponse{
+	out := peerRegisterResponse{
 		Self:           protoPeerToJSON(resp.GetSelf()),
 		Peers:          protoPeersToJSON(resp.GetPeers()),
 		PolicyRevision: resp.GetPolicyRevision(),
-	})
+	}
+	// Mint a peer session token for the caller. Failure here is
+	// non-fatal — log and degrade rather than fail registration, since
+	// the legacy slug-based path still works while clients roll out.
+	if tok, exp, mintErr := h.mintPeerSession(resp.GetSelf(), body.WireguardPublicKey); mintErr != nil {
+		slog.Warn("mint peer session token", "peer_id", resp.GetSelf().GetId(), "err", mintErr)
+	} else {
+		out.PeerSessionToken = tok
+		out.PeerSessionExpiresAt = exp.Unix()
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// mintPeerSession issues a peer-bound bearer token derived from the
+// Register response. Pulls tenant_id + peer_id from the response (the
+// authoritative source after IP allocation) and the wireguard pubkey
+// from the request (the client's identity, locked into the claim).
+func (h *HTTPServer) mintPeerSession(self *bamboov1.Peer, wgPublicKey string) (string, time.Time, error) {
+	if self == nil {
+		return "", time.Time{}, errors.New("register response missing self")
+	}
+	tenantID, err := uuid.Parse(self.GetTenantId())
+	if err != nil {
+		return "", time.Time{}, fmt.Errorf("parse tenant id: %w", err)
+	}
+	peerID, err := uuid.Parse(self.GetId())
+	if err != nil {
+		return "", time.Time{}, fmt.Errorf("parse peer id: %w", err)
+	}
+	exp := time.Now().Add(peerSessionTokenTTL)
+	tok, err := auth.IssuePeerSessionToken(h.secret, auth.PeerSessionClaims{
+		TenantID:    tenantID,
+		PeerID:      peerID,
+		WGPublicKey: wgPublicKey,
+		ExpiresAt:   exp.Unix(),
+	}, peerSessionTokenTTL)
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	return tok, exp, nil
 }
 
 type peerHeartbeatRequest struct {
