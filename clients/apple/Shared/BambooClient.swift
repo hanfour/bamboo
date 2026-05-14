@@ -190,16 +190,31 @@ public struct BambooClient {
         return try Self.jsonDecoder.decode(T.self, from: data)
     }
 
-    // The controller marshals Go time.Time as RFC3339Nano (a string),
-    // not a Unix timestamp. Swift's default JSONDecoder decodes Date as
-    // a Double — that mismatch threw `typeMismatch(Double, ...)` on the
-    // relay-token response's `expiresAt` field and silently fell back to
-    // "direct mesh", which doesn't work when both peers share a NAT.
-    // Use the iso8601 strategy globally so every endpoint with a Date
-    // field parses correctly without per-call overrides.
+    // The controller marshals Go time.Time as RFC3339Nano (a string
+    // with fractional seconds, e.g. "2026-05-14T14:31:57.272Z").
+    // Swift's `.iso8601` strategy uses an ISO8601DateFormatter that, by
+    // default, rejects fractional seconds — a "valid" ISO8601 string
+    // still throws `dataCorrupted("Expected date string to be ISO8601-
+    // formatted.")`. Use a custom strategy that tries
+    // `withFractionalSeconds` first and falls back to the no-fraction
+    // form so we accept both shapes regardless of which Go version is
+    // marshalling on the server side.
     private static let jsonDecoder: JSONDecoder = {
         let d = JSONDecoder()
-        d.dateDecodingStrategy = .iso8601
+        let withFraction = ISO8601DateFormatter()
+        withFraction.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let noFraction = ISO8601DateFormatter()
+        noFraction.formatOptions = [.withInternetDateTime]
+        d.dateDecodingStrategy = .custom { decoder in
+            let container = try decoder.singleValueContainer()
+            let raw = try container.decode(String.self)
+            if let date = withFraction.date(from: raw) { return date }
+            if let date = noFraction.date(from: raw) { return date }
+            throw DecodingError.dataCorruptedError(
+                in: container,
+                debugDescription: "Expected RFC3339 / ISO8601 date string, got \(raw)"
+            )
+        }
         return d
     }()
 }
