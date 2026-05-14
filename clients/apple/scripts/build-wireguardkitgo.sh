@@ -56,19 +56,35 @@ EOF
     exit 1
 fi
 
-# Locate the SPM-resolved checkout. DerivedData layout:
-#   .../DerivedData/<project>/Build/Products      <- BUILD_DIR
-#   .../DerivedData/<project>/SourcePackages/checkouts/wireguard-apple/...
-WGGO_DIR="${BUILD_DIR%/Build/Products}/SourcePackages/checkouts/wireguard-apple/Sources/WireGuardKitGo"
+# Locate the SPM-resolved checkout. DerivedData layout varies between
+# Build and Archive modes:
+#
+#   Build:    BUILD_DIR = .../DerivedData/<proj>/Build/Products
+#   Archive:  BUILD_DIR = .../DerivedData/<proj>/Build/Intermediates.noindex/
+#                          ArchiveIntermediates/<target>/BuildProductsPath
+#
+# Both layouts share .../DerivedData/<proj>/SourcePackages/checkouts/.
+# Walk up from BUILD_DIR until we find a sibling SourcePackages dir.
+SP_ROOT=""
+candidate="$BUILD_DIR"
+while [[ "$candidate" != "/" && "$candidate" != "." ]]; do
+    if [[ -d "$candidate/SourcePackages/checkouts/wireguard-apple" ]]; then
+        SP_ROOT="$candidate"
+        break
+    fi
+    candidate=$(dirname "$candidate")
+done
 
-if [[ ! -d "$WGGO_DIR" ]]; then
-    echo "error: WireGuardKitGo source not found at:" >&2
-    echo "  $WGGO_DIR" >&2
+if [[ -z "$SP_ROOT" ]]; then
+    echo "error: could not find SourcePackages/checkouts/wireguard-apple anywhere above:" >&2
+    echo "  $BUILD_DIR" >&2
     echo "" >&2
     echo "Run 'xcodebuild -resolvePackageDependencies' once so SPM" >&2
     echo "materializes the WireGuard checkout, then rebuild." >&2
     exit 1
 fi
+
+WGGO_DIR="$SP_ROOT/SourcePackages/checkouts/wireguard-apple/Sources/WireGuardKitGo"
 
 # Re-route Make's BUILDDIR + DESTDIR into a space-free scratch tree so
 # the upstream Makefile's $@/$^ token expansion works. Per-(platform,
