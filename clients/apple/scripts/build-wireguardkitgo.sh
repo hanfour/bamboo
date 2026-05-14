@@ -34,6 +34,13 @@ set -euo pipefail
 # dependency-analysis short-circuit warning quietly.
 : "${SCRIPT_INPUT_FILE_COUNT:=0}"
 
+# Xcode build phases inherit a stripped PATH (typically just /usr/bin:
+# /bin:/usr/sbin:/sbin) and do NOT see Homebrew or asdf paths the user's
+# interactive shell adds. Inject the standard Homebrew binaries the
+# WireGuard Makefile also expects so `go` resolves regardless of how
+# Xcode was launched.
+export PATH="$PATH:/opt/homebrew/bin:/usr/local/bin"
+
 if ! command -v go >/dev/null 2>&1; then
     cat >&2 <<EOF
 error: 'go' is not in PATH.
