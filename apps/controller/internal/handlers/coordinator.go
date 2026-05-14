@@ -411,7 +411,20 @@ func allowedIPsFor(p *policy.Policy, src, dst *repo.Peer) []string {
 }
 
 // toProtoPeer converts a repo.Peer into the proto type.
+//
+// Endpoints fallback: when the peer hasn't reported any STUN candidate
+// (legacy manual-wg peers, or new clients whose first STUN probe is
+// still in flight) but the controller has observed a WireGuard handshake
+// from a NAT-mapped ip:port, surface that observed endpoint to other
+// peers so they have a target to dial. Without this fallback, a fresh
+// bamboo client trying to mesh with a legacy peer sees `endpoints=[]`
+// and ends up with a WG TunnelConfiguration that has no peer endpoint
+// at all — handshake never starts, mesh stays a hub-and-spoke fiction.
 func toProtoPeer(p *repo.Peer) *bamboov1.Peer {
+	endpoints := p.Endpoints
+	if len(endpoints) == 0 && p.WGEndpoint != nil && *p.WGEndpoint != "" {
+		endpoints = []string{*p.WGEndpoint}
+	}
 	out := &bamboov1.Peer{
 		Id:                 p.ID.String(),
 		TenantId:           p.TenantID.String(),
@@ -420,7 +433,7 @@ func toProtoPeer(p *repo.Peer) *bamboov1.Peer {
 		Ip:                 p.IP,
 		Os:                 p.OS,
 		ClientVersion:      p.ClientVersion,
-		Endpoints:          p.Endpoints,
+		Endpoints:          endpoints,
 		CreatedAt:          timestamppb.New(p.CreatedAt),
 	}
 	switch p.Status {
