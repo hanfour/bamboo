@@ -73,6 +73,31 @@ on every settings change, which makes diff review and merge resolution
 unproductive. We use [XcodeGen](https://github.com/yonaskolb/XcodeGen)
 as the source of truth.
 
+## Toolchain prerequisites
+
+One-time setup per developer Mac:
+
+```bash
+brew install xcodegen   # generates bamboo.xcodeproj from project.yml
+brew install go         # cgo cross-compiles libwg-go.a for WireGuardKit
+```
+
+`go` is required because the WireGuardKit SPM package's `WireGuardKitGo`
+target ships only Go sources + a Makefile — no prebuilt `libwg-go.a`.
+A Run Script build phase invokes the Makefile before linking the app
+or extension (see `scripts/build-wireguardkitgo.sh`). Make's dependency
+tracking keeps incremental builds ~0s; clean builds add ~30s for the
+cgo cross-compile.
+
+### Known limitation: iOS Simulator
+
+The upstream WireGuard Makefile + Go runtime patches only target
+`macosx` and `iphoneos` (device). `iphonesimulator` is unsupported —
+the resulting `libwg-go.a` references device-only mach exception
+handler symbols. Develop on macOS or a physical iOS device; iOS
+Simulator builds will fail at link with `_darwin_arm_init_*`
+undefined-symbol errors.
+
 ## Apple-side prerequisites (one-off)
 
 These are not automatable from a script — they require an Apple
