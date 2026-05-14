@@ -56,8 +56,17 @@ targets:
     sources:
       - path: BambooApp-macOS
       - path: Shared
+    # Info.plist properties declared inline so xcodegen writes a real
+    # file on every regen. Without `properties:`, xcodegen emits a
+    # minimal stub that loses LSUIElement (so the app shows in the Dock
+    # instead of the menu bar) and any custom keys we add later. Same
+    # rationale as the inline entitlements declarations.
     info:
       path: BambooApp-macOS/Info.plist
+      properties:
+        LSMinimumSystemVersion: "13.0"
+        LSUIElement: true
+        NSHumanReadableCopyright: "Apache-2.0 — see LICENSE-APACHE"
     # Entitlements properties are declared inline so xcodegen writes
     # the .entitlements file with real content. Without `properties:`,
     # xcodegen emits an empty `<dict/>` on every regen — which makes
@@ -101,8 +110,18 @@ targets:
       - path: Shared/BambooTunnelError.swift
       - path: Shared/TunnelConfigurationBuilder.swift
       - path: Shared/TunnelIPC.swift
+    # NSExtension declared inline so xcodegen can't wipe it on regen.
+    # Without NSExtensionPointIdentifier + NSExtensionPrincipalClass,
+    # macOS treats the extension as unknown and `neagent` refuses to
+    # instantiate the provider (NEAgentErrorDomain Code=2), which makes
+    # System Settings show the VPN row but the toggle silently fails.
     info:
       path: PacketTunnelProvider-macOS/Info.plist
+      properties:
+        CFBundleDisplayName: bamboo Tunnel
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.networkextension.packet-tunnel
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).PacketTunnelProvider
     entitlements:
       path: PacketTunnelProvider-macOS/PacketTunnelProvider.entitlements
       properties:
@@ -132,6 +151,17 @@ targets:
       - path: Shared
     info:
       path: BambooApp-iOS/Info.plist
+      properties:
+        LSRequiresIPhoneOS: true
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        NSHumanReadableCopyright: "Apache-2.0 — see LICENSE-APACHE"
     entitlements:
       path: BambooApp-iOS/BambooApp_iOS.entitlements
       properties:
@@ -162,6 +192,11 @@ targets:
       - path: Shared/TunnelIPC.swift
     info:
       path: PacketTunnelProvider-iOS/Info.plist
+      properties:
+        CFBundleDisplayName: bamboo Tunnel
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.networkextension.packet-tunnel
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).PacketTunnelProvider_iOS
     entitlements:
       path: PacketTunnelProvider-iOS/PacketTunnelProvider_iOS.entitlements
       properties:
