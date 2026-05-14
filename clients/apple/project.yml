@@ -5,19 +5,17 @@
 # `xcodegen generate` (one-off `brew install xcodegen`) to materialize
 # bamboo.xcodeproj from this file before opening Xcode.
 #
-# Required environment variables:
-#
-#   BAMBOO_DEVELOPMENT_TEAM     Apple Team ID (10-char alphanumeric).
-#   BAMBOO_BUNDLE_ID_PREFIX     Reverse-DNS prefix; default dev.hanfour.bamboo.
-#                               App bundle ID becomes <prefix>.app and the
-#                               tunnel extension <prefix>.app.tunnel on
-#                               both macOS and iOS.
-#
-# See README.md for the Apple-side prerequisites that are not automated.
+# Bundle ID prefix is hardcoded to `dev.hanfour.bamboo`. Forks: search +
+# replace this file. Earlier versions used `${BAMBOO_BUNDLE_ID_PREFIX}`
+# expecting shell-style default expansion, but xcodegen passes env-var
+# references through to Xcode as build-setting references (which then
+# fail to resolve to anything), so a literal value is the only reliable
+# path. Development team is automatically picked by Xcode from the
+# signed-in Apple ID account — see README.md "Toolchain prerequisites".
 
 name: bamboo
 options:
-  bundleIdPrefix: ${BAMBOO_BUNDLE_ID_PREFIX:-dev.hanfour.bamboo}
+  bundleIdPrefix: dev.hanfour.bamboo
   deploymentTarget:
     macOS: "13.0"
     iOS: "16.0"
@@ -30,7 +28,9 @@ settings:
     MARKETING_VERSION: "0.0.1"
     CURRENT_PROJECT_VERSION: "1"
     CODE_SIGN_STYLE: Automatic
-    DEVELOPMENT_TEAM: "$(BAMBOO_DEVELOPMENT_TEAM)"
+    # DEVELOPMENT_TEAM left unset on purpose. With CODE_SIGN_STYLE=Automatic
+    # Xcode picks the team from the signed-in Apple ID account (Xcode →
+    # Settings → Accounts). Forks: log in your Apple ID, Xcode auto-selects.
 
 # ----- Swift Package dependencies --------------------------------------------
 #
@@ -63,7 +63,7 @@ targets:
     settings:
       base:
         PRODUCT_NAME: bamboo
-        PRODUCT_BUNDLE_IDENTIFIER: ${BAMBOO_BUNDLE_ID_PREFIX:-dev.hanfour.bamboo}.app
+        PRODUCT_BUNDLE_IDENTIFIER: dev.hanfour.bamboo.app
     preBuildScripts:
       - path: scripts/build-wireguardkitgo.sh
         name: Build WireGuardKitGo
@@ -92,7 +92,7 @@ targets:
     settings:
       base:
         PRODUCT_NAME: bamboo-tunnel
-        PRODUCT_BUNDLE_IDENTIFIER: ${BAMBOO_BUNDLE_ID_PREFIX:-dev.hanfour.bamboo}.app.tunnel
+        PRODUCT_BUNDLE_IDENTIFIER: dev.hanfour.bamboo.app.tunnel
     preBuildScripts:
       - path: scripts/build-wireguardkitgo.sh
         name: Build WireGuardKitGo
@@ -115,7 +115,7 @@ targets:
     settings:
       base:
         PRODUCT_NAME: bamboo
-        PRODUCT_BUNDLE_IDENTIFIER: ${BAMBOO_BUNDLE_ID_PREFIX:-dev.hanfour.bamboo}.app
+        PRODUCT_BUNDLE_IDENTIFIER: dev.hanfour.bamboo.app
         TARGETED_DEVICE_FAMILY: "1,2"
     preBuildScripts:
       - path: scripts/build-wireguardkitgo.sh
@@ -142,7 +142,7 @@ targets:
     settings:
       base:
         PRODUCT_NAME: bamboo-tunnel
-        PRODUCT_BUNDLE_IDENTIFIER: ${BAMBOO_BUNDLE_ID_PREFIX:-dev.hanfour.bamboo}.app.tunnel
+        PRODUCT_BUNDLE_IDENTIFIER: dev.hanfour.bamboo.app.tunnel
     preBuildScripts:
       - path: scripts/build-wireguardkitgo.sh
         name: Build WireGuardKitGo

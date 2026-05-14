@@ -112,12 +112,13 @@ portal.
    share.
 4. Generate signing certificates / enable Automatic Signing in Xcode.
 
-## Required environment variables
+## Required setup
 
-```bash
-export BAMBOO_DEVELOPMENT_TEAM=ABCDE12345         # your Apple Team ID
-export BAMBOO_BUNDLE_ID_PREFIX=dev.hanfour.bamboo # default; override if forking
-```
+- Sign in with your Apple ID under `Xcode → Settings → Accounts`. The
+  team is auto-selected via `CODE_SIGN_STYLE=Automatic`; you don't need
+  to set any environment variable.
+- Bundle ID prefix is hardcoded to `dev.hanfour.bamboo` in
+  `project.yml`. Forks: search + replace.
 
 ## Local build
 
