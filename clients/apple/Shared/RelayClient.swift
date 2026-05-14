@@ -54,9 +54,23 @@ public actor RelayClient {
 
     /// Open a WSS session to relayURL, send CLIENT_HELLO, await
     /// SERVER_HELLO. Throws on any handshake failure.
+    ///
+    /// The relay server registers its WebSocket handler at `/relay`
+    /// (see `apps/relay/cmd/relay/main.go`). Most users type just
+    /// `wss://relay.example.com` into Settings and don't realise the
+    /// path matters; the relay then returns a Caddy 404 and the WSS
+    /// handshake fails with NSURLErrorBadServerResponse. Normalise
+    /// here so the user-facing URL doesn't need the path.
     public func dial(relayURL: URL) async throws {
+        let normalised: URL = {
+            let path = relayURL.path
+            if path.isEmpty || path == "/" {
+                return relayURL.appendingPathComponent("relay")
+            }
+            return relayURL
+        }()
         let session = URLSession(configuration: .ephemeral)
-        let task = session.webSocketTask(with: relayURL)
+        let task = session.webSocketTask(with: normalised)
         task.resume()
         self.task = task
 
