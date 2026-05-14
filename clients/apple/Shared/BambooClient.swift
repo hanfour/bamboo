@@ -187,8 +187,21 @@ public struct BambooClient {
             let body = String(data: data, encoding: .utf8) ?? ""
             throw BambooClientError.httpStatus(code: http.statusCode, body: body)
         }
-        return try JSONDecoder().decode(T.self, from: data)
+        return try Self.jsonDecoder.decode(T.self, from: data)
     }
+
+    // The controller marshals Go time.Time as RFC3339Nano (a string),
+    // not a Unix timestamp. Swift's default JSONDecoder decodes Date as
+    // a Double — that mismatch threw `typeMismatch(Double, ...)` on the
+    // relay-token response's `expiresAt` field and silently fell back to
+    // "direct mesh", which doesn't work when both peers share a NAT.
+    // Use the iso8601 strategy globally so every endpoint with a Date
+    // field parses correctly without per-call overrides.
+    private static let jsonDecoder: JSONDecoder = {
+        let d = JSONDecoder()
+        d.dateDecodingStrategy = .iso8601
+        return d
+    }()
 }
 
 public enum BambooClientError: Error, CustomStringConvertible {
