@@ -69,6 +69,11 @@ targets:
       properties:
         com.apple.security.app-sandbox: true
         com.apple.security.network.client: true
+        # network.server allows binding listening sockets — required
+        # because pickFreeUDPPort() binds a UDP socket to discover a
+        # free ephemeral port to share with WireGuard / STUN. Sandbox
+        # EPERM (errno=1) otherwise.
+        com.apple.security.network.server: true
         com.apple.developer.networking.networkextension:
           - packet-tunnel-provider
     settings:
