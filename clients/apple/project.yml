@@ -58,8 +58,19 @@ targets:
       - path: Shared
     info:
       path: BambooApp-macOS/Info.plist
+    # Entitlements properties are declared inline so xcodegen writes
+    # the .entitlements file with real content. Without `properties:`,
+    # xcodegen emits an empty `<dict/>` on every regen — which makes
+    # macOS refuse to install the NETunnelProviderManager VPN config
+    # (NEVPNError Code=5, "permission denied"). See bamboo PR history
+    # for the saga that uncovered this.
     entitlements:
       path: BambooApp-macOS/BambooApp.entitlements
+      properties:
+        com.apple.security.app-sandbox: true
+        com.apple.security.network.client: true
+        com.apple.developer.networking.networkextension:
+          - packet-tunnel-provider
     settings:
       base:
         PRODUCT_NAME: bamboo
@@ -89,6 +100,12 @@ targets:
       path: PacketTunnelProvider-macOS/Info.plist
     entitlements:
       path: PacketTunnelProvider-macOS/PacketTunnelProvider.entitlements
+      properties:
+        com.apple.security.app-sandbox: true
+        com.apple.security.network.client: true
+        com.apple.security.network.server: true
+        com.apple.developer.networking.networkextension:
+          - packet-tunnel-provider
     settings:
       base:
         PRODUCT_NAME: bamboo-tunnel
@@ -112,6 +129,9 @@ targets:
       path: BambooApp-iOS/Info.plist
     entitlements:
       path: BambooApp-iOS/BambooApp_iOS.entitlements
+      properties:
+        com.apple.developer.networking.networkextension:
+          - packet-tunnel-provider
     settings:
       base:
         PRODUCT_NAME: bamboo
@@ -139,6 +159,9 @@ targets:
       path: PacketTunnelProvider-iOS/Info.plist
     entitlements:
       path: PacketTunnelProvider-iOS/PacketTunnelProvider_iOS.entitlements
+      properties:
+        com.apple.developer.networking.networkextension:
+          - packet-tunnel-provider
     settings:
       base:
         PRODUCT_NAME: bamboo-tunnel
