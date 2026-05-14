@@ -89,3 +89,7 @@ tmp/
 
 # Playwright MCP screenshot / snapshot artifacts (local-only)
 .playwright-mcp/
+
+# --- Apple ---
+clients/apple/bamboo.xcodeproj/
+clients/apple/dist/
