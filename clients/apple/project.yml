@@ -34,15 +34,18 @@ settings:
 
 # ----- Swift Package dependencies --------------------------------------------
 #
-# WireGuardKit is the Swift wrapper around wireguard-go. We pin to the
-# Mullvad fork because the canonical zx2c4 repository does not expose
-# tagged SPM releases at the time of writing; switch back to canonical
-# once it does. Both sources are MIT-licensed and ABI-compatible.
-
+# WireGuardKit is the Swift wrapper around wireguard-go. We pin to a
+# patched fork (hanfour/wireguard-apple) because both upstream forks
+# ship a Package.swift that declares swift-tools-version:5.3 yet uses
+# .macOS(.v12) / .iOS(.v15) which require 5.5 — current Xcode rejects.
+# The fork bumps the tools-version line to 5.5; the rest of the package
+# is unchanged from canonical wireguard-apple HEAD (2fec12a). MIT-
+# licensed. See bamboo issue #105 for the upstream context. Once
+# upstream fixes its Package.swift, swap back.
 packages:
   WireGuardKit:
-    url: https://github.com/mullvad/wireguard-apple
-    from: 1.1.4
+    url: https://github.com/hanfour/wireguard-apple
+    revision: 4d4eeef5a566d015254486d4d5b5e83d590edafe
 
 # ----- macOS targets ---------------------------------------------------------
 
