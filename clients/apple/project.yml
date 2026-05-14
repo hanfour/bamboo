@@ -64,15 +64,27 @@ targets:
       base:
         PRODUCT_NAME: bamboo
         PRODUCT_BUNDLE_IDENTIFIER: ${BAMBOO_BUNDLE_ID_PREFIX:-dev.hanfour.bamboo}.app
+    preBuildScripts:
+      - path: scripts/build-wireguardkitgo.sh
+        name: Build WireGuardKitGo
     dependencies:
       - target: PacketTunnelProvider-macOS
+      - package: WireGuardKit
+        product: WireGuardKit
 
   PacketTunnelProvider-macOS:
     type: app-extension
     platform: macOS
+    # The Network Extension target needs only the files used by the
+    # PacketTunnelProvider — NOT the app-only SwiftUI / OIDC / heartbeat
+    # plumbing. iOS in particular refuses to auto-link SwiftUICore into
+    # an extension binary (Xcode 26.2+); macOS is more permissive but we
+    # keep the surface identical so future restructures stay simple.
     sources:
       - path: PacketTunnelProvider-macOS
-      - path: Shared
+      - path: Shared/BambooTunnelError.swift
+      - path: Shared/TunnelConfigurationBuilder.swift
+      - path: Shared/TunnelIPC.swift
     info:
       path: PacketTunnelProvider-macOS/Info.plist
     entitlements:
@@ -81,6 +93,9 @@ targets:
       base:
         PRODUCT_NAME: bamboo-tunnel
         PRODUCT_BUNDLE_IDENTIFIER: ${BAMBOO_BUNDLE_ID_PREFIX:-dev.hanfour.bamboo}.app.tunnel
+    preBuildScripts:
+      - path: scripts/build-wireguardkitgo.sh
+        name: Build WireGuardKitGo
     dependencies:
       - package: WireGuardKit
         product: WireGuardKit
@@ -102,15 +117,24 @@ targets:
         PRODUCT_NAME: bamboo
         PRODUCT_BUNDLE_IDENTIFIER: ${BAMBOO_BUNDLE_ID_PREFIX:-dev.hanfour.bamboo}.app
         TARGETED_DEVICE_FAMILY: "1,2"
+    preBuildScripts:
+      - path: scripts/build-wireguardkitgo.sh
+        name: Build WireGuardKitGo
     dependencies:
       - target: PacketTunnelProvider-iOS
+      - package: WireGuardKit
+        product: WireGuardKit
 
   PacketTunnelProvider-iOS:
     type: app-extension
     platform: iOS
+    # Same restricted Shared/ source list as the macOS extension; see
+    # PacketTunnelProvider-macOS for rationale.
     sources:
       - path: PacketTunnelProvider-iOS
-      - path: Shared
+      - path: Shared/BambooTunnelError.swift
+      - path: Shared/TunnelConfigurationBuilder.swift
+      - path: Shared/TunnelIPC.swift
     info:
       path: PacketTunnelProvider-iOS/Info.plist
     entitlements:
@@ -119,6 +143,9 @@ targets:
       base:
         PRODUCT_NAME: bamboo-tunnel
         PRODUCT_BUNDLE_IDENTIFIER: ${BAMBOO_BUNDLE_ID_PREFIX:-dev.hanfour.bamboo}.app.tunnel
+    preBuildScripts:
+      - path: scripts/build-wireguardkitgo.sh
+        name: Build WireGuardKitGo
     dependencies:
       - package: WireGuardKit
         product: WireGuardKit
