@@ -89,6 +89,42 @@ func TestRequireAuth_MeRemainsAccessibleUnauthenticated(t *testing.T) {
 	}
 }
 
+// TestRequireAuth_PeerRegisterAcceptsUserSessionJWT is the regression
+// guard for the OIDC sign-in flow. Without the REST adapter
+// propagating the Authorization Bearer into the gRPC
+// RegisterRequest's BearerToken credential, the coordinator's own
+// require_auth gate rejected the call with
+//
+//	"Register requires a pre-auth key or bearer credential"
+//
+// even though the REST gate above had already authenticated the
+// JWT. That presented as a confusing "failing about pre-auth" on
+// the macOS app right after a successful Sign in with Google.
+func TestRequireAuth_PeerRegisterAcceptsUserSessionJWT(t *testing.T) {
+	f := startFixture(t)
+	f.enableRequireAuth()
+
+	tok := f.mintJWT(t, false)
+
+	body, _ := json.Marshal(map[string]any{
+		"hostname":           "oidc-registered-peer",
+		"wireguardPublicKey": randomPubKey(t),
+	})
+	req, _ := http.NewRequest(http.MethodPost,
+		f.httpURL+"/api/v1/peers/register", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+tok)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /api/v1/peers/register: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status=%d body=%s, want 200", resp.StatusCode, respBody)
+	}
+}
+
 // TestRequireAuth_PeerRegisterStillAcceptsPreAuthKey confirms the peer
 // onboarding path is unaffected by prod-mode auth. The pre-auth-key is
 // validated by the handler itself; the require_auth gate only covers
