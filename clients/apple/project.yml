@@ -26,7 +26,7 @@ settings:
   base:
     SWIFT_VERSION: "5.9"
     MARKETING_VERSION: "0.0.1"
-    CURRENT_PROJECT_VERSION: "1"
+    CURRENT_PROJECT_VERSION: "3"
     CODE_SIGN_STYLE: Automatic
     # DEVELOPMENT_TEAM left unset on purpose. With CODE_SIGN_STYLE=Automatic
     # Xcode picks the team from the signed-in Apple ID account (Xcode →
@@ -64,6 +64,8 @@ targets:
     info:
       path: BambooApp-macOS/Info.plist
       properties:
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         LSMinimumSystemVersion: "13.0"
         LSUIElement: true
         NSHumanReadableCopyright: "Apache-2.0 — see LICENSE-APACHE"
@@ -119,6 +121,8 @@ targets:
       path: PacketTunnelProvider-macOS/Info.plist
       properties:
         CFBundleDisplayName: bamboo Tunnel
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         NSExtension:
           NSExtensionPointIdentifier: com.apple.networkextension.packet-tunnel
           NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).PacketTunnelProvider
@@ -152,6 +156,8 @@ targets:
     info:
       path: BambooApp-iOS/Info.plist
       properties:
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         LSRequiresIPhoneOS: true
         UILaunchScreen: {}
         UISupportedInterfaceOrientations:
@@ -194,6 +200,8 @@ targets:
       path: PacketTunnelProvider-iOS/Info.plist
       properties:
         CFBundleDisplayName: bamboo Tunnel
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         NSExtension:
           NSExtensionPointIdentifier: com.apple.networkextension.packet-tunnel
           NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).PacketTunnelProvider_iOS
