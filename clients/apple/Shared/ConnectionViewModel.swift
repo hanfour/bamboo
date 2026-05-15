@@ -57,6 +57,8 @@ public final class ConnectionViewModel: ObservableObject {
     private let tunnel = TunnelManager()
     private let heartbeat = HeartbeatLoop()
     private let watcher = PeerWatcher()
+    private let magicDNS = MagicDNSManager()
+    private let peerStore = MagicDNSPeerStore()
     private var relay: RelayClient?
     private var statusTask: Task<Void, Never>?
 
@@ -81,6 +83,19 @@ public final class ConnectionViewModel: ObservableObject {
             await self.tunnel.refresh()
             for await _ in self.tunnel.$status.values {
                 self.applyTunnelStatus()
+            }
+        }
+        // Ask the OS to install the MagicDNS proxy at launch. The
+        // first install fires a system permission dialog the user
+        // has to accept once; subsequent launches are no-ops. We
+        // run this on a background Task so the launch sequence
+        // isn't blocked on system preferences I/O.
+        Task { @MainActor [weak self] in
+            guard let self = self else { return }
+            do {
+                try await self.magicDNS.enable()
+            } catch {
+                self.log.warning("MagicDNS enable failed: \(String(describing: error), privacy: .public)")
             }
         }
     }
@@ -348,15 +363,23 @@ public final class ConnectionViewModel: ObservableObject {
             log.log("connect: register ok ip=\(resp.self_.ip, privacy: .public) peers=\(peers.count)")
 
             // Cache state so the watch stream can rebuild the config
-            // in-place when peer endpoints change.
+            // in-place when peer endpoints change. Self is stored
+            // in peerCache too so the MagicDNS map covers
+            // `<self-hostname>.bamboo` (useful for sanity-pinging
+            // your own machine through the proxy).
             self.lastConfig = config
-            self.peerCache = Dictionary(uniqueKeysWithValues: resp.peers.map { ($0.id, $0) })
+            var seed: [String: BambooClient.PeerJSON] = [resp.self_.id: resp.self_]
+            for p in resp.peers { seed[p.id] = p }
+            self.peerCache = seed
             self.selfPeerID = resp.self_.id
             self.selfIPv4 = resp.self_.ip
             // Stash relay-proxy endpoints so watch-driven rebuilds
             // don't swap them for STUN. Empty when relay is disabled
             // — rebuildAndReapply then uses the STUN path as before.
             self.peerRelayEndpoints = peerEndpoints
+            // Push the current peer map across the App Group so the
+            // DNSProxy extension can answer *.bamboo queries.
+            self.syncMagicDNSMap()
 
             // Background loops: heartbeat keeps last_seen fresh +
             // re-reports our endpoint; watcher streams peer changes
@@ -388,17 +411,41 @@ public final class ConnectionViewModel: ObservableObject {
             peerCache[p.id] = p
             log.log("watch: peer_added \(p.hostname, privacy: .public)")
             rebuildAndReapply()
+            syncMagicDNSMap()
         case .peerUpdated(let p):
             peerCache[p.id] = p
             log.log("watch: peer_updated \(p.hostname, privacy: .public)")
             rebuildAndReapply()
+            syncMagicDNSMap()
         case .peerRemoved(let id):
             peerCache.removeValue(forKey: id)
             log.log("watch: peer_removed \(id, privacy: .public)")
             rebuildAndReapply()
+            syncMagicDNSMap()
         case .policyChanged(let rev):
             log.log("watch: policy_changed rev=\(rev, privacy: .public)")
         }
+    }
+
+    /// Build the dns-name → IP map from the current peer cache and
+    /// write it to the App Group shared store so the DNSProxy
+    /// extension can answer *.bamboo queries. Cheap (a few dozen
+    /// peers max + a JSON encode); called on every register and
+    /// every watch event.
+    private func syncMagicDNSMap() {
+        var map: [String: MagicDNSPeerStore.PeerEntry] = [:]
+        for (_, p) in peerCache {
+            guard let dnsName = p.peerDnsName, !dnsName.isEmpty else {
+                continue
+            }
+            map[dnsName.lowercased()] = MagicDNSPeerStore.PeerEntry(
+                ipv4: p.ip,
+                ipv6: nil,
+                hostname: p.hostname
+            )
+        }
+        peerStore?.setPeers(map)
+        log.log("magicdns: synced \(map.count, privacy: .public) peer name(s)")
     }
 
     /// rebuildAndReapply rebuilds the tunnel config from the cached
