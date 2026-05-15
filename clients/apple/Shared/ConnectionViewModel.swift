@@ -57,6 +57,12 @@ public final class ConnectionViewModel: ObservableObject {
     private var peerCache: [String: BambooClient.PeerJSON] = [:]
     private var selfPeerID: String?
     private var selfIPv4: String?
+    // peer.id -> 127.0.0.1:<port> of the local RelayClient proxy for
+    // that peer. Populated at connect() time when relay is enabled,
+    // then consulted on every watch-driven rebuild so a peer_updated
+    // event doesn't accidentally swap the relay endpoint for a (often
+    // unreachable) STUN one.
+    private var peerRelayEndpoints: [String: String] = [:]
 
     public init(keychain: KeychainStore = KeychainStore()) {
         self.keychain = keychain
@@ -278,6 +284,10 @@ public final class ConnectionViewModel: ObservableObject {
             self.peerCache = Dictionary(uniqueKeysWithValues: resp.peers.map { ($0.id, $0) })
             self.selfPeerID = resp.self_.id
             self.selfIPv4 = resp.self_.ip
+            // Stash relay-proxy endpoints so watch-driven rebuilds
+            // don't swap them for STUN. Empty when relay is disabled
+            // — rebuildAndReapply then uses the STUN path as before.
+            self.peerRelayEndpoints = peerEndpoints
 
             // Background loops: heartbeat keeps last_seen fresh +
             // re-reports our endpoint; watcher streams peer changes
@@ -337,11 +347,17 @@ public final class ConnectionViewModel: ObservableObject {
         let peers = peerCache.values
             .filter { $0.id != selfID }
             .map { p in
+                // Prefer the relay-proxy endpoint (127.0.0.1:<port>)
+                // captured at connect time. Without this, a watch-
+                // driven rebuild silently swaps the working relay
+                // path for whatever STUN candidate the peer reported
+                // and the mesh stops carrying packets — same-NAT
+                // peers in particular have no hairpin fallback.
                 BambooPeerConfig(
                     id: p.id,
                     publicKey: p.wireguardPublicKey,
                     allowedIPs: ["\(p.ip)/32"],
-                    endpoint: p.endpoints?.first,
+                    endpoint: peerRelayEndpoints[p.id] ?? p.endpoints?.first,
                     persistentKeepalive: 25
                 )
             }
