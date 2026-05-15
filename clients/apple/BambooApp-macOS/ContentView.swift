@@ -28,6 +28,17 @@ struct ContentView: View {
             }
             .foregroundStyle(.secondary)
 
+            if let email = connection.signedInEmail {
+                HStack(spacing: 6) {
+                    Image(systemName: "person.crop.circle.badge.checkmark")
+                    Text(email)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+
             if let err = connection.lastError {
                 Text(err)
                     .font(.caption)
@@ -40,7 +51,38 @@ struct ContentView: View {
                 Group {
                     LabelledField(label: "Controller URL", text: $connection.controllerURL)
                     LabelledField(label: "Tenant slug", text: $connection.tenantSlug)
-                    LabelledField(label: "Pre-auth key (optional)", text: $connection.preAuthKey)
+
+                    // Auth section: prefer OIDC, fall back to a pre-
+                    // auth key for headless / CI cases. The visible
+                    // CTA flips based on whether we already hold a
+                    // Keychain session.
+                    if connection.signedInEmail != nil {
+                        HStack {
+                            Text("Signed in")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                            Button("Sign out", action: connection.signOut)
+                                .buttonStyle(.borderless)
+                                .controlSize(.small)
+                        }
+                    } else {
+                        Button(action: connection.signIn) {
+                            HStack {
+                                if connection.isSigningIn {
+                                    ProgressView()
+                                        .controlSize(.small)
+                                }
+                                Text(connection.isSigningIn ? "Signing in…" : "Sign in with Google")
+                            }
+                            .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                        .disabled(connection.isSigningIn)
+                    }
+
+                    LabelledField(label: "Pre-auth key (fallback)", text: $connection.preAuthKey)
                     LabelledField(label: "Relay URL (optional)", text: $connection.relayURL)
                 }
                 .textFieldStyle(.roundedBorder)

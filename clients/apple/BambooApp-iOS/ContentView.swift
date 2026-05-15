@@ -20,6 +20,17 @@ struct ContentView: View {
                     .font(.title3)
                     .foregroundStyle(.secondary)
 
+                if let email = connection.signedInEmail {
+                    HStack(spacing: 6) {
+                        Image(systemName: "person.crop.circle.badge.checkmark")
+                        Text(email)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                }
+
                 if let err = connection.lastError {
                     Text(err)
                         .font(.callout)
@@ -74,7 +85,38 @@ private struct SettingsView: View {
                         .autocorrectionDisabled()
                 }
                 Section("Authentication") {
-                    SecureField("Pre-auth key (optional)", text: $connection.preAuthKey)
+                    // Prefer OIDC; the pre-auth key field stays
+                    // visible as a fallback for CI / headless use
+                    // and for first-time provisioning before the user
+                    // has signed in to anything.
+                    if let email = connection.signedInEmail {
+                        HStack {
+                            Image(systemName: "person.crop.circle.badge.checkmark")
+                                .foregroundStyle(.green)
+                            VStack(alignment: .leading) {
+                                Text("Signed in")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                Text(email)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                            }
+                            Spacer()
+                            Button("Sign out", role: .destructive, action: connection.signOut)
+                        }
+                    } else {
+                        Button(action: connection.signIn) {
+                            HStack {
+                                if connection.isSigningIn {
+                                    ProgressView()
+                                }
+                                Text(connection.isSigningIn ? "Signing in…" : "Sign in with Google")
+                            }
+                            .frame(maxWidth: .infinity)
+                        }
+                        .disabled(connection.isSigningIn)
+                    }
+                    SecureField("Pre-auth key (fallback)", text: $connection.preAuthKey)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                 }
