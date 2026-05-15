@@ -96,6 +96,14 @@ targets:
         com.apple.security.network.server: true
         com.apple.developer.networking.networkextension:
           - packet-tunnel-provider
+          - dns-proxy
+        # App Group lets the host app + DNSProxy extension share
+        # the peer name→IP map via a shared UserDefaults suite.
+        # The extension process is sandboxed separately from the
+        # host; this is the only sanctioned IPC channel for the
+        # ~kilobyte of peer-routing state MagicDNS needs.
+        com.apple.security.application-groups:
+          - group.dev.hanfour.bamboo
     settings:
       base:
         PRODUCT_NAME: bamboo
@@ -105,6 +113,7 @@ targets:
         name: Build WireGuardKitGo
     dependencies:
       - target: PacketTunnelProvider-macOS
+      - target: DNSProxy-macOS
       - package: WireGuardKit
         product: WireGuardKit
 
@@ -154,6 +163,43 @@ targets:
       - package: WireGuardKit
         product: WireGuardKit
 
+  DNSProxy-macOS:
+    type: app-extension
+    platform: macOS
+    # MagicDNS proxy. Sources are kept minimal so the extension binary
+    # stays small (no SwiftUI / OIDC / WireGuard plumbing); the
+    # Shared/MagicDNS*.swift trio is the entire surface. Distinct
+    # bundle ID so the OS treats this and the packet-tunnel as
+    # separate extensions (which they are — different
+    # NSExtensionPointIdentifiers).
+    sources:
+      - path: DNSProxy-macOS
+      - path: Shared/MagicDNSPeerStore.swift
+      - path: Shared/MagicDNSResolver.swift
+    info:
+      path: DNSProxy-macOS/Info.plist
+      properties:
+        CFBundleDisplayName: bamboo MagicDNS
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.networkextension.dns-proxy
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).DNSProxyProvider
+    entitlements:
+      path: DNSProxy-macOS/DNSProxy_macOS.entitlements
+      properties:
+        com.apple.security.app-sandbox: true
+        com.apple.security.network.client: true
+        com.apple.security.network.server: true
+        com.apple.developer.networking.networkextension:
+          - dns-proxy
+        com.apple.security.application-groups:
+          - group.dev.hanfour.bamboo
+    settings:
+      base:
+        PRODUCT_NAME: bamboo-dnsproxy
+        PRODUCT_BUNDLE_IDENTIFIER: dev.hanfour.bamboo.app.dnsproxy
+
 # ----- iOS targets -----------------------------------------------------------
 
   BambooApp-iOS:
@@ -188,6 +234,9 @@ targets:
       properties:
         com.apple.developer.networking.networkextension:
           - packet-tunnel-provider
+          - dns-proxy
+        com.apple.security.application-groups:
+          - group.dev.hanfour.bamboo
     settings:
       base:
         PRODUCT_NAME: bamboo
@@ -198,6 +247,7 @@ targets:
         name: Build WireGuardKitGo
     dependencies:
       - target: PacketTunnelProvider-iOS
+      - target: DNSProxy-iOS
       - package: WireGuardKit
         product: WireGuardKit
 
@@ -235,3 +285,32 @@ targets:
     dependencies:
       - package: WireGuardKit
         product: WireGuardKit
+
+  DNSProxy-iOS:
+    type: app-extension
+    platform: iOS
+    # See DNSProxy-macOS for design rationale. iOS path-equivalent.
+    sources:
+      - path: DNSProxy-iOS
+      - path: Shared/MagicDNSPeerStore.swift
+      - path: Shared/MagicDNSResolver.swift
+    info:
+      path: DNSProxy-iOS/Info.plist
+      properties:
+        CFBundleDisplayName: bamboo MagicDNS
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.networkextension.dns-proxy
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).DNSProxyProvider
+    entitlements:
+      path: DNSProxy-iOS/DNSProxy_iOS.entitlements
+      properties:
+        com.apple.developer.networking.networkextension:
+          - dns-proxy
+        com.apple.security.application-groups:
+          - group.dev.hanfour.bamboo
+    settings:
+      base:
+        PRODUCT_NAME: bamboo-dnsproxy
+        PRODUCT_BUNDLE_IDENTIFIER: dev.hanfour.bamboo.app.dnsproxy
