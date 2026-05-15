@@ -35,12 +35,19 @@ public actor RelayClient {
     private let log = Logger(subsystem: "dev.hanfour.bamboo.app", category: "relay")
     private var task: URLSessionWebSocketTask?
     private var readTask: Task<Void, Never>?
+    private var keepaliveTask: Task<Void, Never>?
 
     private let selfKey: Data
     private let token: String
     private let wgListenAddr: NWEndpoint  // 127.0.0.1:<wg port>
 
     private var peers: [Data: PeerSocket] = [:]
+
+    /// Interval between application-layer keepalive frames (frame
+    /// type 0x05 = `TypeKeepalive`). 25s is short enough to keep most
+    /// home-router / cellular-NAT UDP/TCP mappings open (typical idle
+    /// timeout 60–120s) while costing only ~3 bytes/min of bandwidth.
+    private static let keepaliveInterval: UInt64 = 25_000_000_000  // ns
 
     public init(selfKey: Data, token: String, wgListenHost: String, wgListenPort: UInt16) {
         precondition(selfKey.count == RelayClient.pubKeyLen, "selfKey must be 32 bytes")
@@ -86,9 +93,30 @@ public actor RelayClient {
             throw Error.unexpectedFrame(typ)
         }
 
-        // Spawn the inbound reader.
+        // Spawn the inbound reader and the keepalive ticker. Both run
+        // until close() cancels them.
         let me = self
         readTask = Task { await me.runReader() }
+        keepaliveTask = Task { await me.runKeepalive() }
+    }
+
+    /// Sends a TypeKeepalive (0x05) frame every `keepaliveInterval` so
+    /// idle WSS sessions stay alive across NAT / load balancer idle
+    /// timeouts. The relay server treats this frame as a no-op (see
+    /// `apps/relay/server/server.go`). Stops on send failure (the
+    /// inbound reader will surface the disconnect via its own error
+    /// path) and on task cancellation.
+    private func runKeepalive() async {
+        while !Task.isCancelled {
+            try? await Task.sleep(nanoseconds: RelayClient.keepaliveInterval)
+            if Task.isCancelled { return }
+            do {
+                try await sendFrame(type: 0x05, payload: Data())
+            } catch {
+                log.warning("keepalive send failed: \(String(describing: error), privacy: .public)")
+                return
+            }
+        }
     }
 
     /// Add a peer; returns the localhost host:port string the
@@ -136,6 +164,8 @@ public actor RelayClient {
     public func close() {
         readTask?.cancel()
         readTask = nil
+        keepaliveTask?.cancel()
+        keepaliveTask = nil
         for ps in peers.values { ps.conn.cancel() }
         peers.removeAll()
         task?.cancel(with: .goingAway, reason: nil)
