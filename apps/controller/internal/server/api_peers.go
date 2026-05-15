@@ -56,13 +56,13 @@ type peerJSON struct {
 	OS                 string   `json:"os,omitempty"`
 	ClientVersion      string   `json:"clientVersion,omitempty"`
 	Endpoints          []string `json:"endpoints,omitempty"`
-	// PeerDnsName is the short DNS-safe label (e.g. "mac-mini")
+	// PeerDNSName is the short DNS-safe label (e.g. "mac-mini")
 	// under which this peer is reachable in the tenant tailnet via
 	// MagicDNS — resolves to "<peer_dns_name>.bamboo". Empty for
 	// legacy peers that haven't re-registered since the column
 	// landed; omitempty so the wire shape stays unchanged for
 	// callers that don't care.
-	PeerDnsName string `json:"peerDnsName,omitempty"`
+	PeerDNSName string `json:"peerDnsName,omitempty"`
 	// AllowedIps is the L3 reachability set the controller computed
 	// for this peer from the recipient's perspective. Empty when the
 	// recipient is the one registering or when policy denies the
@@ -371,7 +371,7 @@ func protoPeerToJSON(p *bamboov1.Peer) peerJSON {
 		OS:                 p.GetOs(),
 		ClientVersion:      p.GetClientVersion(),
 		Endpoints:          p.GetEndpoints(),
-		PeerDnsName:        p.GetPeerDnsName(),
+		PeerDNSName:        p.GetPeerDnsName(),
 		AllowedIps:         p.GetAllowedIps(),
 	}
 }

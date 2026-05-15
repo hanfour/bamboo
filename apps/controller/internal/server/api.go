@@ -454,7 +454,7 @@ type apiPeerJSON struct {
 	ID                 string     `json:"id"`
 	TenantID           string     `json:"tenantId"`
 	Hostname           string     `json:"hostname"`
-	PeerDnsName        *string    `json:"peerDnsName,omitempty"`
+	PeerDNSName        *string    `json:"peerDnsName,omitempty"`
 	IP                 string     `json:"ip"`
 	Tags               []string   `json:"tags"`
 	OS                 string     `json:"os"`
@@ -489,7 +489,7 @@ func peerToJSON(p *repo.Peer) apiPeerJSON {
 		ID:                 p.ID.String(),
 		TenantID:           p.TenantID.String(),
 		Hostname:           p.Hostname,
-		PeerDnsName:        p.PeerDNSName,
+		PeerDNSName:        p.PeerDNSName,
 		IP:                 p.IP,
 		Tags:               tags,
 		OS:                 p.OS,
@@ -552,12 +552,12 @@ func (h *HTTPServer) apiPeer(w http.ResponseWriter, r *http.Request, tenant *rep
 // tag list = clear all tags).
 type apiPeerPatchReq struct {
 	Hostname *string `json:"hostname,omitempty"`
-	// DnsName lets an admin rename the MagicDNS label. nil = absent
+	// DNSName lets an admin rename the MagicDNS label. nil = absent
 	// (preserve current value). Non-nil pointer with empty string =
 	// explicit clear (peer becomes unresolvable until the next
 	// register re-runs the auto-slug). Non-nil with a value goes
 	// through strict slug validation + collision check.
-	DnsName *string   `json:"dnsName,omitempty"`
+	DNSName *string   `json:"dnsName,omitempty"`
 	Status  *string   `json:"status,omitempty"`
 	Tags    *[]string `json:"tags,omitempty"`
 }
@@ -626,9 +626,9 @@ func (h *HTTPServer) apiPeerPatch(w http.ResponseWriter, r *http.Request, authn 
 		setDNSName bool
 		newDNSPtr  *string
 	)
-	if req.DnsName != nil {
+	if req.DNSName != nil {
 		setDNSName = true
-		trimmed := strings.TrimSpace(*req.DnsName)
+		trimmed := strings.TrimSpace(*req.DNSName)
 		if trimmed != "" {
 			if trimmed != handlers.SlugifyHostname(trimmed) {
 				writeError(w, http.StatusBadRequest, errors.New("dnsName must be lowercase, [a-z0-9-], no leading/trailing dash"))
