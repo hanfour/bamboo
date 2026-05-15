@@ -96,12 +96,10 @@ targets:
         com.apple.security.network.server: true
         com.apple.developer.networking.networkextension:
           - packet-tunnel-provider
-          - dns-proxy
-        # App Group lets the host app + DNSProxy extension share
-        # the peer name→IP map via a shared UserDefaults suite.
-        # The extension process is sandboxed separately from the
-        # host; this is the only sanctioned IPC channel for the
-        # ~kilobyte of peer-routing state MagicDNS needs.
+        # App Group is kept on the host even though macOS dns-proxy
+        # is currently disabled (see DNSProxy-macOS target removal
+        # below). When Stage 3 lands the System Extension form, it
+        # will continue to use this same suite for the peer map.
         com.apple.security.application-groups:
           - group.dev.hanfour.bamboo
     settings:
@@ -113,7 +111,6 @@ targets:
         name: Build WireGuardKitGo
     dependencies:
       - target: PacketTunnelProvider-macOS
-      - target: DNSProxy-macOS
       - package: WireGuardKit
         product: WireGuardKit
 
@@ -163,42 +160,15 @@ targets:
       - package: WireGuardKit
         product: WireGuardKit
 
-  DNSProxy-macOS:
-    type: app-extension
-    platform: macOS
-    # MagicDNS proxy. Sources are kept minimal so the extension binary
-    # stays small (no SwiftUI / OIDC / WireGuard plumbing); the
-    # Shared/MagicDNS*.swift trio is the entire surface. Distinct
-    # bundle ID so the OS treats this and the packet-tunnel as
-    # separate extensions (which they are — different
-    # NSExtensionPointIdentifiers).
-    sources:
-      - path: DNSProxy-macOS
-      - path: Shared/MagicDNSPeerStore.swift
-      - path: Shared/MagicDNSResolver.swift
-    info:
-      path: DNSProxy-macOS/Info.plist
-      properties:
-        CFBundleDisplayName: bamboo MagicDNS
-        CFBundleShortVersionString: $(MARKETING_VERSION)
-        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
-        NSExtension:
-          NSExtensionPointIdentifier: com.apple.networkextension.dns-proxy
-          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).DNSProxyProvider
-    entitlements:
-      path: DNSProxy-macOS/DNSProxy_macOS.entitlements
-      properties:
-        com.apple.security.app-sandbox: true
-        com.apple.security.network.client: true
-        com.apple.security.network.server: true
-        com.apple.developer.networking.networkextension:
-          - dns-proxy
-        com.apple.security.application-groups:
-          - group.dev.hanfour.bamboo
-    settings:
-      base:
-        PRODUCT_NAME: bamboo-dnsproxy
-        PRODUCT_BUNDLE_IDENTIFIER: dev.hanfour.bamboo.app.dnsproxy
+# DNSProxy-macOS removed: NEDNSProxyProvider hosted as an App
+# Extension is rejected by macOS 15+ (lsregister -10811 from
+# spotlight; pluginkit refuses the bundle). Apple's modern path for
+# Network Extensions on macOS is the System Extension form
+# (Contents/Library/SystemExtensions/, OSSystemExtensionRequest
+# lifecycle, com.apple.developer.system-extension.install
+# entitlement). Stage 3 will reintroduce a System Extension target
+# here; iOS keeps the App Extension path since iOS doesn't have
+# System Extensions at all.
 
 # ----- iOS targets -----------------------------------------------------------
 
