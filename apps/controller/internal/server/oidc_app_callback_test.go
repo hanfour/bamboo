@@ -41,12 +41,12 @@ func TestValidateAppCallback_EmptyOK(t *testing.T) {
 // ships a freshly minted JWT to an attacker-controlled deep link.
 func TestValidateAppCallback_RejectsForeignSchemes(t *testing.T) {
 	bad := []string{
-		"https://evil.example/oauth",       // any HTTPS URL
-		"http://localhost/oauth",           // localhost too
-		"javascript:alert(1)",              // injection-y
-		"ssh://attacker.example/x",         // anything-not-allowed
-		"bamboo-evil://x",                  // prefix-similar but not a match
-		"app://auth/callback",              // wrong scheme
+		"https://evil.example/oauth", // any HTTPS URL
+		"http://localhost/oauth",     // localhost too
+		"javascript:alert(1)",        // injection-y
+		"ssh://attacker.example/x",   // anything-not-allowed
+		"bamboo-evil://x",            // prefix-similar but not a match
+		"app://auth/callback",        // wrong scheme
 	}
 	for _, in := range bad {
 		if _, err := validateAppCallback(in); err == nil {
