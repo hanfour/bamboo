@@ -37,10 +37,19 @@ func NewPeers(pool *db.Pool) *Peers {
 
 // Peer is the domain model.
 type Peer struct {
-	ID                 uuid.UUID
-	TenantID           uuid.UUID
-	UserID             *uuid.UUID
-	Hostname           string
+	ID       uuid.UUID
+	TenantID uuid.UUID
+	UserID   *uuid.UUID
+	Hostname string
+	// PeerDNSName is the short, DNS-safe label this peer is reachable
+	// under within the tenant tailnet (resolves to "<label>.bamboo").
+	// Nullable: NULL means the peer was inserted before the column
+	// existed and hasn't re-registered yet, or a future-flag tenant
+	// hasn't opted into MagicDNS. The coordinator's auto-slug path
+	// backfills NULLs on the next register; admins can override via
+	// PATCH /api/v1/peers/{id}. Migration 00008 enforces uniqueness
+	// per tenant via a partial unique index.
+	PeerDNSName        *string
 	WireGuardPublicKey string
 	IP                 string // text form, e.g. "100.64.0.7"
 	OS                 string
@@ -84,14 +93,14 @@ func (r *Peers) Insert(ctx context.Context, p *Peer) (*Peer, error) {
 	}
 	err := r.pool.QueryRow(ctx, `
 		INSERT INTO peers (
-		    tenant_id, user_id, hostname, wireguard_public_key, ip, os, client_version, status, endpoints
-		) VALUES ($1, $2, $3, $4, $5::inet, $6, $7, $8, $9)
-		RETURNING id, tenant_id, user_id, hostname, wireguard_public_key,
+		    tenant_id, user_id, hostname, peer_dns_name, wireguard_public_key, ip, os, client_version, status, endpoints
+		) VALUES ($1, $2, $3, $4, $5, $6::inet, $7, $8, $9, $10)
+		RETURNING id, tenant_id, user_id, hostname, peer_dns_name, wireguard_public_key,
 		          host(ip), os, client_version, status, endpoints,
 		          wg_endpoint, rx_bytes, tx_bytes,
 		          created_at, updated_at, last_seen_at, last_handshake_at
-	`, p.TenantID, p.UserID, p.Hostname, p.WireGuardPublicKey, p.IP, p.OS, p.ClientVersion, p.Status, endpoints).Scan(
-		&out.ID, &out.TenantID, &out.UserID, &out.Hostname, &out.WireGuardPublicKey,
+	`, p.TenantID, p.UserID, p.Hostname, p.PeerDNSName, p.WireGuardPublicKey, p.IP, p.OS, p.ClientVersion, p.Status, endpoints).Scan(
+		&out.ID, &out.TenantID, &out.UserID, &out.Hostname, &out.PeerDNSName, &out.WireGuardPublicKey,
 		&out.IP, &out.OS, &out.ClientVersion, &out.Status, &out.Endpoints,
 		&out.WGEndpoint, &out.RxBytes, &out.TxBytes,
 		&out.CreatedAt, &out.UpdatedAt, &out.LastSeenAt, &out.LastHandshakeAt,
@@ -114,7 +123,7 @@ func (r *Peers) GetByID(ctx context.Context, id uuid.UUID) (*Peer, error) {
 	var p Peer
 	var ownerEmail, ownerDisplay *string
 	err := r.pool.QueryRow(ctx, `
-		SELECT peers.id, peers.tenant_id, peers.user_id, peers.hostname, peers.wireguard_public_key,
+		SELECT peers.id, peers.tenant_id, peers.user_id, peers.hostname, peers.peer_dns_name, peers.wireguard_public_key,
 		       host(peers.ip), peers.os, peers.client_version, peers.status, peers.endpoints,
 		       peers.wg_endpoint, peers.rx_bytes, peers.tx_bytes,
 		       peers.created_at, peers.updated_at, peers.last_seen_at, peers.last_handshake_at,
@@ -124,7 +133,7 @@ func (r *Peers) GetByID(ctx context.Context, id uuid.UUID) (*Peer, error) {
 		LEFT JOIN users ON users.id = peers.user_id AND users.deleted_at IS NULL
 		WHERE peers.id = $1
 	`, id).Scan(
-		&p.ID, &p.TenantID, &p.UserID, &p.Hostname, &p.WireGuardPublicKey,
+		&p.ID, &p.TenantID, &p.UserID, &p.Hostname, &p.PeerDNSName, &p.WireGuardPublicKey,
 		&p.IP, &p.OS, &p.ClientVersion, &p.Status, &p.Endpoints,
 		&p.WGEndpoint, &p.RxBytes, &p.TxBytes,
 		&p.CreatedAt, &p.UpdatedAt, &p.LastSeenAt, &p.LastHandshakeAt,
@@ -168,7 +177,7 @@ func (r *Peers) UpdateLastSeen(ctx context.Context, id uuid.UUID) (uuid.UUID, er
 func (r *Peers) FindByPubKey(ctx context.Context, tenantID uuid.UUID, pubKey string) (*Peer, error) {
 	var p Peer
 	err := r.pool.QueryRow(ctx, `
-		SELECT id, tenant_id, user_id, hostname, wireguard_public_key,
+		SELECT id, tenant_id, user_id, hostname, peer_dns_name, wireguard_public_key,
 		       host(ip), os, client_version, status, endpoints,
 		       wg_endpoint, rx_bytes, tx_bytes,
 		       created_at, updated_at, last_seen_at, last_handshake_at,
@@ -176,7 +185,7 @@ func (r *Peers) FindByPubKey(ctx context.Context, tenantID uuid.UUID, pubKey str
 		FROM peers
 		WHERE tenant_id = $1 AND wireguard_public_key = $2
 	`, tenantID, pubKey).Scan(
-		&p.ID, &p.TenantID, &p.UserID, &p.Hostname, &p.WireGuardPublicKey,
+		&p.ID, &p.TenantID, &p.UserID, &p.Hostname, &p.PeerDNSName, &p.WireGuardPublicKey,
 		&p.IP, &p.OS, &p.ClientVersion, &p.Status, &p.Endpoints,
 		&p.WGEndpoint, &p.RxBytes, &p.TxBytes,
 		&p.CreatedAt, &p.UpdatedAt, &p.LastSeenAt, &p.LastHandshakeAt,
@@ -196,7 +205,7 @@ func (r *Peers) FindByPubKey(ctx context.Context, tenantID uuid.UUID, pubKey str
 // via dev-fallback before user attribution was wired).
 func (r *Peers) ListByTenant(ctx context.Context, tenantID uuid.UUID) ([]*Peer, error) {
 	rows, err := r.pool.Query(ctx, `
-		SELECT peers.id, peers.tenant_id, peers.user_id, peers.hostname, peers.wireguard_public_key,
+		SELECT peers.id, peers.tenant_id, peers.user_id, peers.hostname, peers.peer_dns_name, peers.wireguard_public_key,
 		       host(peers.ip), peers.os, peers.client_version, peers.status, peers.endpoints,
 		       peers.wg_endpoint, peers.rx_bytes, peers.tx_bytes,
 		       peers.created_at, peers.updated_at, peers.last_seen_at, peers.last_handshake_at,
@@ -217,7 +226,7 @@ func (r *Peers) ListByTenant(ctx context.Context, tenantID uuid.UUID) ([]*Peer, 
 		var p Peer
 		var ownerEmail, ownerDisplay *string
 		if err := rows.Scan(
-			&p.ID, &p.TenantID, &p.UserID, &p.Hostname, &p.WireGuardPublicKey,
+			&p.ID, &p.TenantID, &p.UserID, &p.Hostname, &p.PeerDNSName, &p.WireGuardPublicKey,
 			&p.IP, &p.OS, &p.ClientVersion, &p.Status, &p.Endpoints,
 			&p.WGEndpoint, &p.RxBytes, &p.TxBytes,
 			&p.CreatedAt, &p.UpdatedAt, &p.LastSeenAt, &p.LastHandshakeAt,
@@ -366,6 +375,47 @@ func (r *Peers) UpdateHostname(ctx context.Context, id uuid.UUID, hostname strin
 		return false, err
 	}
 	return tag.RowsAffected() > 0, nil
+}
+
+// UpdateDNSName sets peers.peer_dns_name. Pass a nil pointer to
+// clear the column. Returns true when the column actually changed
+// (so the caller can publish a PeerUpdated event); a no-op update
+// returns (false, nil). The migration's partial unique index will
+// surface a Postgres unique-violation error when name is non-NULL
+// and already used by another peer in the same tenant — callers
+// should pre-validate via IsDNSNameTaken to give the user a clean
+// 409 instead of a server-side DB error.
+func (r *Peers) UpdateDNSName(ctx context.Context, id uuid.UUID, name *string) (bool, error) {
+	tag, err := r.pool.Exec(ctx, `
+		UPDATE peers
+		   SET peer_dns_name = $2,
+		       updated_at    = now()
+		 WHERE id = $1
+		   AND peer_dns_name IS DISTINCT FROM $2
+	`, id, name)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
+// IsDNSNameTaken reports whether a peer in the given tenant already
+// uses peer_dns_name = name. NULL rows are not counted as taken
+// (the partial unique index treats them as absent), so this is safe
+// to call repeatedly during the auto-slug collision retry loop.
+func (r *Peers) IsDNSNameTaken(ctx context.Context, tenantID uuid.UUID, name string) (bool, error) {
+	var exists bool
+	err := r.pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM peers
+			 WHERE tenant_id = $1
+			   AND peer_dns_name = $2
+		)
+	`, tenantID, name).Scan(&exists)
+	if err != nil {
+		return false, err
+	}
+	return exists, nil
 }
 
 // SetStatus writes the status column directly. Used by the REST

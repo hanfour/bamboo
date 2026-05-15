@@ -111,6 +111,28 @@ func (h *CoordinatorHandler) Register(ctx context.Context, req *bamboov1.Registe
 				self.Endpoints = eps
 			}
 		}
+		// Backfill peer_dns_name for peers that registered before
+		// MagicDNS landed. The column is nullable; we only fill it
+		// when currently NULL (admins who set an explicit name later
+		// must not be overwritten). Errors here are non-fatal — same
+		// reasoning as the new-peer insert: we'd rather degrade than
+		// fail re-registration.
+		if self.PeerDNSName == nil {
+			candidate, derr := ResolveDNSName(ctx, h.peers, tenant.ID, SlugifyHostname(self.Hostname))
+			if derr != nil {
+				slog.Warn("peer_dns_name backfill: resolve failed",
+					"err", derr, "peer_id", self.ID, "tenant", tenant.Slug)
+			} else if candidate != "" {
+				if _, uerr := h.peers.UpdateDNSName(ctx, self.ID, &candidate); uerr != nil {
+					slog.Warn("peer_dns_name backfill: update failed",
+						"err", uerr, "peer_id", self.ID, "tenant", tenant.Slug)
+				} else {
+					self.PeerDNSName = &candidate
+					slog.Info("peer_dns_name backfilled on re-register",
+						"peer_id", self.ID, "dns_name", candidate)
+				}
+			}
+		}
 	} else {
 		used, err := h.peers.UsedIPs(ctx, tenant.ID)
 		if err != nil {
@@ -121,10 +143,28 @@ func (h *CoordinatorHandler) Register(ctx context.Context, req *bamboov1.Registe
 			return nil, status.Errorf(codes.ResourceExhausted, "ip allocation: %v", err)
 		}
 
+		// MagicDNS auto-slug: derive a DNS-safe label from the reported
+		// hostname and pick a non-colliding form within this tenant.
+		// Failing this is non-fatal — we'd rather a peer register without
+		// MagicDNS than reject onboarding — so on error we log and leave
+		// peer_dns_name NULL; admin can fix via PATCH and the next
+		// re-register will retry the auto-fill.
+		dnsName, derr := ResolveDNSName(ctx, h.peers, tenant.ID, SlugifyHostname(req.GetHostname()))
+		if derr != nil {
+			slog.Warn("peer_dns_name auto-resolve failed; inserting without",
+				"err", derr, "tenant", tenant.Slug, "hostname", req.GetHostname())
+			dnsName = ""
+		}
+		var dnsPtr *string
+		if dnsName != "" {
+			dnsPtr = &dnsName
+		}
+
 		self, err = h.peers.Insert(ctx, &repo.Peer{
 			TenantID:           tenant.ID,
 			UserID:             ownerUserID,
 			Hostname:           req.GetHostname(),
+			PeerDNSName:        dnsPtr,
 			WireGuardPublicKey: req.GetWireguardPublicKey(),
 			IP:                 ip,
 			OS:                 req.GetOs(),
@@ -135,15 +175,19 @@ func (h *CoordinatorHandler) Register(ctx context.Context, req *bamboov1.Registe
 		if err != nil {
 			return nil, status.Errorf(codes.Internal, "peer insert: %v", err)
 		}
-		slog.Info("new peer registered", "peer_id", self.ID, "ip", self.IP, "tenant", tenant.Slug)
+		slog.Info("new peer registered", "peer_id", self.ID, "ip", self.IP, "tenant", tenant.Slug, "dns_name", dnsName)
 		isNewPeer = true
+		auditDiff := map[string]any{"hostname": self.Hostname, "ip": self.IP, "os": self.OS}
+		if dnsName != "" {
+			auditDiff["peer_dns_name"] = dnsName
+		}
 		auditLog(ctx, h.audits, &repo.AuditEvent{
 			TenantID:     &tenant.ID,
 			ActorType:    "system",
 			Action:       "peer.register",
 			ResourceType: "peer",
 			ResourceID:   &self.ID,
-			Diff:         marshalDiff(map[string]any{"hostname": self.Hostname, "ip": self.IP, "os": self.OS}),
+			Diff:         marshalDiff(auditDiff),
 		})
 	}
 
@@ -435,6 +479,9 @@ func toProtoPeer(p *repo.Peer) *bamboov1.Peer {
 		ClientVersion:      p.ClientVersion,
 		Endpoints:          endpoints,
 		CreatedAt:          timestamppb.New(p.CreatedAt),
+	}
+	if p.PeerDNSName != nil {
+		out.PeerDnsName = *p.PeerDNSName
 	}
 	switch p.Status {
 	case "online":
