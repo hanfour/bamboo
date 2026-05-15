@@ -78,7 +78,7 @@ func (h *AuthHandler) StartOIDCFlow(ctx context.Context, req *bamboov1.StartOIDC
 	// Tenant slug is taken from x-tenant-slug metadata for now; a future
 	// API might include it on the request itself.
 	tenantSlug := tenantSlugFromMetadata(ctx)
-	state, err := auth.IssueOIDCState(h.sessionSec, tenantSlug, "", 10*time.Minute)
+	state, err := auth.IssueOIDCState(h.sessionSec, tenantSlug, "", "", 10*time.Minute)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "issue state: %v", err)
 	}

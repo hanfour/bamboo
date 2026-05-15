@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -257,13 +258,49 @@ func (h *HTTPServer) handleLogin(w http.ResponseWriter, r *http.Request, provide
 		tenant = slug
 	}
 
-	state, err := auth.IssueOIDCState(h.secret, tenant, inviteID, 10*time.Minute)
+	// ?app_callback=bamboo://... routes the final session JWT back into
+	// the native app instead of rendering the browser success page. We
+	// only accept callback URIs whose scheme matches a fixed allow-list
+	// (currently just the bamboo:// scheme registered by the macOS / iOS
+	// app); any other scheme would let an attacker craft a login link
+	// that ships a freshly minted JWT to their own deep link. The chosen
+	// URI rides inside the signed state so it can't be swapped between
+	// /login and /callback.
+	appCallback, err := validateAppCallback(r.URL.Query().Get("app_callback"))
+	if err != nil {
+		http.Error(w, "app_callback: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	state, err := auth.IssueOIDCState(h.secret, tenant, inviteID, appCallback, 10*time.Minute)
 	if err != nil {
 		http.Error(w, "issue state: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 	redirect := fmt.Sprintf("%s/auth/%s/callback", h.baseURL, provider.Name())
 	http.Redirect(w, r, provider.AuthURL(state, redirect), http.StatusFound)
+}
+
+// validateAppCallback narrows the accepted app_callback URI to ones
+// whose scheme matches a fixed allow-list. Empty input is allowed
+// (browser flow). Returns the original URI on success — callers store
+// it verbatim in the signed state.
+//
+// The current allow-list is just `bamboo://` (custom URL scheme
+// registered by the macOS / iOS bamboo app). Adding new native
+// clients means appending to this slice and updating their CFBundle-
+// URLTypes so the scheme is reserved on the device.
+func validateAppCallback(raw string) (string, error) {
+	if raw == "" {
+		return "", nil
+	}
+	allowed := []string{"bamboo://"}
+	for _, prefix := range allowed {
+		if strings.HasPrefix(raw, prefix) {
+			return raw, nil
+		}
+	}
+	return "", fmt.Errorf("unsupported scheme")
 }
 
 func (h *HTTPServer) handleCallback(w http.ResponseWriter, r *http.Request, provider auth.OIDCProvider) {
@@ -392,6 +429,35 @@ func (h *HTTPServer) handleCallback(w http.ResponseWriter, r *http.Request, prov
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   int(h.ttl.Seconds()),
 	})
+
+	// Native-app flow: when state carries an app_callback URI (vetted
+	// at /login time against the scheme allow-list), redirect the
+	// browser session there with the freshly minted token instead of
+	// rendering the HTML success page. ASWebAuthenticationSession on
+	// the device intercepts the bamboo:// navigation before it leaves
+	// the in-app browser; the URL — including the token — is delivered
+	// to the calling app, which parses it and writes to the Keychain.
+	// We re-validate the scheme on the callback path as defence in
+	// depth (state was signed at /login, but a code change that ever
+	// stored an attacker-supplied value should fail closed here too).
+	if claims.AppCallback != "" {
+		if _, verr := validateAppCallback(claims.AppCallback); verr != nil {
+			http.Error(w, "app_callback in state: "+verr.Error(), http.StatusBadRequest)
+			return
+		}
+		appURL, perr := url.Parse(claims.AppCallback)
+		if perr != nil {
+			http.Error(w, "app_callback parse: "+perr.Error(), http.StatusBadRequest)
+			return
+		}
+		q := appURL.Query()
+		q.Set("token", token)
+		q.Set("tenant", tenant.Slug)
+		q.Set("email", identity.Email)
+		appURL.RawQuery = q.Encode()
+		http.Redirect(w, r, appURL.String(), http.StatusFound)
+		return
+	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusOK)

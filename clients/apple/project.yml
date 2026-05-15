@@ -69,6 +69,15 @@ targets:
         LSMinimumSystemVersion: "13.0"
         LSUIElement: true
         NSHumanReadableCopyright: "Apache-2.0 — see LICENSE-APACHE"
+        # Register bamboo:// so ASWebAuthenticationSession can capture
+        # the OIDC callback the controller redirects to after sign-in.
+        # `callbackURLScheme: "bamboo"` on the session must match the
+        # scheme listed here; without the registration, macOS silently
+        # ignores the redirect and the auth flow hangs.
+        CFBundleURLTypes:
+          - CFBundleURLName: dev.hanfour.bamboo.auth
+            CFBundleURLSchemes:
+              - bamboo
     # Entitlements properties are declared inline so xcodegen writes
     # the .entitlements file with real content. Without `properties:`,
     # xcodegen emits an empty `<dict/>` on every regen — which makes
@@ -168,6 +177,12 @@ targets:
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
         NSHumanReadableCopyright: "Apache-2.0 — see LICENSE-APACHE"
+        # Register bamboo:// so ASWebAuthenticationSession can capture
+        # the OIDC callback. See the macOS target for rationale.
+        CFBundleURLTypes:
+          - CFBundleURLName: dev.hanfour.bamboo.auth
+            CFBundleURLSchemes:
+              - bamboo
     entitlements:
       path: BambooApp-iOS/BambooApp_iOS.entitlements
       properties:

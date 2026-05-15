@@ -41,9 +41,19 @@ public final class ConnectionViewModel: ObservableObject {
     @Published public var hostname: String = currentHostname()
     @Published public var relayURL: String =
         UserDefaults.bambooStandard.string(forKey: "relayURL") ?? ""
+    /// Email of the OIDC-authenticated user, or nil if the device is
+    /// driving the controller via pre-auth key only. Persisted to
+    /// UserDefaults so the UI's "Signed in as ..." banner survives an
+    /// app restart even though the JWT itself lives in the Keychain.
+    @Published public var signedInEmail: String? =
+        UserDefaults.bambooStandard.string(forKey: "signedInEmail")
+    /// Drives the Settings sheet's "Sign in with Google" button into a
+    /// spinner state while ASWebAuthenticationSession is presented.
+    @Published public var isSigningIn: Bool = false
 
     private let log = Logger(subsystem: "dev.hanfour.bamboo.app", category: "viewmodel")
     private let keychain: KeychainStore
+    private let authClient = AuthClient()
     private let tunnel = TunnelManager()
     private let heartbeat = HeartbeatLoop()
     private let watcher = PeerWatcher()
@@ -96,6 +106,65 @@ public final class ConnectionViewModel: ObservableObject {
 
     public func connect() {
         Task { await self.connectAsync() }
+    }
+
+    /// Kick off the OIDC sign-in flow. Resolves into:
+    ///   - on success: session JWT in Keychain (key sessionToken) and
+    ///     signedInEmail populated for the UI banner.
+    ///   - on cancel: silent return — the user closed the browser, no
+    ///     error banner shown.
+    ///   - on error: lastError populated.
+    public func signIn() {
+        Task { await self.signInAsync() }
+    }
+
+    private func signInAsync() async {
+        isSigningIn = true
+        defer { isSigningIn = false }
+        lastError = nil
+
+        UserDefaults.bambooStandard.set(controllerURL, forKey: "controllerURL")
+        UserDefaults.bambooStandard.set(tenantSlug, forKey: "tenantSlug")
+
+        guard let url = URL(string: controllerURL) else {
+            self.lastError = "controller URL is not a valid URL"
+            return
+        }
+        do {
+            let result = try await authClient.signIn(controllerURL: url, tenantSlug: tenantSlug)
+            try keychain.setString(result.token, for: BambooKeychainKey.sessionToken)
+            if !result.tenant.isEmpty {
+                // Controller may have overridden the slug (e.g.
+                // invite flow); reflect that in the UI + UserDefaults
+                // so the next Connect uses the right tenant.
+                self.tenantSlug = result.tenant
+                UserDefaults.bambooStandard.set(result.tenant, forKey: "tenantSlug")
+            }
+            if !result.email.isEmpty {
+                self.signedInEmail = result.email
+                UserDefaults.bambooStandard.set(result.email, forKey: "signedInEmail")
+            }
+            log.log("sign-in success email=\(result.email, privacy: .public)")
+        } catch {
+            if let aerr = error as? AuthError, case .userCancelled = aerr {
+                // Cancellation is silent — user dismissed Safari, no
+                // recovery needed.
+                return
+            }
+            log.error("sign-in: \(String(describing: error), privacy: .public)")
+            self.lastError = String(describing: error)
+        }
+    }
+
+    /// Clear the OIDC session: drop the Keychain bearer + forget the
+    /// signed-in email. The WireGuard private key is intentionally
+    /// untouched so a subsequent re-sign-in keeps the same device
+    /// identity.
+    public func signOut() {
+        keychain.remove(for: BambooKeychainKey.sessionToken)
+        UserDefaults.bambooStandard.removeObject(forKey: "signedInEmail")
+        self.signedInEmail = nil
+        log.log("sign-out: cleared session token")
     }
 
     public func disconnect() {

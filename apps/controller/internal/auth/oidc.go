@@ -205,31 +205,43 @@ type stateClaims struct {
 	// callback uses it to redeem the invitation atomically with user
 	// creation. It travels via the signed-and-HMAC'd state so a
 	// tampered link cannot inject a fake invite into a session.
-	Invite    string `json:"i,omitempty"`
-	ExpiresAt int64  `json:"exp"`
+	Invite string `json:"i,omitempty"`
+	// AppCallback is the native-app callback URI the controller should
+	// redirect to once the OIDC exchange completes (carrying the freshly
+	// minted session JWT). Set when the login was initiated by a native
+	// client via ?app_callback=bamboo://... Empty for browser flows
+	// (which render the HTML success page instead). The value rides in
+	// the signed state so a tampered query-string can't redirect the
+	// session token to an attacker-controlled URI.
+	AppCallback string `json:"a,omitempty"`
+	ExpiresAt   int64  `json:"exp"`
 }
 
 // OIDCStateClaims is the public projection of state contents returned
 // by VerifyOIDCState — Tenant always populated, Invite empty for
 // regular flows.
 type OIDCStateClaims struct {
-	Tenant string
-	Invite string
+	Tenant      string
+	Invite      string
+	AppCallback string
 }
 
 // IssueOIDCState returns a signed state token bound to a tenant slug.
 // inviteID is the invitation UUID (string) when the login was started
-// via an invite link, or empty for a regular sign-in.
-func IssueOIDCState(secret []byte, tenantSlug, inviteID string, ttl time.Duration) (string, error) {
+// via an invite link, or empty for a regular sign-in. appCallback is the
+// native-app callback URI (e.g. "bamboo://auth/callback") set when the
+// flow was initiated by a native client; empty for browser flows.
+func IssueOIDCState(secret []byte, tenantSlug, inviteID, appCallback string, ttl time.Duration) (string, error) {
 	nonce := make([]byte, 16)
 	if _, err := rand.Read(nonce); err != nil {
 		return "", err
 	}
 	claims := stateClaims{
-		Nonce:     base64.RawURLEncoding.EncodeToString(nonce),
-		Tenant:    tenantSlug,
-		Invite:    inviteID,
-		ExpiresAt: time.Now().Add(ttl).Unix(),
+		Nonce:       base64.RawURLEncoding.EncodeToString(nonce),
+		Tenant:      tenantSlug,
+		Invite:      inviteID,
+		AppCallback: appCallback,
+		ExpiresAt:   time.Now().Add(ttl).Unix(),
 	}
 	body, err := json.Marshal(claims)
 	if err != nil {
@@ -270,5 +282,6 @@ func VerifyOIDCState(secret []byte, state string) (OIDCStateClaims, error) {
 	}
 	out.Tenant = claims.Tenant
 	out.Invite = claims.Invite
+	out.AppCallback = claims.AppCallback
 	return out, nil
 }
