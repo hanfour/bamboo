@@ -146,6 +146,21 @@ func (h *HTTPServer) apiPeersRegister(w http.ResponseWriter, r *http.Request) {
 		req.Credential = &bamboov1.RegisterRequest_PreAuthKeySecret{
 			PreAuthKeySecret: body.PreAuthKeySecret,
 		}
+	} else if tok := bearerToken(r); tok != "" && h.peerSessionFromRequest(r) == nil {
+		// User-session JWT (OIDC sign-in) is present and the bearer
+		// isn't a peer-session token. Propagate it into the gRPC
+		// RegisterRequest so coord.resolveCredential can resolve the
+		// tenant from the JWT claims; otherwise the coordinator's
+		// own require_auth gate rejects with "Register requires a
+		// pre-auth key or bearer credential" even though the REST
+		// gate above already authenticated the user. Peer-session
+		// bearers (heartbeat / watch / relay-token) have a
+		// different claim shape that resolveBearerToken would
+		// reject — skip those so we don't trade a clean error
+		// ("require auth") for a confusing one ("invalid bearer").
+		req.Credential = &bamboov1.RegisterRequest_BearerToken{
+			BearerToken: tok,
+		}
 	}
 	resp, err := h.coord.Register(ctx, req)
 	if err != nil {
