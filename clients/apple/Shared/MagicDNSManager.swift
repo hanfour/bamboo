@@ -11,17 +11,20 @@ import OSLog
 /// `MagicDNSPeerStore` (an App Group UserDefaults suite shared with
 /// the extension).
 ///
-/// Platform split:
-///   - iOS: NEDNSProxyProvider is hosted as an App Extension. enable()
-///     wires NEDNSProxyManager → bundle id of the extension target.
-///   - macOS: App Extension form of NEDNSProxyProvider is rejected
-///     by macOS 15+ (lsregister error -10811; pluginkit ignores the
-///     bundle). The modern path is a System Extension via
-///     OSSystemExtensionRequest, which Stage 3 will deliver. Until
-///     then, enable() on macOS calls disable() instead — clearing
-///     any stale config a previous build may have written so System
-///     Settings → Network doesn't show a perpetually-failing DNS
-///     proxy session.
+/// Platform split (both share the same `dev.hanfour.bamboo.app.dnsproxy`
+/// bundle identifier and the same DNSProxyProvider class):
+///   - iOS: NEDNSProxyProvider runs as an *App Extension* under
+///     Contents/PlugIns/. `enable()` wires `NEDNSProxyManager` →
+///     extension bundle id and saves; the OS discovers the .appex
+///     and spawns it on first DNS flow.
+///   - macOS: NEDNSProxyProvider runs as a *System Extension* under
+///     Contents/Library/SystemExtensions/. `enable()` first calls
+///     `OSSystemExtensionRequest.activationRequest(...)` via
+///     `SystemExtensionInstaller`, which prompts the user
+///     (Privacy & Security → Allow → admin password) on first
+///     install, then idempotently re-runs on later launches. Once
+///     activated, the `NEDNSProxyManager` save is identical to
+///     the iOS path.
 ///
 /// Idempotent on both sides: enable() during an already-enabled
 /// state re-saves config; disable() during disabled is a no-op.
@@ -31,10 +34,18 @@ public final class MagicDNSManager {
     private let log = Logger(subsystem: "dev.hanfour.bamboo.app",
                              category: "MagicDNSManager")
 
-    /// The DNSProxy extension's bundle identifier. iOS only — the
-    /// macOS extension target was removed (see project.yml comment
-    /// + Stage 3 plan).
+    /// The DNSProxy extension's bundle identifier. Shared between
+    /// the iOS App Extension target and the macOS System Extension
+    /// target — both register the same App ID with Apple. The
+    /// NEDNSProxyProviderProtocol.providerBundleIdentifier we set
+    /// at save time uses this constant.
     private static let providerBundle = "dev.hanfour.bamboo.app.dnsproxy"
+
+    #if os(macOS)
+    private let installer = SystemExtensionInstaller(
+        bundleIdentifier: providerBundle
+    )
+    #endif
 
     public init() {}
 
@@ -44,8 +55,7 @@ public final class MagicDNSManager {
         #if os(iOS)
         try await enableIOS()
         #else
-        try await disable()
-        log.log("MagicDNS macOS path deferred to Stage 3 (System Extension); cleared any stale App Extension config")
+        try await enableMacOS()
         #endif
     }
 
@@ -65,6 +75,30 @@ public final class MagicDNSManager {
 
     #if os(iOS)
     private func enableIOS() async throws {
+        try await configureManager()
+        log.log("MagicDNS (iOS App Extension) enabled: \(Self.providerBundle, privacy: .public)")
+    }
+    #endif
+
+    #if os(macOS)
+    /// macOS path: activate the system extension first (this is
+    /// where Privacy & Security + admin-password prompts happen on
+    /// first install), then configure NEDNSProxyManager exactly
+    /// like the iOS path. Splitting the install step out keeps the
+    /// activation visibility honest — if the user denies, the
+    /// NEDNSProxyManager save never runs and System Settings is
+    /// left clean.
+    private func enableMacOS() async throws {
+        try await installer.activate()
+        try await configureManager()
+        log.log("MagicDNS (macOS System Extension) enabled: \(Self.providerBundle, privacy: .public)")
+    }
+    #endif
+
+    /// Shared NEDNSProxyManager save. Same shape on both
+    /// platforms — the only difference is whether a System
+    /// Extension activation ran first.
+    private func configureManager() async throws {
         let manager = NEDNSProxyManager.shared()
         try await loadIfNeeded(manager)
 
@@ -80,9 +114,7 @@ public final class MagicDNSManager {
         manager.isEnabled = true
 
         try await save(manager)
-        log.log("MagicDNS enabled (provider=\(Self.providerBundle, privacy: .public))")
     }
-    #endif
 
     private func loadIfNeeded(_ manager: NEDNSProxyManager) async throws {
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
