@@ -57,6 +57,12 @@ message Peer {
   repeated string endpoints = 13;
   // allowed_ips is computed by the policy engine based on ACL rules.
   repeated string allowed_ips = 14;
+  // peer_dns_name is the short DNS-safe label this peer is reachable
+  // under within the tenant's MagicDNS zone (resolves to
+  // "<peer_dns_name>.bamboo"). Empty for legacy peers registered
+  // before MagicDNS landed; the coordinator auto-slugifies the
+  // hostname on the next register to backfill.
+  string peer_dns_name = 15;
 }
 
 message RegisterRequest {

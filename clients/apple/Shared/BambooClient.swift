@@ -68,6 +68,12 @@ public struct BambooClient {
         public var os: String?
         public var clientVersion: String?
         public var endpoints: [String]?
+        /// peerDnsName is the short DNS-safe label (e.g. "mac-mini")
+        /// under which this peer resolves to its tunnel IP via
+        /// MagicDNS — controller-side auto-slugified from hostname,
+        /// or admin-renamed. Optional: legacy controllers / peers
+        /// registered before the column existed omit it.
+        public var peerDnsName: String?
     }
 
     public struct RegisterResponse: Decodable {

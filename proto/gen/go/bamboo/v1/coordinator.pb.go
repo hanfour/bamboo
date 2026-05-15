@@ -94,7 +94,13 @@ type Peer struct {
 	// endpoints are candidate ip:port pairs for direct connection.
 	Endpoints []string `protobuf:"bytes,13,rep,name=endpoints,proto3" json:"endpoints,omitempty"`
 	// allowed_ips is computed by the policy engine based on ACL rules.
-	AllowedIps    []string `protobuf:"bytes,14,rep,name=allowed_ips,json=allowedIps,proto3" json:"allowed_ips,omitempty"`
+	AllowedIps []string `protobuf:"bytes,14,rep,name=allowed_ips,json=allowedIps,proto3" json:"allowed_ips,omitempty"`
+	// peer_dns_name is the short DNS-safe label this peer is reachable
+	// under within the tenant's MagicDNS zone (resolves to
+	// "<peer_dns_name>.bamboo"). Empty for legacy peers registered
+	// before MagicDNS landed; the coordinator auto-slugifies the
+	// hostname on the next register to backfill.
+	PeerDnsName   string `protobuf:"bytes,15,opt,name=peer_dns_name,json=peerDnsName,proto3" json:"peer_dns_name,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -225,6 +231,13 @@ func (x *Peer) GetAllowedIps() []string {
 		return x.AllowedIps
 	}
 	return nil
+}
+
+func (x *Peer) GetPeerDnsName() string {
+	if x != nil {
+		return x.PeerDnsName
+	}
+	return ""
 }
 
 type RegisterRequest struct {
@@ -1310,7 +1323,7 @@ var File_bamboo_v1_coordinator_proto protoreflect.FileDescriptor
 
 const file_bamboo_v1_coordinator_proto_rawDesc = "" +
 	"\n" +
-	"\x1bbamboo/v1/coordinator.proto\x12\tbamboo.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xdc\x03\n" +
+	"\x1bbamboo/v1/coordinator.proto\x12\tbamboo.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\x80\x04\n" +
 	"\x04Peer\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1b\n" +
 	"\ttenant_id\x18\x02 \x01(\tR\btenantId\x12\x1a\n" +
@@ -1329,7 +1342,8 @@ const file_bamboo_v1_coordinator_proto_rawDesc = "" +
 	"lastSeenAt\x12\x1c\n" +
 	"\tendpoints\x18\r \x03(\tR\tendpoints\x12\x1f\n" +
 	"\vallowed_ips\x18\x0e \x03(\tR\n" +
-	"allowedIps\"\x98\x02\n" +
+	"allowedIps\x12\"\n" +
+	"\rpeer_dns_name\x18\x0f \x01(\tR\vpeerDnsName\"\x98\x02\n" +
 	"\x0fRegisterRequest\x12#\n" +
 	"\fbearer_token\x18\x01 \x01(\tH\x00R\vbearerToken\x12/\n" +
 	"\x13pre_auth_key_secret\x18\x02 \x01(\tH\x00R\x10preAuthKeySecret\x12\x1a\n" +

@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/hanfour/bamboo/apps/controller/internal/auth"
 	"github.com/hanfour/bamboo/apps/controller/internal/db/repo"
+	"github.com/hanfour/bamboo/apps/controller/internal/handlers"
 	"github.com/hanfour/bamboo/apps/controller/internal/policy"
 	"github.com/hanfour/bamboo/apps/controller/internal/policy/recommend"
 )
@@ -453,6 +454,7 @@ type apiPeerJSON struct {
 	ID                 string     `json:"id"`
 	TenantID           string     `json:"tenantId"`
 	Hostname           string     `json:"hostname"`
+	PeerDNSName        *string    `json:"peerDnsName,omitempty"`
 	IP                 string     `json:"ip"`
 	Tags               []string   `json:"tags"`
 	OS                 string     `json:"os"`
@@ -487,6 +489,7 @@ func peerToJSON(p *repo.Peer) apiPeerJSON {
 		ID:                 p.ID.String(),
 		TenantID:           p.TenantID.String(),
 		Hostname:           p.Hostname,
+		PeerDNSName:        p.PeerDNSName,
 		IP:                 p.IP,
 		Tags:               tags,
 		OS:                 p.OS,
@@ -548,9 +551,15 @@ func (h *HTTPServer) apiPeer(w http.ResponseWriter, r *http.Request, tenant *rep
 // absent" (preserve) from "field set to its zero value" (e.g. empty
 // tag list = clear all tags).
 type apiPeerPatchReq struct {
-	Hostname *string   `json:"hostname,omitempty"`
-	Status   *string   `json:"status,omitempty"`
-	Tags     *[]string `json:"tags,omitempty"`
+	Hostname *string `json:"hostname,omitempty"`
+	// DNSName lets an admin rename the MagicDNS label. nil = absent
+	// (preserve current value). Non-nil pointer with empty string =
+	// explicit clear (peer becomes unresolvable until the next
+	// register re-runs the auto-slug). Non-nil with a value goes
+	// through strict slug validation + collision check.
+	DNSName *string   `json:"dnsName,omitempty"`
+	Status  *string   `json:"status,omitempty"`
+	Tags    *[]string `json:"tags,omitempty"`
 }
 
 // apiPeerPatch implements PATCH /api/v1/peers/{id}. Any subset of
@@ -608,6 +617,46 @@ func (h *HTTPServer) apiPeerPatch(w http.ResponseWriter, r *http.Request, authn 
 			return
 		}
 	}
+	// dnsName: nil = absent (preserve), pointer-to-empty = clear,
+	// pointer-to-value = must be a clean slug + not already taken
+	// by another peer in the tenant. Strict-validate rather than
+	// auto-slugify so an admin who types "Mac Mini" gets a clear
+	// 400 instead of silently being given "mac-mini".
+	var (
+		setDNSName bool
+		newDNSPtr  *string
+	)
+	if req.DNSName != nil {
+		setDNSName = true
+		trimmed := strings.TrimSpace(*req.DNSName)
+		if trimmed != "" {
+			if trimmed != handlers.SlugifyHostname(trimmed) {
+				writeError(w, http.StatusBadRequest, errors.New("dnsName must be lowercase, [a-z0-9-], no leading/trailing dash"))
+				return
+			}
+			if len(trimmed) > 63 {
+				writeError(w, http.StatusBadRequest, errors.New("dnsName exceeds 63 chars"))
+				return
+			}
+			taken, terr := h.peers.IsDNSNameTaken(r.Context(), tenant.ID, trimmed)
+			if terr != nil {
+				writeError(w, http.StatusInternalServerError, fmt.Errorf("check dnsName: %w", terr))
+				return
+			}
+			// Skip the conflict when the row already holds this exact
+			// name — re-PATCHing to the same value should be idempotent,
+			// not a 409.
+			if taken && (current.PeerDNSName == nil || *current.PeerDNSName != trimmed) {
+				writeError(w, http.StatusConflict, fmt.Errorf("dnsName %q is already used by another peer in this tenant", trimmed))
+				return
+			}
+			newDNSPtr = &trimmed
+		}
+		// trimmed == "" => newDNSPtr stays nil; that's the explicit-
+		// clear path. The partial unique index treats NULL rows as
+		// absent so the column can collide-free transition through
+		// NULL to a new value.
+	}
 
 	diff := map[string]any{}
 
@@ -617,6 +666,23 @@ func (h *HTTPServer) apiPeerPatch(w http.ResponseWriter, r *http.Request, authn 
 			return
 		}
 		diff["hostname"] = map[string]string{"from": current.Hostname, "to": newHostname}
+	}
+	if setDNSName {
+		curStr := ""
+		if current.PeerDNSName != nil {
+			curStr = *current.PeerDNSName
+		}
+		newStr := ""
+		if newDNSPtr != nil {
+			newStr = *newDNSPtr
+		}
+		if curStr != newStr {
+			if _, err := h.peers.UpdateDNSName(r.Context(), id, newDNSPtr); err != nil {
+				writeError(w, http.StatusInternalServerError, fmt.Errorf("update dnsName: %w", err))
+				return
+			}
+			diff["peer_dns_name"] = map[string]string{"from": curStr, "to": newStr}
+		}
 	}
 	if req.Status != nil && *req.Status != current.Status {
 		if _, err := h.peers.SetStatus(r.Context(), id, *req.Status); err != nil {
