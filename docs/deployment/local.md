@@ -57,6 +57,19 @@ In the bamboo app (macOS or iOS):
 Tap **Connect**. The first time, the OS asks to install a VPN
 configuration; approve it. The status flips to `Connected`.
 
+## Auth mode (local vs prod)
+
+The local compose pins `BAMBOO_REQUIRE_AUTH=false`, which keeps the
+permissive dev path on: REST `/api/v1/*` accepts an `X-Tenant-Slug`
+header and auto-provisions the `default` tenant on first hit. Web UI
+loads without sign-in, and the bootstrap script can mint a preauth-key
+without an admin session.
+
+The prod compose (`infra/full/docker-compose.yml`) defaults to
+`BAMBOO_REQUIRE_AUTH=true` — the opposite. If you're using this local
+stack to reproduce a prod issue around auth, flip the local compose
+to `"true"` to match the prod surface.
+
 ## Tear down
 
 ```bash

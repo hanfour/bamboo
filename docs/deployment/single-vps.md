@@ -227,6 +227,35 @@ Redirect URIs to register in the Google / GitHub console:
 - `https://bamboo.yourdomain.com/auth/google/callback`
 - `https://bamboo.yourdomain.com/auth/github/callback`
 
+### Auth mode
+
+The prod compose defaults to `BAMBOO_REQUIRE_AUTH=true`, which makes
+the REST `/api/v1/*` surface reject unauthenticated requests with 401
+instead of falling back to the legacy `X-Tenant-Slug` dev path. Web UI
+sessions (Google / GitHub OIDC), Apple-app bearer tokens, and the
+peer-onboarding pre-auth-key flows all keep working unchanged — only
+the bare-header dev path is gated off.
+
+To verify after deploy:
+
+```bash
+# From a machine that isn't signed in:
+curl -i https://bamboo.yourdomain.com/api/v1/peers -H "X-Tenant-Slug: default"
+# Expected: HTTP/2 401  with body {"error":"authentication required"}
+
+# /api/v1/me still responds so the Web can render its signed-out landing:
+curl -i https://bamboo.yourdomain.com/api/v1/me
+# Expected: HTTP/2 200  with body {"authenticated":false,...}
+```
+
+If you need to temporarily flip the gate off (e.g. to reproduce a
+dev-mode bug), uncomment `BAMBOO_REQUIRE_AUTH=false` in `.env` and
+`docker compose up -d --force-recreate controller`. Don't leave it
+off in production — known bypass paths for peer onboarding and the
+relay-token endpoint will be closed in a follow-up PR (issue #135
+phase 2), but the gate-on-by-default state is the safer baseline
+even before that.
+
 ### Rotating BAMBOO_SESSION_SECRET
 
 ```bash

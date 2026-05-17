@@ -78,6 +78,11 @@ services:
       BAMBOO_BASE_URL: "http://localhost:8081"
       BAMBOO_GRPC_ADDR: "0.0.0.0:8080"
       BAMBOO_HTTP_ADDR: "0.0.0.0:8081"
+      # Local dev stays on the permissive auth path so
+      # `make local-up` + `make local-bootstrap` keep working without
+      # signing in first. Prod compose defaults to "true"; this is
+      # the explicit opt-out for the dev workflow.
+      BAMBOO_REQUIRE_AUTH: "false"
     ports:
       - "8080:8080"  # gRPC
       - "8081:8081"  # HTTP

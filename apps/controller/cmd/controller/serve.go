@@ -100,6 +100,7 @@ func runServe(_ *cobra.Command, _ []string) error {
 		"version", Version,
 		"grpc_addr", cfg.Server.GRPCAddr,
 		"http_addr", cfg.Server.HTTPAddr,
+		"require_auth", cfg.Auth.RequireAuth,
 	)
 	return srv.Run(ctx)
 }
