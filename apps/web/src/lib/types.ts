@@ -11,6 +11,13 @@ export type Peer = {
   id: string;
   tenantId: string;
   hostname: string;
+  // peerDnsName is the DNS-safe label resolvable as
+  // `<peerDnsName>.bamboo` inside the tenant tailnet. Auto-slugged
+  // by the controller on first register from `hostname`; admin can
+  // rename via PATCH /api/v1/peers/{id}. Absent for legacy peers
+  // that registered before MagicDNS landed and haven't re-
+  // registered yet.
+  peerDnsName?: string;
   ip: string;
   tags: string[];
   os: string;

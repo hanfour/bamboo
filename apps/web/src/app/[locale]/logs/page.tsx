@@ -13,24 +13,24 @@ import type { LogEvent } from '@/lib/types';
 // Dev environments without ClickHouse return an empty list — the
 // LogsTable empty-state handles that gracefully.
 export default async function LogsPage() {
-  const events = await fetchLogs({ sinceHours: 24, limit: 100 });
-  if (events.kind !== 'ok') {
-    return <FetchErrorState kind={events.kind} />;
-  }
-  return <LogsView events={events.value} />;
+ const events = await fetchLogs({ sinceHours: 24, limit: 100 });
+ if (events.kind !== 'ok') {
+ return <FetchErrorState kind={events.kind} />;
+ }
+ return <LogsView events={events.value} />;
 }
 
 function LogsView({ events }: { events: LogEvent[] }) {
-  const t = useTranslations('logs');
-  return (
-    <div className="space-y-6">
-      <header>
-        <h1 className="text-2xl font-semibold tracking-tight">{t('title')}</h1>
-        <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
-          {t('subtitle')}
-        </p>
-      </header>
-      <LogsTable events={events} />
-    </div>
-  );
+ const t = useTranslations('logs');
+ return (
+ <div className="space-y-6">
+ <header>
+ <h1 className="text-2xl font-semibold tracking-tight">{t('title')}</h1>
+ <p className="mt-1 text-sm text-bamboo-200/70">
+ {t('subtitle')}
+ </p>
+ </header>
+ <LogsTable events={events} />
+ </div>
+ );
 }

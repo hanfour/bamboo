@@ -1,26 +1,49 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 import type { Config } from 'tailwindcss';
 
 const config: Config = {
   content: ['./src/**/*.{ts,tsx}'],
-  // Dark mode is opt-in via a class on <html> rather than tracking the
-  // OS prefers-color-scheme media feature. The media-feature behavior
-  // caused the page to flip dark whenever DevTools (or the OS) declared
-  // a dark scheme, which the user explicitly didn't want. Once a real
-  // theme-toggle ships we add the class through it; until then dark
-  // styles are dormant and the page stays in its committed light look.
+  // `class`-opt-in dark mode. The `<html>` element in
+  // src/app/[locale]/layout.tsx always carries `dark`, so the
+  // brand voice (warm-dark) is OS-independent — a user toggling
+  // their system into Light won't flip the bamboo theme out.
   darkMode: 'class',
   theme: {
     extend: {
       fontFamily: {
-        sans: ['var(--font-sans)', 'system-ui', 'sans-serif'],
+        // Sora as the primary humanist sans — wired via
+        // next/font/google in layout.tsx, exposed through
+        // --font-sans. CJK fallback chain keeps Traditional
+        // Chinese legible on macOS / Windows / Linux before Sora
+        // finishes loading.
+        sans: [
+          'var(--font-sans)',
+          'ui-sans-serif',
+          'system-ui',
+          '-apple-system',
+          'BlinkMacSystemFont',
+          '"PingFang TC"',
+          '"Noto Sans TC"',
+          '"Hiragino Sans"',
+          '"Microsoft JhengHei"',
+          'sans-serif',
+        ],
+        // Lora italic — scoped to emphasis-on-key-noun spans
+        // (a la Resend's `developers`). Body text never uses
+        // serif; pulling Lora onto paragraphs reverts to the
+        // editorial look rejected 2026-05-12.
+        serif: ['var(--font-serif)', 'ui-serif', 'Georgia', 'serif'],
         mono: ['var(--font-mono)', 'ui-monospace', 'monospace'],
+        // Saira Stencil One — wordmark-only. Display fonts on
+        // body text push the page back toward editorial.
+        wordmark: ['var(--font-wordmark)', 'sans-serif'],
       },
       colors: {
-        // bamboo as weathered / aged bamboo — wabi-sabi taupe palette.
-        // Conceptual shift from "fresh green bamboo" to "seasoned bamboo
-        // brown"; the token name keeps the brand association while the
-        // hue moves to warm earth tones. 70% main bg (50) + 25% surfaces
-        // (100-300) + 5% accent (500) distribution is the design intent.
+        // bamboo as weathered / aged bamboo — wabi-sabi taupe.
+        // 700+ are the warm-dark surfaces the redesigned theme
+        // leans on; 50-200 act as cream highlights / body text
+        // in the inverted dark palette.
         bamboo: {
           50: '#FDF6EC',
           100: '#F3EFE0',
@@ -33,11 +56,42 @@ const config: Config = {
           800: '#5F4F3D',
           900: '#3D3327',
         },
-        // Warm utility neutral for hairlines / dividers — pairs with
-        // the bamboo earth tones better than zinc's cool grey.
+        // ink — warm-tinted charcoal for the dark surfaces.
+        // Pure zinc would clash with the warm bamboo accent;
+        // these intentionally share a hue family so the
+        // background and the accent feel like the same brand.
+        //   950: page bg
+        //   900 / 800: raised surfaces (cards, hover)
+        //   700: hairlines
+        //   400-500: secondary text on dark
+        //   100-200: rare highlight text on a 700 surface
+        ink: {
+          50: '#F5F2EC',
+          100: '#E8E3D8',
+          200: '#C7BFAE',
+          300: '#9A9183',
+          400: '#6E665B',
+          500: '#4E483F',
+          600: '#363128',
+          700: '#27221C',
+          800: '#1C1814',
+          900: '#13110E',
+          950: '#0C0A07',
+        },
+        // Back-compat — older components still reference
+        // stone-300 for hairlines. New code should prefer the
+        // `ink` scale.
         stone: {
           300: '#D3D3D3',
         },
+      },
+      // Heading line-heights: Tailwind's defaults are too tight
+      // for the bigger 5xl / 6xl heads we render with
+      // `font-light tracking-tight`. CJK descenders need a hair
+      // more room than Latin-only would suggest.
+      fontSize: {
+        '5xl': ['3rem', { lineHeight: '1.1' }],
+        '6xl': ['3.75rem', { lineHeight: '1.05' }],
       },
     },
   },
