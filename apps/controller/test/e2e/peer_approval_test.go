@@ -36,7 +36,7 @@ func TestPeerApproval_PendingByDefaultUnderManualKey(t *testing.T) {
 		"wireguardPublicKey": randomPubKey(t),
 		"os":                 "linux",
 		"clientVersion":      "0.0.1",
-		"preAuthKeySecret":         keySecret,
+		"preAuthKeySecret":   keySecret,
 		"tenantSlug":         f.tenantSlug,
 	}
 	resp := postJSON(t, f.httpURL+"/api/v1/peers/register", body)
@@ -75,7 +75,7 @@ func TestPeerApproval_AutoApproveKeySkipsQueue(t *testing.T) {
 	body := map[string]any{
 		"hostname":           "ci-runner-1",
 		"wireguardPublicKey": randomPubKey(t),
-		"preAuthKeySecret":         keySecret,
+		"preAuthKeySecret":   keySecret,
 		"tenantSlug":         f.tenantSlug,
 	}
 	resp := postJSON(t, f.httpURL+"/api/v1/peers/register", body)
@@ -324,7 +324,7 @@ func registerPeerWithKey(t *testing.T, f *fixture, hostname, keySecret string) s
 	body := map[string]any{
 		"hostname":           hostname,
 		"wireguardPublicKey": randomPubKey(t),
-		"preAuthKeySecret":         keySecret,
+		"preAuthKeySecret":   keySecret,
 		"tenantSlug":         f.tenantSlug,
 	}
 	resp := postJSON(t, f.httpURL+"/api/v1/peers/register", body)

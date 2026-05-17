@@ -813,8 +813,8 @@ func (h *HTTPServer) apiPeerApprove(w http.ResponseWriter, r *http.Request, auth
 	}
 	if changed {
 		writePeerAudit(r.Context(), h.audits, authn, tenant.ID, id, "peer.approve", map[string]any{
-			"hostname":           updated.Hostname,
-			"approval_status":    map[string]any{"from": "pending", "to": "approved"},
+			"hostname":        updated.Hostname,
+			"approval_status": map[string]any{"from": "pending", "to": "approved"},
 		})
 	}
 	writeJSON(w, http.StatusOK, peerToJSON(updated))
