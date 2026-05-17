@@ -22,7 +22,7 @@ function PreAuthKeysView({ keys }: { keys: PreAuthKey[] }) {
  return (
  <div className="space-y-6">
  <header className="flex items-center justify-between">
- <h1 className="text-2xl font-semibold tracking-tight">{t('title')}</h1>
+ <h1 className="text-4xl font-light tracking-tight text-bamboo-50 sm:text-5xl">{t("title")}<span className="ml-3 font-serif italic font-normal text-bamboo-300/80">{t("titleAccent")}</span></h1>
  </header>
  <p className="text-sm text-bamboo-200/70">{t('subtitle')}</p>
  <PreAuthKeyTable keys={keys} />

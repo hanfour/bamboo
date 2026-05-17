@@ -41,7 +41,7 @@ function Acl({
  return (
  <div className="space-y-6">
  <header>
- <h1 className="text-2xl font-semibold tracking-tight">{t('title')}</h1>
+ <h1 className="text-4xl font-light tracking-tight text-bamboo-50 sm:text-5xl">{t("title")}<span className="ml-3 font-serif italic font-normal text-bamboo-300/80">{t("titleAccent")}</span></h1>
  </header>
  <p className="rounded-lg border border-dashed border-bamboo-200/30 p-8 text-center text-sm text-bamboo-200/60 dark:text-bamboo-200/40">
  {t('empty')}
@@ -53,7 +53,7 @@ function Acl({
  return (
  <div className="space-y-6">
  <header>
- <h1 className="text-2xl font-semibold tracking-tight">{t('title')}</h1>
+ <h1 className="text-4xl font-light tracking-tight text-bamboo-50 sm:text-5xl">{t("title")}<span className="ml-3 font-serif italic font-normal text-bamboo-300/80">{t("titleAccent")}</span></h1>
  <p className="text-sm text-bamboo-200/60">
  {t('revision')}: <span className="font-mono">{policy.revision}</span>
  {policy.updatedAt && (

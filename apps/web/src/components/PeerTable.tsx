@@ -39,8 +39,12 @@ export function PeerTable({ peers, selectedId, onSelect }: Props) {
  }
 
  return (
- <div className="overflow-x-auto">
- <table className="w-full text-sm">
+ // -mx-6 sm:mx-0 lets the table edge-to-edge on phones so the
+ // horizontal scrollbar overlay isn't clipped by the page
+ // padding. min-w-[860px] keeps columns at readable widths;
+ // pinching/scrolling the table beats fortune-cookie wrapping.
+ <div className="-mx-6 overflow-x-auto px-6 sm:mx-0 sm:px-0">
+ <table className="w-full min-w-[860px] text-sm">
  <thead className="border-b border-ink-800 text-left text-xs font-medium tracking-wide text-bamboo-200/60">
  <tr>
  <th className="px-3 py-3 font-medium">{t('columns.hostname')}</th>

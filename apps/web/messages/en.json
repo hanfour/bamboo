@@ -172,6 +172,7 @@
   },
   "preAuthKeys": {
     "title": "Pre-auth keys",
+    "titleAccent": "tokens",
     "subtitle": "Admin-issued keys you paste into a bamboo client on a new device for its first connection. The plaintext is shown once at mint time; afterward only revocation is possible.",
     "empty": "No pre-auth keys yet. Go to Peers → Add peer to mint one.",
     "columns": {
@@ -204,6 +205,7 @@
   },
   "acl": {
     "title": "Access Policy",
+    "titleAccent": "policy",
     "revision": "Revision",
     "lastUpdated": "Last updated",
     "viewSource": "View source",
@@ -228,6 +230,7 @@
   },
   "users": {
     "title": "Users",
+    "titleAccent": "people",
     "subtitle": "People currently in this tenant. New members are created automatically on first OIDC sign-in; invite and role-management flows are planned but not yet shipped.",
     "columns": {
       "user": "User",
@@ -272,6 +275,7 @@
     },
     "invitations": {
       "title": "Invitations",
+      "titleAccent": "invites",
       "empty": "No invitations yet. Click \"Invite user\" above to create the first.",
       "columns": {
         "email": "Email",
@@ -328,6 +332,7 @@
   },
   "logs": {
     "title": "Logs",
+    "titleAccent": "trail",
     "subtitle": "Recent policy-evaluation traces from peers in this tenant. Allow/deny decisions are recorded with the matching rule so you can audit access in production.",
     "empty": "No log events recorded yet. Once peers begin handshaking and exchanging traffic, decisions will appear here.",
     "columns": {
@@ -346,6 +351,7 @@
   },
   "settings": {
     "title": "Settings",
+    "titleAccent": "tenant",
     "subtitle": "Manage tenant and account settings.",
     "tenant": {
       "title": "Tenant",
