@@ -63,6 +63,11 @@ type ApiPeer = {
   lastHandshakeAt?: string;
   ownerEmail?: string;
   ownerDisplayName?: string;
+  // approvalStatus is missing from pre-#133 controller responses;
+  // we normalize undefined → 'approved' in the mapper so the
+  // Web UI doesn't have to special-case the migration boundary.
+  approvalStatus?: 'pending' | 'approved' | 'rejected';
+  approvedAt?: string;
 };
 
 function apiPeerToPeer(p: ApiPeer): Peer {
@@ -89,6 +94,12 @@ function apiPeerToPeer(p: ApiPeer): Peer {
     lastHandshakeAt: p.lastHandshakeAt,
     ownerEmail: p.ownerEmail,
     ownerDisplayName: p.ownerDisplayName,
+    // approvalStatus default 'approved' handles the back-compat
+    // case described above. Once the Web UI is pinned to a
+    // post-#133 controller everywhere we deploy, this fallback can
+    // be dropped.
+    approvalStatus: p.approvalStatus ?? 'approved',
+    approvedAt: p.approvedAt,
   };
 }
 
@@ -247,9 +258,20 @@ export async function fetchUsers(): Promise<FetchResult<User[]>> {
 }
 
 export async function fetchPreAuthKeys(): Promise<FetchResult<PreAuthKey[]>> {
-  const r = await fetchResult<{ keys: PreAuthKey[] }>('/api/v1/preauth-keys');
+  // PreAuthKey on the wire might be missing autoApprove when the
+  // controller predates #133. Normalize undefined → false so
+  // PreAuthKey's required field is always populated for downstream
+  // components.
+  type ApiPreAuthKey = Omit<PreAuthKey, 'autoApprove'> & {
+    autoApprove?: boolean;
+  };
+  const r = await fetchResult<{ keys: ApiPreAuthKey[] }>('/api/v1/preauth-keys');
   if (r.kind !== 'ok') return r;
-  return { kind: 'ok', value: r.value.keys ?? [] };
+  const keys = (r.value.keys ?? []).map<PreAuthKey>((k) => ({
+    ...k,
+    autoApprove: k.autoApprove ?? false,
+  }));
+  return { kind: 'ok', value: keys };
 }
 
 export async function fetchActivity(limit = 20): Promise<FetchResult<ActivityEvent[]>> {

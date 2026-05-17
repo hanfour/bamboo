@@ -100,9 +100,18 @@ type Peer struct {
 	// "<peer_dns_name>.bamboo"). Empty for legacy peers registered
 	// before MagicDNS landed; the coordinator auto-slugifies the
 	// hostname on the next register to backfill.
-	PeerDnsName   string `protobuf:"bytes,15,opt,name=peer_dns_name,json=peerDnsName,proto3" json:"peer_dns_name,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	PeerDnsName string `protobuf:"bytes,15,opt,name=peer_dns_name,json=peerDnsName,proto3" json:"peer_dns_name,omitempty"`
+	// approval_status is the device-approval lifecycle gate (issue
+	// #133). One of "pending", "approved", "rejected". Pending peers
+	// appear in the Register response (so the client knows it is
+	// queued) but never appear in OTHER peers' Register / WatchPeers
+	// responses until an admin approves. Rejected peers reach a
+	// terminal state; their pubkey is unusable until an admin deletes
+	// the row. Empty in legacy responses pre-#133 — clients should
+	// treat empty as "approved" for backward compatibility.
+	ApprovalStatus string `protobuf:"bytes,16,opt,name=approval_status,json=approvalStatus,proto3" json:"approval_status,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *Peer) Reset() {
@@ -236,6 +245,13 @@ func (x *Peer) GetAllowedIps() []string {
 func (x *Peer) GetPeerDnsName() string {
 	if x != nil {
 		return x.PeerDnsName
+	}
+	return ""
+}
+
+func (x *Peer) GetApprovalStatus() string {
+	if x != nil {
+		return x.ApprovalStatus
 	}
 	return ""
 }
@@ -1323,7 +1339,7 @@ var File_bamboo_v1_coordinator_proto protoreflect.FileDescriptor
 
 const file_bamboo_v1_coordinator_proto_rawDesc = "" +
 	"\n" +
-	"\x1bbamboo/v1/coordinator.proto\x12\tbamboo.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\x80\x04\n" +
+	"\x1bbamboo/v1/coordinator.proto\x12\tbamboo.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xa9\x04\n" +
 	"\x04Peer\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1b\n" +
 	"\ttenant_id\x18\x02 \x01(\tR\btenantId\x12\x1a\n" +
@@ -1343,7 +1359,8 @@ const file_bamboo_v1_coordinator_proto_rawDesc = "" +
 	"\tendpoints\x18\r \x03(\tR\tendpoints\x12\x1f\n" +
 	"\vallowed_ips\x18\x0e \x03(\tR\n" +
 	"allowedIps\x12\"\n" +
-	"\rpeer_dns_name\x18\x0f \x01(\tR\vpeerDnsName\"\x98\x02\n" +
+	"\rpeer_dns_name\x18\x0f \x01(\tR\vpeerDnsName\x12'\n" +
+	"\x0fapproval_status\x18\x10 \x01(\tR\x0eapprovalStatus\"\x98\x02\n" +
 	"\x0fRegisterRequest\x12#\n" +
 	"\fbearer_token\x18\x01 \x01(\tH\x00R\vbearerToken\x12/\n" +
 	"\x13pre_auth_key_secret\x18\x02 \x01(\tH\x00R\x10preAuthKeySecret\x12\x1a\n" +

@@ -23,6 +23,7 @@ export function NewPeerButton({ tenantSlug }: { tenantSlug: string }) {
  const [open, setOpen] = useState(false);
  const [description, setDescription] = useState('');
  const [reusable, setReusable] = useState(false);
+ const [autoApprove, setAutoApprove] = useState(false);
  const [pending, startTransition] = useTransition();
  const [error, setError] = useState<string | null>(null);
  const [result, setResult] = useState<{ secret: string; description: string } | null>(null);
@@ -35,6 +36,7 @@ export function NewPeerButton({ tenantSlug }: { tenantSlug: string }) {
  setTimeout(() => {
  setDescription('');
  setReusable(false);
+ setAutoApprove(false);
  setError(null);
  setResult(null);
  }, 200);
@@ -43,7 +45,7 @@ export function NewPeerButton({ tenantSlug }: { tenantSlug: string }) {
  function submit() {
  setError(null);
  startTransition(async () => {
- const res = await mintPreAuthKeyAction({ description, reusable });
+ const res = await mintPreAuthKeyAction({ description, reusable, autoApprove });
  if (res.ok) {
  setResult({ secret: res.secret, description: res.description });
  } else {
@@ -74,10 +76,12 @@ export function NewPeerButton({ tenantSlug }: { tenantSlug: string }) {
  <FormView
  description={description}
  reusable={reusable}
+ autoApprove={autoApprove}
  pending={pending}
  error={error}
  onDescriptionChange={setDescription}
  onReusableChange={setReusable}
+ onAutoApproveChange={setAutoApprove}
  onSubmit={submit}
  onCancel={close}
  />
@@ -134,19 +138,23 @@ function Modal({
 function FormView({
  description,
  reusable,
+ autoApprove,
  pending,
  error,
  onDescriptionChange,
  onReusableChange,
+ onAutoApproveChange,
  onSubmit,
  onCancel,
 }: {
  description: string;
  reusable: boolean;
+ autoApprove: boolean;
  pending: boolean;
  error: string | null;
  onDescriptionChange: (v: string) => void;
  onReusableChange: (v: boolean) => void;
+ onAutoApproveChange: (v: boolean) => void;
  onSubmit: () => void;
  onCancel: () => void;
 }) {
@@ -183,6 +191,17 @@ function FormView({
  <span className="text-bamboo-100">{t('reusableLabel')}</span>
  </label>
  <p className="-mt-2 text-xs text-bamboo-200/60">{t('reusableHint')}</p>
+
+ <label className="flex items-center gap-2 text-sm">
+ <input
+ type="checkbox"
+ checked={autoApprove}
+ disabled={pending}
+ onChange={(e) => onAutoApproveChange(e.target.checked)}
+ />
+ <span className="text-bamboo-100">{t('autoApproveLabel')}</span>
+ </label>
+ <p className="-mt-2 text-xs text-bamboo-200/60">{t('autoApproveHint')}</p>
 
  {error && (
  <div className="rounded-md border border-red-300 px-3 py-2 text-sm text-red-700 dark:border-red-900/50 dark:text-red-400">

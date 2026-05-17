@@ -104,6 +104,10 @@ export async function renamePeerDnsNameAction(
 export async function mintPreAuthKeyAction(input: {
   description: string;
   reusable: boolean;
+  // autoApprove opts the minted key out of the device-approval queue
+  // (issue #133). Defaults false so the safe path is the path of
+  // least resistance.
+  autoApprove?: boolean;
 }): Promise<MintResult> {
   try {
     const res = await fetch(`${BASE}/api/v1/preauth-keys`, {
@@ -113,6 +117,7 @@ export async function mintPreAuthKeyAction(input: {
         description: input.description.trim(),
         reusable: input.reusable,
         ephemeral: false,
+        autoApprove: input.autoApprove ?? false,
       }),
       cache: 'no-store',
     });
@@ -310,6 +315,48 @@ export async function deletePeerAction(id: string): Promise<ActionResult> {
       cache: 'no-store',
     });
     if (!res.ok && res.status !== 204) {
+      const text = await res.text().catch(() => '');
+      return { ok: false, error: `${res.status} ${text || res.statusText}` };
+    }
+    revalidatePath('/[locale]/peers', 'page');
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: (e as Error).message };
+  }
+}
+
+// approvePeerAction flips a pending peer into approved (issue #133).
+// Admin-only on the wire; the controller returns 403 for non-admins,
+// 409 for already-rejected peers (the audit trail rules out un-
+// rejection), and 404 for unknown ids. Idempotent: re-approving an
+// already-approved row returns 200 with no audit entry written —
+// the UI just refreshes.
+export async function approvePeerAction(id: string): Promise<ActionResult> {
+  return peerApprovalAction(id, 'approve');
+}
+
+// rejectPeerAction is the sibling of approvePeerAction. Rejection is
+// terminal: the row is retained for audit, but `peerApprovalAction`
+// cannot bring it back to approved. Admin can follow up with
+// deletePeerAction to free the pubkey for a fresh registration.
+export async function rejectPeerAction(id: string): Promise<ActionResult> {
+  return peerApprovalAction(id, 'reject');
+}
+
+async function peerApprovalAction(
+  id: string,
+  verb: 'approve' | 'reject',
+): Promise<ActionResult> {
+  try {
+    const res = await fetch(
+      `${BASE}/api/v1/peers/${encodeURIComponent(id)}/${verb}`,
+      {
+        method: 'POST',
+        headers: await buildHeaders(),
+        cache: 'no-store',
+      },
+    );
+    if (!res.ok) {
       const text = await res.text().catch(() => '');
       return { ok: false, error: `${res.status} ${text || res.statusText}` };
     }

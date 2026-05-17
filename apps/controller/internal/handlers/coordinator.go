@@ -43,6 +43,58 @@ type CoordinatorHandler struct {
 	requireAuth bool
 }
 
+// ApprovePeer flips a pending peer into approved and publishes a
+// PeerAdded event so other peers' WatchPeers streams pick it up.
+// Returns the post-update peer for caller convenience (HTTP layer
+// wants to return the row in the response). Returns repo.ErrNotFound
+// if the peer doesn't exist; returns nil + (changed=false) when the
+// row was already in the approved state — the caller treats that as
+// a successful idempotent no-op.
+//
+// Visibility contract (issue #133): only this method (and Register's
+// auto-approve path) publishes PeerAdded for a peer that the rest of
+// the tenant should now see. Without this, an admin clicking
+// "approve" in the UI would update the DB but other peers' WG configs
+// would lag until their next Register / Heartbeat poll round-tripped
+// the change.
+func (h *CoordinatorHandler) ApprovePeer(ctx context.Context, peerID uuid.UUID, adminUserID *uuid.UUID) (peer *repo.Peer, changed bool, err error) {
+	rows, err := h.peers.Approve(ctx, peerID, adminUserID)
+	if err != nil {
+		return nil, false, err
+	}
+	updated, err := h.peers.GetByID(ctx, peerID)
+	if err != nil {
+		return nil, false, err
+	}
+	if rows == 0 {
+		// Idempotent path — peer was already approved (or in a
+		// terminal state). No event to publish.
+		return updated, false, nil
+	}
+	h.bus.Publish(updated.TenantID, &bamboov1.WatchPeersEvent{
+		Event: &bamboov1.WatchPeersEvent_PeerAdded{
+			PeerAdded: &bamboov1.PeerAdded{Peer: toProtoPeer(updated)},
+		},
+	})
+	return updated, true, nil
+}
+
+// RejectPeer flips a pending peer into rejected. No bus event fires —
+// the peer was never visible to other peers and shouldn't be on
+// reject. Returns repo.ErrNotFound if the peer doesn't exist; returns
+// (updated, changed=false) when the row was already rejected.
+func (h *CoordinatorHandler) RejectPeer(ctx context.Context, peerID uuid.UUID, adminUserID *uuid.UUID) (peer *repo.Peer, changed bool, err error) {
+	rows, err := h.peers.Reject(ctx, peerID, adminUserID)
+	if err != nil {
+		return nil, false, err
+	}
+	updated, err := h.peers.GetByID(ctx, peerID)
+	if err != nil {
+		return nil, false, err
+	}
+	return updated, rows > 0, nil
+}
+
 // SetRequireAuth flips the handler into prod-mode credential checking.
 // Coordinator-specific because the REST adapter delegates here for
 // peer onboarding; HTTPServer.SetRequireAuth applies the same gate to
@@ -80,7 +132,7 @@ func (h *CoordinatorHandler) Register(ctx context.Context, req *bamboov1.Registe
 		return nil, status.Error(codes.InvalidArgument, "hostname is required")
 	}
 
-	tenant, ownerUserID, err := h.resolveCredential(ctx, req)
+	tenant, ownerUserID, autoApprove, err := h.resolveCredential(ctx, req)
 	if err != nil {
 		return nil, err
 	}
@@ -160,6 +212,15 @@ func (h *CoordinatorHandler) Register(ctx context.Context, req *bamboov1.Registe
 			dnsPtr = &dnsName
 		}
 
+		// Device-approval gating (issue #133). autoApprove came from
+		// the credential path: pre-auth-key.auto_approve=true,
+		// bearer-token admin register, or dev-fallback. Otherwise the
+		// peer lands 'pending' and stays invisible to other peers
+		// until an admin approves via the Web UI / REST API.
+		initialApproval := "pending"
+		if autoApprove {
+			initialApproval = "approved"
+		}
 		self, err = h.peers.Insert(ctx, &repo.Peer{
 			TenantID:           tenant.ID,
 			UserID:             ownerUserID,
@@ -171,13 +232,20 @@ func (h *CoordinatorHandler) Register(ctx context.Context, req *bamboov1.Registe
 			ClientVersion:      req.GetClientVersion(),
 			Status:             "online",
 			Endpoints:          req.GetEndpoints(),
+			ApprovalStatus:     initialApproval,
 		})
 		if err != nil {
 			return nil, status.Errorf(codes.Internal, "peer insert: %v", err)
 		}
-		slog.Info("new peer registered", "peer_id", self.ID, "ip", self.IP, "tenant", tenant.Slug, "dns_name", dnsName)
+		slog.Info("new peer registered",
+			"peer_id", self.ID,
+			"ip", self.IP,
+			"tenant", tenant.Slug,
+			"dns_name", dnsName,
+			"approval_status", self.ApprovalStatus,
+		)
 		isNewPeer = true
-		auditDiff := map[string]any{"hostname": self.Hostname, "ip": self.IP, "os": self.OS}
+		auditDiff := map[string]any{"hostname": self.Hostname, "ip": self.IP, "os": self.OS, "approval_status": self.ApprovalStatus}
 		if dnsName != "" {
 			auditDiff["peer_dns_name"] = dnsName
 		}
@@ -222,8 +290,25 @@ func (h *CoordinatorHandler) Register(ctx context.Context, req *bamboov1.Registe
 			PublicKey: rs.PublicKey,
 		})
 	}
+	// Approval-status visibility filter (issue #133):
+	//   - A pending or rejected peer must not appear in any other
+	//     peer's view of the mesh. We skip them when assembling Peers.
+	//   - A pending registering caller (self) likewise gets an empty
+	//     Peers list — they cannot see other peers until the admin
+	//     approves them. This is symmetric with the previous rule
+	//     above and prevents a half-onboarded device from reading the
+	//     tailnet's membership list. The empty list is fine for the
+	//     client: it will heartbeat + retry Register on its normal
+	//     cadence and pick up the populated list once approved.
+	selfApproved := self.ApprovalStatus == "approved"
 	for _, p := range allPeers {
 		if p.ID == self.ID {
+			continue
+		}
+		if !selfApproved {
+			continue
+		}
+		if p.ApprovalStatus != "approved" {
 			continue
 		}
 		pp := toProtoPeer(p)
@@ -234,7 +319,12 @@ func (h *CoordinatorHandler) Register(ctx context.Context, req *bamboov1.Registe
 	// Publish to other peers in the tenant after the response is built so
 	// that the registering peer does not race against its own Register
 	// response on a concurrent WatchPeers stream.
-	if isNewPeer {
+	//
+	// Suppress the event for a peer that is currently pending — there is
+	// nothing for other peers to see yet. The Approve handler publishes
+	// the PeerAdded when the admin flips the gate. Rejected peers
+	// (re-registering after rejection) likewise produce no event.
+	if isNewPeer && selfApproved {
 		h.bus.Publish(tenant.ID, &bamboov1.WatchPeersEvent{
 			Event: &bamboov1.WatchPeersEvent_PeerAdded{
 				PeerAdded: &bamboov1.PeerAdded{Peer: resp.Self},
@@ -347,12 +437,17 @@ func (h *CoordinatorHandler) SubscribePeer(ctx context.Context, peerIDStr string
 //
 //  1. pre_auth_key_secret credential -> tenant from the key, owner =
 //     the user who minted the key (pre_auth_keys.created_by). Lets us
-//     attribute new peers to a human admin in the Users page.
+//     attribute new peers to a human admin in the Users page. The
+//     redeemed key is returned to the caller so Register can read
+//     auto_approve and pick the new peer's approval_status (issue #133).
 //  2. bearer_token credential -> resolved via the AuthHandler. owner
 //     = nil today; will become the bearer's user when bearer tokens
-//     learn user-scoped identity.
+//     learn user-scoped identity. autoApprove returns true because
+//     a verified user-session token already establishes admin trust.
 //  3. x-tenant-slug metadata fallback (dev convenience only — rejected
-//     in prod mode where requireAuth=true). owner = nil.
+//     in prod mode where requireAuth=true). owner = nil and
+//     autoApprove returns true because there's no admin context to
+//     queue against; dev tooling expects immediate visibility.
 //
 // The prod-mode rejection is the gate the project-understanding doc
 // Finding #1 calls for: a caller that knows a tenant slug should not
@@ -361,34 +456,41 @@ func (h *CoordinatorHandler) SubscribePeer(ctx context.Context, peerIDStr string
 // onboarding credential) or a bearer/session token issued by the
 // controller. The REST adapter has its own corresponding check; this
 // path covers gRPC Register.
-func (h *CoordinatorHandler) resolveCredential(ctx context.Context, req *bamboov1.RegisterRequest) (*repo.Tenant, *uuid.UUID, error) {
+func (h *CoordinatorHandler) resolveCredential(ctx context.Context, req *bamboov1.RegisterRequest) (tenant *repo.Tenant, ownerUserID *uuid.UUID, autoApprove bool, err error) {
 	if secret := req.GetPreAuthKeySecret(); secret != "" {
 		key, err := h.auth.redeemAndReturnKey(ctx, secret)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, false, err
 		}
 		t, err := h.tenants.GetByID(ctx, key.TenantID)
 		if err != nil {
-			return nil, nil, status.Errorf(codes.Internal, "tenant by id: %v", err)
+			return nil, nil, false, status.Errorf(codes.Internal, "tenant by id: %v", err)
 		}
-		return t, key.CreatedBy, nil
+		return t, key.CreatedBy, key.AutoApprove, nil
 	}
 
 	if token := req.GetBearerToken(); token != "" {
 		t, err := h.auth.resolveBearerToken(ctx, token)
-		return t, nil, err
+		// Bearer-token register implies an authenticated admin context —
+		// auto-approve so a human signing into the Web UI to add their
+		// own laptop doesn't have to click "approve" on their own
+		// device.
+		return t, nil, true, err
 	}
 
 	if h.requireAuth {
-		return nil, nil, status.Error(codes.PermissionDenied, "Register requires a pre-auth key or bearer credential when require_auth is enabled")
+		return nil, nil, false, status.Error(codes.PermissionDenied, "Register requires a pre-auth key or bearer credential when require_auth is enabled")
 	}
 
 	slug := tenantSlugFromMetadata(ctx)
-	t, err := h.tenants.GetOrCreate(ctx, slug, "Default Tenant", "100.64.0.0/24")
-	if err != nil {
-		return nil, nil, status.Errorf(codes.Internal, "tenant resolve: %v", err)
+	t, terr := h.tenants.GetOrCreate(ctx, slug, "Default Tenant", "100.64.0.0/24")
+	if terr != nil {
+		return nil, nil, false, status.Errorf(codes.Internal, "tenant resolve: %v", terr)
 	}
-	return t, nil, nil
+	// Dev-fallback path: no admin context, auto-approve so make
+	// local-up + make local-bootstrap keep working without a manual
+	// approval click in the middle.
+	return t, nil, true, nil
 }
 
 // tenantSlugFromMetadata extracts the tenant slug from gRPC metadata.
@@ -479,6 +581,7 @@ func toProtoPeer(p *repo.Peer) *bamboov1.Peer {
 		ClientVersion:      p.ClientVersion,
 		Endpoints:          endpoints,
 		CreatedAt:          timestamppb.New(p.CreatedAt),
+		ApprovalStatus:     p.ApprovalStatus,
 	}
 	if p.PeerDNSName != nil {
 		out.PeerDnsName = *p.PeerDNSName

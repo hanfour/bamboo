@@ -69,6 +69,12 @@ type peerJSON struct {
 	// pair. omitempty so dev-fallback responses (no policy authored)
 	// match the pre-enforcement wire format.
 	AllowedIps []string `json:"allowedIps,omitempty"`
+	// ApprovalStatus mirrors the proto Peer.approval_status (issue
+	// #133). One of "pending" / "approved" / "rejected". On the
+	// Register response: clients can read self.ApprovalStatus to
+	// learn if they are queued. Empty in legacy responses pre-#133;
+	// clients should treat empty as approved for back-compat.
+	ApprovalStatus string `json:"approvalStatus,omitempty"`
 }
 
 type peerRegisterResponse struct {
@@ -388,6 +394,7 @@ func protoPeerToJSON(p *bamboov1.Peer) peerJSON {
 		Endpoints:          p.GetEndpoints(),
 		PeerDNSName:        p.GetPeerDnsName(),
 		AllowedIps:         p.GetAllowedIps(),
+		ApprovalStatus:     p.GetApprovalStatus(),
 	}
 }
 

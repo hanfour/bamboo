@@ -29,6 +29,11 @@ type PreAuthKey struct {
 	Tags        []string
 	Reusable    bool
 	Ephemeral   bool
+	// AutoApprove, when true, makes peers registered with this key
+	// skip the device-approval queue (issue #133). Defaults to false
+	// so manual approval is the safer baseline; CI / kiosk workflows
+	// opt in explicitly when minting the key.
+	AutoApprove bool
 	CreatedBy   *uuid.UUID
 	CreatedAt   time.Time
 	ExpiresAt   *time.Time
@@ -50,15 +55,15 @@ func (r *PreAuthKeys) Create(ctx context.Context, k *PreAuthKey) (*PreAuthKey, e
 	err := r.pool.QueryRow(ctx, `
 		INSERT INTO pre_auth_keys (
 		    id, tenant_id, description, secret_hash, tags, reusable, ephemeral,
-		    created_by, expires_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		    auto_approve, created_by, expires_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 		RETURNING id, tenant_id, description, secret_hash, tags, reusable, ephemeral,
-		          created_by, created_at, expires_at, revoked_at, use_count
+		          auto_approve, created_by, created_at, expires_at, revoked_at, use_count
 	`, k.ID, k.TenantID, k.Description, k.SecretHash, tags, k.Reusable, k.Ephemeral,
-		k.CreatedBy, k.ExpiresAt).Scan(
+		k.AutoApprove, k.CreatedBy, k.ExpiresAt).Scan(
 		&out.ID, &out.TenantID, &out.Description, &out.SecretHash, &out.Tags,
 		&out.Reusable, &out.Ephemeral,
-		&out.CreatedBy, &out.CreatedAt, &out.ExpiresAt, &out.RevokedAt, &out.UseCount,
+		&out.AutoApprove, &out.CreatedBy, &out.CreatedAt, &out.ExpiresAt, &out.RevokedAt, &out.UseCount,
 	)
 	if err != nil {
 		return nil, err
@@ -72,13 +77,13 @@ func (r *PreAuthKeys) GetByID(ctx context.Context, id uuid.UUID) (*PreAuthKey, e
 	var k PreAuthKey
 	err := r.pool.QueryRow(ctx, `
 		SELECT id, tenant_id, description, secret_hash, tags, reusable, ephemeral,
-		       created_by, created_at, expires_at, revoked_at, use_count
+		       auto_approve, created_by, created_at, expires_at, revoked_at, use_count
 		FROM pre_auth_keys
 		WHERE id = $1
 	`, id).Scan(
 		&k.ID, &k.TenantID, &k.Description, &k.SecretHash, &k.Tags,
 		&k.Reusable, &k.Ephemeral,
-		&k.CreatedBy, &k.CreatedAt, &k.ExpiresAt, &k.RevokedAt, &k.UseCount,
+		&k.AutoApprove, &k.CreatedBy, &k.CreatedAt, &k.ExpiresAt, &k.RevokedAt, &k.UseCount,
 	)
 	if err != nil {
 		return nil, asNotFound(err)
@@ -102,7 +107,7 @@ func (r *PreAuthKeys) MarkRedeemed(ctx context.Context, id uuid.UUID) error {
 func (r *PreAuthKeys) ListByTenant(ctx context.Context, tenantID uuid.UUID) ([]*PreAuthKey, error) {
 	rows, err := r.pool.Query(ctx, `
 		SELECT id, tenant_id, description, secret_hash, tags, reusable, ephemeral,
-		       created_by, created_at, expires_at, revoked_at, use_count
+		       auto_approve, created_by, created_at, expires_at, revoked_at, use_count
 		FROM pre_auth_keys
 		WHERE tenant_id = $1
 		ORDER BY created_at DESC
@@ -118,7 +123,7 @@ func (r *PreAuthKeys) ListByTenant(ctx context.Context, tenantID uuid.UUID) ([]*
 		if err := rows.Scan(
 			&k.ID, &k.TenantID, &k.Description, &k.SecretHash, &k.Tags,
 			&k.Reusable, &k.Ephemeral,
-			&k.CreatedBy, &k.CreatedAt, &k.ExpiresAt, &k.RevokedAt, &k.UseCount,
+			&k.AutoApprove, &k.CreatedBy, &k.CreatedAt, &k.ExpiresAt, &k.RevokedAt, &k.UseCount,
 		); err != nil {
 			return nil, err
 		}

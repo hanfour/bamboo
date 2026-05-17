@@ -64,6 +64,8 @@
       "descriptionPlaceholder": "e.g. Han's iPhone",
       "reusableLabel": "Reusable key",
       "reusableHint": "Default: one-time. Reusable keys can connect multiple devices and are useful for bulk-rollout but harder to rotate.",
+      "autoApproveLabel": "Auto-approve",
+      "autoApproveHint": "Default: off — every first-time device lands in the admin Pending queue. Tick this for CI / kiosk fleets that should skip the manual approval click.",
       "submit": "Mint key",
       "cancel": "Cancel",
       "working": "Minting…",
@@ -81,6 +83,15 @@
       "copy": "Copy",
       "copied": "Copied",
       "done": "Done"
+    },
+    "pending": {
+      "title": "{count, plural, one {# pending device} other {# pending devices}}",
+      "subtitle": "Admin must approve before they join the mesh",
+      "approve": "Approve",
+      "reject": "Reject",
+      "working": "Working…",
+      "requestedBy": "from {actor}",
+      "registered": "registered {when}"
     },
     "search": "Search hostname or tag",
     "columns": {

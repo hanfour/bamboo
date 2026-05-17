@@ -44,6 +44,23 @@ export type Peer = {
   // attribution available at register time).
   ownerEmail?: string;
   ownerDisplayName?: string;
+  // approvalStatus is the device-approval lifecycle gate (issue
+  // #133). One of:
+  //   'pending'  — registered but not yet admin-approved. Hidden
+  //                from other peers' mesh views; appears at the top
+  //                of /peers in the admin-only PendingPeersList.
+  //   'approved' — admin acted (or pre-auth-key carried
+  //                auto_approve, or dev-fallback). Visible to other
+  //                peers, participates in the mesh.
+  //   'rejected' — admin denied. Retained for audit, pubkey unusable.
+  // Defaults to 'approved' for legacy peers backfilled by migration
+  // 00009 — clients should treat absent as 'approved' for back-
+  // compat with pre-#133 controllers.
+  approvalStatus: 'pending' | 'approved' | 'rejected';
+  // approvedAt is the timestamp the admin (or auto-approve path)
+  // flipped the gate. Backfilled to createdAt for legacy rows so
+  // the UI timeline column stays coherent.
+  approvedAt?: string;
 };
 
 // FetchResult is a discriminated union for read paths so the UI can
@@ -81,6 +98,10 @@ export type PreAuthKey = {
   description?: string;
   reusable: boolean;
   ephemeral: boolean;
+  // autoApprove, when true, makes peers minted with this key skip
+  // the device-approval queue (issue #133). Defaults to false so
+  // manual approval is the safer baseline.
+  autoApprove: boolean;
   tags: string[];
   createdAt: string;
   expiresAt?: string;
