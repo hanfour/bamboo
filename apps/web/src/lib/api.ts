@@ -43,6 +43,11 @@ type ApiPeer = {
   id: string;
   tenantId: string;
   hostname: string;
+  // Controller serializes the column as `peerDnsName`. Absent
+  // (undefined) when the peer row's value is NULL — legacy rows
+  // that haven't re-registered since the column landed in
+  // migration 00008.
+  peerDnsName?: string | null;
   ip: string;
   tags: string[];
   os: string;
@@ -65,6 +70,10 @@ function apiPeerToPeer(p: ApiPeer): Peer {
     id: p.id,
     tenantId: p.tenantId,
     hostname: p.hostname,
+    // Normalize null → undefined so the Peer shape has a single
+    // "absent" representation for downstream React code; otherwise
+    // every check would need `peer.peerDnsName != null`.
+    peerDnsName: p.peerDnsName ?? undefined,
     ip: p.ip,
     tags: p.tags ?? [],
     os: p.os,

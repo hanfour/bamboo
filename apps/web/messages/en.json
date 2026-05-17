@@ -28,6 +28,7 @@
   },
   "dashboard": {
     "title": "Overview",
+    "subtitle": "Peers, policy, and recent activity across your tailnet.",
     "totalPeers": "Total peers",
     "online": "Online",
     "offline": "Offline",
@@ -51,6 +52,8 @@
   },
   "peers": {
     "title": "Peers",
+    "titleAccent": "fleet",
+    "subtitle": "Every device on your tailnet and its MagicDNS name.",
     "addPeer": "Add peer",
     "newPeer": {
       "button": "Add peer",
@@ -82,6 +85,7 @@
     "search": "Search hostname or tag",
     "columns": {
       "hostname": "Hostname",
+      "dnsName": "DNS name",
       "ip": "IP",
       "owner": "Owner",
       "tags": "Tags",
@@ -111,6 +115,7 @@
       },
       "fields": {
         "hostname": "Hostname",
+        "dnsName": "DNS name",
         "ip": "IP",
         "owner": "Owner",
         "os": "OS",
@@ -138,6 +143,9 @@
         "cancel": "Cancel",
         "working": "Working…",
         "editHostname": "Edit hostname",
+        "editDnsName": "Edit DNS name",
+        "dnsNamePlaceholder": "e.g. mac-mini",
+        "dnsNameUnset": "Not set",
         "editTags": "Edit tags",
         "tagsPlaceholder": "Comma-separated, e.g. db, prod"
       },
@@ -291,6 +299,13 @@
   },
   "dns": {
     "title": "DNS",
+    "titleAccent": "resolution",
+    "empty": {
+      "title": "MagicDNS not configured yet",
+      "body": "Once enabled, peers can resolve each other by short hostname — e.g. mac-mini.bamboo → 100.64.0.1, no memorizing IPs. The controller auto-derives a DNS-safe label from each peer's hostname on register (migration 00008 onwards).",
+      "example": "dig +short mac-mini.bamboo  →  100.64.0.1",
+      "note": "Controller-side PUT/PATCH for DNS config isn't wired in this release. Register a new peer to seed the row, or wait for the upcoming Web settings UI."
+    },
     "subtitle": "Manage tenant DNS settings. This view is read-only; updates to MagicDNS and nameservers happen via the controller API today.",
     "tenantSection": "Tailnet",
     "tenantName": "Tailnet name",

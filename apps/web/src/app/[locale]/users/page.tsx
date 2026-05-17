@@ -15,50 +15,50 @@ import type { Invitation, User } from '@/lib/types';
 // we degrade gracefully by passing an empty list rather than blocking
 // the working section.
 export default async function UsersPage() {
-  const [users, invitations] = await Promise.all([fetchUsers(), fetchInvitations()]);
-  if (users.kind !== 'ok') {
-    return <FetchErrorState kind={users.kind} />;
-  }
-  return (
-    <UsersView
-      users={users.value}
-      invitations={invitations.kind === 'ok' ? invitations.value : []}
-    />
-  );
+ const [users, invitations] = await Promise.all([fetchUsers(), fetchInvitations()]);
+ if (users.kind !== 'ok') {
+ return <FetchErrorState kind={users.kind} />;
+ }
+ return (
+ <UsersView
+ users={users.value}
+ invitations={invitations.kind === 'ok' ? invitations.value : []}
+ />
+ );
 }
 
 function UsersView({
-  users,
-  invitations,
+ users,
+ invitations,
 }: {
-  users: User[];
-  invitations: Invitation[];
+ users: User[];
+ invitations: Invitation[];
 }) {
-  const t = useTranslations('users');
-  return (
-    <div className="space-y-8">
-      <header className="flex items-start justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">{t('title')}</h1>
-          <p className="mt-1 max-w-2xl text-sm text-zinc-600 dark:text-zinc-400">
-            {t('subtitle')}
-          </p>
-        </div>
-        <div className="shrink-0">
-          <InviteUserButton />
-        </div>
-      </header>
+ const t = useTranslations('users');
+ return (
+ <div className="space-y-8">
+ <header className="flex items-start justify-between gap-4">
+ <div>
+ <h1 className="text-2xl font-semibold tracking-tight">{t('title')}</h1>
+ <p className="mt-1 max-w-2xl text-sm text-bamboo-200/70">
+ {t('subtitle')}
+ </p>
+ </div>
+ <div className="shrink-0">
+ <InviteUserButton />
+ </div>
+ </header>
 
-      <section className="space-y-3">
-        <UsersTable users={users} />
-      </section>
+ <section className="space-y-3">
+ <UsersTable users={users} />
+ </section>
 
-      <section className="space-y-3">
-        <h2 className="text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
-          {t('invitations.title')}
-        </h2>
-        <InvitationsTable invitations={invitations} />
-      </section>
-    </div>
-  );
+ <section className="space-y-3">
+ <h2 className="text-xs font-medium uppercase tracking-wide text-bamboo-200/60">
+ {t('invitations.title')}
+ </h2>
+ <InvitationsTable invitations={invitations} />
+ </section>
+ </div>
+ );
 }

@@ -2,28 +2,35 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Warm-dark theme committed 2026-05-17. The site renders ink-950
+ * background + bamboo-50 foreground at all times — `<html>` in
+ * src/app/[locale]/layout.tsx always carries the `dark` class.
+ * Light mode is intentionally absent for now; brand voice
+ * follows Linear's dark-first app rather than Tailscale's
+ * cream-bright marketing palette.
+ *
+ * Body sans is Sora (humanist geometric, light weights ready);
+ * italic emphasis on key nouns reaches for Lora via the
+ * `font-serif italic` utilities. Both fonts wire through
+ * next/font in layout.tsx → CSS variables consumed here. */
+
 :root {
-  --font-sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
-    'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Sans', sans-serif,
-    'Apple Color Emoji', 'Segoe UI Emoji';
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
     'Liberation Mono', 'Courier New', monospace;
 }
 
 html,
 body {
-  /* Page bg is white. The bamboo-* taupe stops still ship in the
-   * Tailwind config and continue to drive state-accent surfaces
-   * (active nav pill = bamboo-100 cream pill on white, status dots,
-   * selected row stripe, peer.update "to" diff badge) — but the
-   * page-level 70% surface is white now. The earlier cream page bg
-   * was rolled back at the user's request; the wabi-sabi accents
-   * still read against white because bamboo-100 (#F3EFE0) is just
-   * different enough from white to mark the pill. */
-  @apply bg-white text-zinc-900;
+  /* ink-950 is the warm-dark page surface; bamboo-50 is the
+   * cream foreground. Tailwind's `dark:` variants light up
+   * across the tree because <html> carries the `dark` class. */
+  @apply bg-ink-950 text-bamboo-50;
 }
 
-/* Dark-mode bg pairs are kept as opt-in via the `dark` class on
- * <html> (see tailwind.config.ts darkMode: 'class'). Without that
- * class set, dark: utility variants never apply, so OS/DevTools
- * prefers-color-scheme can't accidentally flip the page. */
+/* Hairlines on dark surfaces. ink-700 is the standard divider
+ * weight; ink-800 reads as a softer rule when adjacent rows
+ * already share an ink-900 fill. */
+hr,
+.divide-default > * + * {
+  @apply border-ink-700;
+}

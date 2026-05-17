@@ -28,6 +28,7 @@
   },
   "dashboard": {
     "title": "總覽",
+    "subtitle": "你網路裡的節點、政策與最近活動。",
     "totalPeers": "節點總數",
     "online": "在線",
     "offline": "離線",
@@ -51,6 +52,8 @@
   },
   "peers": {
     "title": "節點",
+    "titleAccent": "fleet",
+    "subtitle": "你網路內的所有裝置與其 MagicDNS 名稱。",
     "addPeer": "新增節點",
     "newPeer": {
       "button": "新增節點",
@@ -82,6 +85,7 @@
     "search": "搜尋主機名稱或標籤",
     "columns": {
       "hostname": "主機名稱",
+      "dnsName": "DNS 名稱",
       "ip": "IP",
       "owner": "擁有者",
       "tags": "標籤",
@@ -111,6 +115,7 @@
       },
       "fields": {
         "hostname": "主機名稱",
+        "dnsName": "DNS 名稱",
         "ip": "IP",
         "owner": "擁有者",
         "os": "作業系統",
@@ -138,6 +143,9 @@
         "cancel": "取消",
         "working": "處理中…",
         "editHostname": "編輯主機名稱",
+        "editDnsName": "編輯 DNS 名稱",
+        "dnsNamePlaceholder": "例如 mac-mini",
+        "dnsNameUnset": "尚未設定",
         "editTags": "編輯標籤",
         "tagsPlaceholder": "以逗號分隔，例如 db, prod"
       },
@@ -291,7 +299,14 @@
   },
   "dns": {
     "title": "DNS",
-    "subtitle": "管理租戶的 DNS 設定。目前為唯讀檢視；MagicDNS 與 nameserver 更新需透過 controller API 寫入。",
+    "titleAccent": "resolution",
+    "subtitle": "租戶的 DNS 設定。目前為唯讀檢視。",
+    "empty": {
+      "title": "MagicDNS 尚未設定",
+      "body": "啟用 MagicDNS 後，租戶內的節點可以用短主機名互相連線——例如 mac-mini.bamboo 直達 100.64.0.1，不必背 IP。控制器會自動依 hostname 派生 DNS 名稱（migration 00008 之後產生）。",
+      "example": "dig +short mac-mini.bamboo  →  100.64.0.1",
+      "note": "目前 controller 端的 PUT/PATCH 寫入端點尚未實作；可透過註冊新 peer 觸發初次寫入，或於下一輪 Web 設定 UI 上線後直接編輯。"
+    },
     "tenantSection": "Tailnet",
     "tenantName": "Tailnet 名稱",
     "magicDnsSection": "MagicDNS",

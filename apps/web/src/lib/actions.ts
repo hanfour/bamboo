@@ -80,6 +80,22 @@ export async function setPeerTagsAction(id: string, tags: string[]): Promise<Act
   return patchPeer(id, { tags });
 }
 
+// renamePeerDnsNameAction updates the MagicDNS label. Server-side
+// validation: the controller's PATCH handler enforces strict slug
+// rules ([a-z0-9-], no leading/trailing dash, ≤63 chars) and
+// returns 409 on collision within the tenant. Pass an empty string
+// to clear the column (peer becomes unresolvable until the next
+// register auto-slugifies again).
+export async function renamePeerDnsNameAction(
+  id: string,
+  dnsName: string,
+): Promise<ActionResult> {
+  // Don't trim or lowercase here — the controller does the strict
+  // validation we want to surface to the user. Trimming silently
+  // would mask a leading-space typo before the server sees it.
+  return patchPeer(id, { dnsName });
+}
+
 // mintPreAuthKeyAction creates a one-time-use (or reusable) pre-
 // auth key and returns the plaintext secret. The secret is only
 // available in this response — the controller hashes it before
