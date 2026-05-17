@@ -89,13 +89,38 @@ func (h *HTTPServer) routeAPI(w http.ResponseWriter, r *http.Request) {
 	// exact-matched in the early switch above and never reach this
 	// prefix check.
 	if rest, ok := strings.CutPrefix(r.URL.Path, "/api/v1/peers/"); ok && rest != "" {
-		// "{id}/events" — the only two-segment shape supported.
+		// "{id}/events" — peer activity timeline.
 		if id, found := strings.CutSuffix(rest, "/events"); found && id != "" && !strings.Contains(id, "/") {
 			if r.Method != http.MethodGet {
 				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 				return
 			}
 			h.apiPeerEvents(w, r, tenant, id)
+			return
+		}
+		// "{id}/approve" — admin gates a pending peer into the mesh
+		// (issue #133). POST-only; requireAdmin is enforced inside the
+		// handler. Idempotent: re-approving an already-approved peer
+		// returns 200 with a noop indicator so the Web UI can refresh
+		// without bouncing on race conditions.
+		if id, found := strings.CutSuffix(rest, "/approve"); found && id != "" && !strings.Contains(id, "/") {
+			if r.Method != http.MethodPost {
+				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+				return
+			}
+			h.apiPeerApprove(w, r, authn, tenant, id)
+			return
+		}
+		// "{id}/reject" — admin rejects a pending peer registration
+		// (issue #133). POST-only; same admin gate as /approve. The
+		// peer row is retained for audit but its approval_status
+		// flips to 'rejected' and it never participates in the mesh.
+		if id, found := strings.CutSuffix(rest, "/reject"); found && id != "" && !strings.Contains(id, "/") {
+			if r.Method != http.MethodPost {
+				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+				return
+			}
+			h.apiPeerReject(w, r, authn, tenant, id)
 			return
 		}
 		// "{id}" — single peer GET/PATCH/DELETE.
@@ -474,6 +499,14 @@ type apiPeerJSON struct {
 	// pre-auth keys minted without a session) carry no owner.
 	OwnerEmail       string `json:"ownerEmail,omitempty"`
 	OwnerDisplayName string `json:"ownerDisplayName,omitempty"`
+	// ApprovalStatus is one of pending / approved / rejected (issue
+	// #133). The Web UI separates pending rows into their own section
+	// at the top of the peers page so admins can act on them.
+	// approvedAt + approvedBy are present when an admin acted on the
+	// row; pre-#133 peers carry approvedAt=createdAt and approvedBy=nil.
+	ApprovalStatus  string     `json:"approvalStatus"`
+	ApprovedAt      *time.Time `json:"approvedAt,omitempty"`
+	ApprovedByEmail string     `json:"approvedByEmail,omitempty"`
 }
 
 func peerToJSON(p *repo.Peer) apiPeerJSON {
@@ -505,6 +538,14 @@ func peerToJSON(p *repo.Peer) apiPeerJSON {
 		LastHandshakeAt:    p.LastHandshakeAt,
 		OwnerEmail:         p.OwnerEmail,
 		OwnerDisplayName:   p.OwnerDisplayName,
+		ApprovalStatus:     p.ApprovalStatus,
+		ApprovedAt:         p.ApprovedAt,
+		// ApprovedByEmail intentionally left empty here — the
+		// admin's email lives on users, and we don't LEFT JOIN
+		// twice in the peer queries. The pending-list UI doesn't
+		// need it (no admin has acted yet by definition); the
+		// approved-peer UI shows the originally-approving admin
+		// only if a future query joins users a second time.
 	}
 }
 
@@ -727,6 +768,116 @@ func (h *HTTPServer) apiPeerPatch(w http.ResponseWriter, r *http.Request, authn 
 // success would let an outside caller distinguish "exists in
 // another tenant" from "doesn't exist anywhere" and probe
 // existence across tenants.
+// apiPeerApprove implements POST /api/v1/peers/{id}/approve (issue #133).
+//
+// Admin-only. Idempotent: re-approving an already-approved peer
+// returns the same shape with `changed:false`. Rejecting an already-
+// rejected peer is handled by apiPeerReject below — flipping rejected
+// → approved is intentionally not supported here (the audit trail
+// gets confusing if we let an admin un-reject through this endpoint;
+// the workaround is to delete + re-register).
+func (h *HTTPServer) apiPeerApprove(w http.ResponseWriter, r *http.Request, authn *authnContext, tenant *repo.Tenant, idStr string) {
+	if !h.requireAdmin(w, r, authn, tenant, "peer.approve") {
+		return
+	}
+	id, err := uuid.Parse(idStr)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	current, err := h.peers.GetByID(r.Context(), id)
+	if errors.Is(err, repo.ErrNotFound) {
+		http.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if current.TenantID != tenant.ID {
+		http.NotFound(w, r)
+		return
+	}
+	// Pre-condition: can only approve from 'pending'. Approve()
+	// returns rows=0 for already-approved (success, no event); but a
+	// 'rejected' row should refuse explicitly so the admin sees a
+	// clean 409 instead of silent no-op.
+	if current.ApprovalStatus == "rejected" {
+		writeError(w, http.StatusConflict, errors.New("peer is rejected; delete + re-register instead of un-rejecting"))
+		return
+	}
+	updated, changed, err := h.coord.ApprovePeer(r.Context(), id, mustAdminUserID(authn))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("approve peer: %w", err))
+		return
+	}
+	if changed {
+		writePeerAudit(r.Context(), h.audits, authn, tenant.ID, id, "peer.approve", map[string]any{
+			"hostname":           updated.Hostname,
+			"approval_status":    map[string]any{"from": "pending", "to": "approved"},
+		})
+	}
+	writeJSON(w, http.StatusOK, peerToJSON(updated))
+}
+
+// apiPeerReject implements POST /api/v1/peers/{id}/reject (issue #133).
+//
+// Admin-only. Sibling of apiPeerApprove: same shape, opposite
+// outcome. Rejected peers are NOT deleted — the row is retained so
+// the audit timeline has somewhere to land. Admin can follow up with
+// DELETE /api/v1/peers/{id} to free the pubkey for re-registration.
+func (h *HTTPServer) apiPeerReject(w http.ResponseWriter, r *http.Request, authn *authnContext, tenant *repo.Tenant, idStr string) {
+	if !h.requireAdmin(w, r, authn, tenant, "peer.reject") {
+		return
+	}
+	id, err := uuid.Parse(idStr)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	current, err := h.peers.GetByID(r.Context(), id)
+	if errors.Is(err, repo.ErrNotFound) {
+		http.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if current.TenantID != tenant.ID {
+		http.NotFound(w, r)
+		return
+	}
+	if current.ApprovalStatus == "approved" {
+		writeError(w, http.StatusConflict, errors.New("peer is already approved; use DELETE to remove it"))
+		return
+	}
+	updated, changed, err := h.coord.RejectPeer(r.Context(), id, mustAdminUserID(authn))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("reject peer: %w", err))
+		return
+	}
+	if changed {
+		writePeerAudit(r.Context(), h.audits, authn, tenant.ID, id, "peer.reject", map[string]any{
+			"hostname":        updated.Hostname,
+			"approval_status": map[string]any{"from": "pending", "to": "rejected"},
+		})
+	}
+	writeJSON(w, http.StatusOK, peerToJSON(updated))
+}
+
+// mustAdminUserID extracts the JWT user ID for the admin who is
+// driving an approve / reject action. The caller has already passed
+// requireAdmin so authn.claims is guaranteed non-nil — but we still
+// fall back to uuid.Nil rather than panicking, since a panic in the
+// REST hot path is worse than an attributed-to-zero audit row.
+func mustAdminUserID(authn *authnContext) uuid.UUID {
+	if authn == nil || authn.claims == nil {
+		return uuid.Nil
+	}
+	return authn.claims.UserID
+}
+
 func (h *HTTPServer) apiPeerDelete(w http.ResponseWriter, r *http.Request, authn *authnContext, tenant *repo.Tenant, idStr string) {
 	if !h.requireAdmin(w, r, authn, tenant, "peer.delete") {
 		return
@@ -953,6 +1104,12 @@ type apiCreatePreAuthKeyReq struct {
 	Description string `json:"description,omitempty"`
 	Reusable    bool   `json:"reusable,omitempty"`
 	Ephemeral   bool   `json:"ephemeral,omitempty"`
+	// AutoApprove opts the minted key out of the device-approval
+	// queue (issue #133). Defaults false so the safer manual-approval
+	// path is the path of least resistance; CI / kiosk admins flip
+	// this to true when they want fleets of identical runners to
+	// onboard without per-device clicks.
+	AutoApprove bool `json:"autoApprove,omitempty"`
 }
 
 // apiPreAuthKeyJSON is the response shape. Secret is the plaintext
@@ -963,6 +1120,7 @@ type apiPreAuthKeyJSON struct {
 	Description string    `json:"description,omitempty"`
 	Reusable    bool      `json:"reusable"`
 	Ephemeral   bool      `json:"ephemeral"`
+	AutoApprove bool      `json:"autoApprove"`
 	CreatedAt   time.Time `json:"createdAt"`
 	Secret      string    `json:"secret"`
 }
@@ -998,6 +1156,7 @@ func (h *HTTPServer) apiCreatePreAuthKey(w http.ResponseWriter, r *http.Request,
 		SecretHash:  hash,
 		Reusable:    req.Reusable,
 		Ephemeral:   req.Ephemeral,
+		AutoApprove: req.AutoApprove,
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Errorf("insert key: %w", err))
@@ -1013,9 +1172,10 @@ func (h *HTTPServer) apiCreatePreAuthKey(w http.ResponseWriter, r *http.Request,
 		ResourceType: "pre_auth_key",
 		ResourceID:   &created.ID,
 		Diff: marshalDiff(map[string]any{
-			"description": created.Description,
-			"reusable":    created.Reusable,
-			"ephemeral":   created.Ephemeral,
+			"description":  created.Description,
+			"reusable":     created.Reusable,
+			"ephemeral":    created.Ephemeral,
+			"auto_approve": created.AutoApprove,
 		}),
 	}
 	if authn != nil && authn.claims != nil {
@@ -1034,6 +1194,7 @@ func (h *HTTPServer) apiCreatePreAuthKey(w http.ResponseWriter, r *http.Request,
 		Description: created.Description,
 		Reusable:    created.Reusable,
 		Ephemeral:   created.Ephemeral,
+		AutoApprove: created.AutoApprove,
 		CreatedAt:   created.CreatedAt,
 		Secret:      plaintext,
 	})
@@ -1082,6 +1243,7 @@ type apiPreAuthKeyListJSON struct {
 	Description string     `json:"description,omitempty"`
 	Reusable    bool       `json:"reusable"`
 	Ephemeral   bool       `json:"ephemeral"`
+	AutoApprove bool       `json:"autoApprove"`
 	Tags        []string   `json:"tags"`
 	CreatedAt   time.Time  `json:"createdAt"`
 	ExpiresAt   *time.Time `json:"expiresAt,omitempty"`
@@ -1099,6 +1261,7 @@ func preAuthKeyToListJSON(k *repo.PreAuthKey) apiPreAuthKeyListJSON {
 		Description: k.Description,
 		Reusable:    k.Reusable,
 		Ephemeral:   k.Ephemeral,
+		AutoApprove: k.AutoApprove,
 		Tags:        tags,
 		CreatedAt:   k.CreatedAt,
 		ExpiresAt:   k.ExpiresAt,

@@ -63,6 +63,15 @@ message Peer {
   // before MagicDNS landed; the coordinator auto-slugifies the
   // hostname on the next register to backfill.
   string peer_dns_name = 15;
+  // approval_status is the device-approval lifecycle gate (issue
+  // #133). One of "pending", "approved", "rejected". Pending peers
+  // appear in the Register response (so the client knows it is
+  // queued) but never appear in OTHER peers' Register / WatchPeers
+  // responses until an admin approves. Rejected peers reach a
+  // terminal state; their pubkey is unusable until an admin deletes
+  // the row. Empty in legacy responses pre-#133 — clients should
+  // treat empty as "approved" for backward compatibility.
+  string approval_status = 16;
 }
 
 message RegisterRequest {

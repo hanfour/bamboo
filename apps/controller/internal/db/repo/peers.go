@@ -82,28 +82,77 @@ type Peer struct {
 	// identified by peer.user_id. Empty when peer.user_id is NULL.
 	OwnerEmail       string
 	OwnerDisplayName string
+
+	// ApprovalStatus is the device-approval lifecycle state. Distinct
+	// from Status (which represents data-plane liveness).
+	//   pending  — first-time register via a manual-approval pre-auth-
+	//              key; not yet visible to other peers in the mesh.
+	//   approved — admin has approved (or the key carried
+	//              auto_approve=true / dev-fallback / bearer admin
+	//              register implicitly approves). The peer participates
+	//              in the mesh.
+	//   rejected — admin denied the registration. Peer row is retained
+	//              for audit but the row's pubkey is unusable.
+	// Migration 00009 adds the column with a backfill that marks every
+	// existing peer 'approved' so the rollout is non-breaking. New
+	// peers default 'pending'.
+	ApprovalStatus string
+	// ApprovedAt is set when ApprovalStatus transitions to approved or
+	// rejected. NULL for never-acted-upon pending rows. Backfilled to
+	// the row's created_at by the 00009 migration for legacy peers so
+	// the timeline column still renders coherently in the UI.
+	ApprovedAt *time.Time
+	// ApprovedByUserID is the admin who acted. NULL for legacy backfill
+	// rows + for peers that landed 'approved' via auto_approve=true or
+	// require_auth=false dev-fallback (no human admin to attribute).
+	ApprovedByUserID *uuid.UUID
 }
 
 // Insert creates a new peer. Returns the persisted row.
+//
+// ApprovalStatus is required: "pending" for the manual-approval path
+// or "approved" for the auto-approve / dev-fallback / admin-bearer
+// paths. Callers should not pass empty strings — Insert defaults to
+// 'pending' as a defensive last resort but a missing value here
+// almost always indicates a bug in the credential-resolution path.
 func (r *Peers) Insert(ctx context.Context, p *Peer) (*Peer, error) {
 	var out Peer
 	endpoints := p.Endpoints
 	if endpoints == nil {
 		endpoints = []string{}
 	}
+	approval := p.ApprovalStatus
+	if approval == "" {
+		approval = "pending"
+	}
+	// approvedAt: set to now() iff the row is being created in the
+	// approved state, so the audit timeline ("approved at …") has a
+	// real timestamp even when no admin action was needed. Rejected
+	// peers cannot be created via Insert — they only reach that state
+	// via Reject().
+	var approvedAt any
+	if approval == "approved" {
+		approvedAt = time.Now().UTC()
+	}
 	err := r.pool.QueryRow(ctx, `
 		INSERT INTO peers (
-		    tenant_id, user_id, hostname, peer_dns_name, wireguard_public_key, ip, os, client_version, status, endpoints
-		) VALUES ($1, $2, $3, $4, $5, $6::inet, $7, $8, $9, $10)
+		    tenant_id, user_id, hostname, peer_dns_name, wireguard_public_key,
+		    ip, os, client_version, status, endpoints,
+		    approval_status, approved_at, approved_by_user_id
+		) VALUES ($1, $2, $3, $4, $5, $6::inet, $7, $8, $9, $10, $11, $12, $13)
 		RETURNING id, tenant_id, user_id, hostname, peer_dns_name, wireguard_public_key,
 		          host(ip), os, client_version, status, endpoints,
 		          wg_endpoint, rx_bytes, tx_bytes,
-		          created_at, updated_at, last_seen_at, last_handshake_at
-	`, p.TenantID, p.UserID, p.Hostname, p.PeerDNSName, p.WireGuardPublicKey, p.IP, p.OS, p.ClientVersion, p.Status, endpoints).Scan(
+		          created_at, updated_at, last_seen_at, last_handshake_at,
+		          approval_status, approved_at, approved_by_user_id
+	`, p.TenantID, p.UserID, p.Hostname, p.PeerDNSName, p.WireGuardPublicKey,
+		p.IP, p.OS, p.ClientVersion, p.Status, endpoints,
+		approval, approvedAt, p.ApprovedByUserID).Scan(
 		&out.ID, &out.TenantID, &out.UserID, &out.Hostname, &out.PeerDNSName, &out.WireGuardPublicKey,
 		&out.IP, &out.OS, &out.ClientVersion, &out.Status, &out.Endpoints,
 		&out.WGEndpoint, &out.RxBytes, &out.TxBytes,
 		&out.CreatedAt, &out.UpdatedAt, &out.LastSeenAt, &out.LastHandshakeAt,
+		&out.ApprovalStatus, &out.ApprovedAt, &out.ApprovedByUserID,
 	)
 	if err != nil {
 		return nil, err
@@ -128,7 +177,8 @@ func (r *Peers) GetByID(ctx context.Context, id uuid.UUID) (*Peer, error) {
 		       peers.wg_endpoint, peers.rx_bytes, peers.tx_bytes,
 		       peers.created_at, peers.updated_at, peers.last_seen_at, peers.last_handshake_at,
 		       `+peerTagsSubquery+`,
-		       users.email, users.display_name
+		       users.email, users.display_name,
+		       peers.approval_status, peers.approved_at, peers.approved_by_user_id
 		FROM peers
 		LEFT JOIN users ON users.id = peers.user_id AND users.deleted_at IS NULL
 		WHERE peers.id = $1
@@ -139,6 +189,7 @@ func (r *Peers) GetByID(ctx context.Context, id uuid.UUID) (*Peer, error) {
 		&p.CreatedAt, &p.UpdatedAt, &p.LastSeenAt, &p.LastHandshakeAt,
 		&p.Tags,
 		&ownerEmail, &ownerDisplay,
+		&p.ApprovalStatus, &p.ApprovedAt, &p.ApprovedByUserID,
 	)
 	if err != nil {
 		return nil, asNotFound(err)
@@ -181,7 +232,8 @@ func (r *Peers) FindByPubKey(ctx context.Context, tenantID uuid.UUID, pubKey str
 		       host(ip), os, client_version, status, endpoints,
 		       wg_endpoint, rx_bytes, tx_bytes,
 		       created_at, updated_at, last_seen_at, last_handshake_at,
-		       `+peerTagsSubquery+`
+		       `+peerTagsSubquery+`,
+		       approval_status, approved_at, approved_by_user_id
 		FROM peers
 		WHERE tenant_id = $1 AND wireguard_public_key = $2
 	`, tenantID, pubKey).Scan(
@@ -190,6 +242,7 @@ func (r *Peers) FindByPubKey(ctx context.Context, tenantID uuid.UUID, pubKey str
 		&p.WGEndpoint, &p.RxBytes, &p.TxBytes,
 		&p.CreatedAt, &p.UpdatedAt, &p.LastSeenAt, &p.LastHandshakeAt,
 		&p.Tags,
+		&p.ApprovalStatus, &p.ApprovedAt, &p.ApprovedByUserID,
 	)
 	if err != nil {
 		return nil, asNotFound(err)
@@ -210,7 +263,8 @@ func (r *Peers) ListByTenant(ctx context.Context, tenantID uuid.UUID) ([]*Peer, 
 		       peers.wg_endpoint, peers.rx_bytes, peers.tx_bytes,
 		       peers.created_at, peers.updated_at, peers.last_seen_at, peers.last_handshake_at,
 		       `+peerTagsSubquery+`,
-		       users.email, users.display_name
+		       users.email, users.display_name,
+		       peers.approval_status, peers.approved_at, peers.approved_by_user_id
 		FROM peers
 		LEFT JOIN users ON users.id = peers.user_id AND users.deleted_at IS NULL
 		WHERE peers.tenant_id = $1
@@ -232,6 +286,7 @@ func (r *Peers) ListByTenant(ctx context.Context, tenantID uuid.UUID) ([]*Peer, 
 			&p.CreatedAt, &p.UpdatedAt, &p.LastSeenAt, &p.LastHandshakeAt,
 			&p.Tags,
 			&ownerEmail, &ownerDisplay,
+			&p.ApprovalStatus, &p.ApprovedAt, &p.ApprovedByUserID,
 		); err != nil {
 			return nil, err
 		}
@@ -442,6 +497,49 @@ func (r *Peers) SetStatus(ctx context.Context, id uuid.UUID, status string) (int
 // deleted; 0 means the peer was already gone.
 func (r *Peers) Delete(ctx context.Context, id uuid.UUID) (int64, error) {
 	tag, err := r.pool.Exec(ctx, `DELETE FROM peers WHERE id = $1`, id)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
+}
+
+// Approve flips a peer from approval_status='pending' to 'approved'
+// and stamps the approver. No-op (returns 0) when the row is already
+// approved — callers do not need to special-case re-approval. Returns
+// ErrNotFound when the peer does not exist. Returns a guard error
+// when the peer is currently 'rejected' (a rejected peer must be
+// deleted + re-registered; flipping rejected → approved would mask
+// the original admin decision in the audit trail).
+func (r *Peers) Approve(ctx context.Context, id uuid.UUID, approver uuid.UUID) (int64, error) {
+	tag, err := r.pool.Exec(ctx, `
+		UPDATE peers
+		   SET approval_status      = 'approved',
+		       approved_at          = now(),
+		       approved_by_user_id  = $2,
+		       updated_at           = now()
+		 WHERE id = $1
+		   AND approval_status      = 'pending'
+	`, id, approver)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
+}
+
+// Reject flips a peer from approval_status='pending' to 'rejected'.
+// Same shape as Approve: no-op when the row already reached a terminal
+// state. The peer row is retained for audit; callers can later Delete
+// it if they want to free the pubkey for re-registration.
+func (r *Peers) Reject(ctx context.Context, id uuid.UUID, approver uuid.UUID) (int64, error) {
+	tag, err := r.pool.Exec(ctx, `
+		UPDATE peers
+		   SET approval_status      = 'rejected',
+		       approved_at          = now(),
+		       approved_by_user_id  = $2,
+		       updated_at           = now()
+		 WHERE id = $1
+		   AND approval_status      = 'pending'
+	`, id, approver)
 	if err != nil {
 		return 0, err
 	}
