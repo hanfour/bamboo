@@ -45,7 +45,7 @@ function SettingsView({
  return (
  <div className="space-y-8">
  <header>
- <h1 className="text-2xl font-semibold tracking-tight">{t('title')}</h1>
+ <h1 className="text-4xl font-light tracking-tight text-bamboo-50 sm:text-5xl">{t("title")}<span className="ml-3 font-serif italic font-normal text-bamboo-300/80">{t("titleAccent")}</span></h1>
  <p className="mt-1 text-sm text-bamboo-200/70">{t('subtitle')}</p>
  </header>
 

@@ -172,6 +172,7 @@
   },
   "preAuthKeys": {
     "title": "Pre-auth keys",
+    "titleAccent": "tokens",
     "subtitle": "由管理員產生、給新節點貼進客戶端用於首次連線的金鑰。產生後即顯示一次明文；之後僅能撤銷。",
     "empty": "尚未產生任何 pre-auth key。前往「節點」頁點「新增節點」即可產生第一支。",
     "columns": {
@@ -204,6 +205,7 @@
   },
   "acl": {
     "title": "存取政策",
+    "titleAccent": "policy",
     "revision": "版本",
     "lastUpdated": "最後更新",
     "viewSource": "檢視原始碼",
@@ -228,6 +230,7 @@
   },
   "users": {
     "title": "成員",
+    "titleAccent": "people",
     "subtitle": "目前已加入此租戶的人員。新成員透過 OIDC 登入後自動建立；邀請與角色管理流程仍在規劃中。",
     "columns": {
       "user": "成員",
@@ -272,6 +275,7 @@
     },
     "invitations": {
       "title": "邀請",
+      "titleAccent": "invites",
       "empty": "尚未有任何邀請。點上方「邀請成員」建立第一筆。",
       "columns": {
         "email": "電子郵件",
@@ -328,6 +332,7 @@
   },
   "logs": {
     "title": "日誌",
+    "titleAccent": "trail",
     "subtitle": "本租戶內各節點最近的政策判定紀錄。每一筆 allow / deny 都會附上命中的規則，方便正式環境的存取稽核。",
     "empty": "尚無日誌事件。等節點開始握手並交換流量後，判定紀錄會出現於此。",
     "columns": {
@@ -346,6 +351,7 @@
   },
   "settings": {
     "title": "設定",
+    "titleAccent": "tenant",
     "subtitle": "管理租戶與帳號相關設定。",
     "tenant": {
       "title": "租戶",

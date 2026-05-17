@@ -60,7 +60,7 @@ function Peers({
  const tKeys = useTranslations('preAuthKeys');
  return (
  <div className="space-y-8 pt-2">
- <header className="flex items-end justify-between gap-6">
+ <header className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between sm:gap-6">
  <div className="space-y-2">
  <h1 className="text-4xl font-light tracking-tight text-bamboo-50 sm:text-5xl">
  {t('title')}
