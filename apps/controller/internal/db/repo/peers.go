@@ -510,7 +510,12 @@ func (r *Peers) Delete(ctx context.Context, id uuid.UUID) (int64, error) {
 // when the peer is currently 'rejected' (a rejected peer must be
 // deleted + re-registered; flipping rejected → approved would mask
 // the original admin decision in the audit trail).
-func (r *Peers) Approve(ctx context.Context, id uuid.UUID, approver uuid.UUID) (int64, error) {
+//
+// approver may be nil for dev-fallback paths where no JWT is present.
+// The approved_by_user_id column accepts NULL via the same FK
+// constraint as user_invitations.accepted_by; nil here avoids the
+// foreign-key violation a synthetic uuid.Nil would trigger.
+func (r *Peers) Approve(ctx context.Context, id uuid.UUID, approver *uuid.UUID) (int64, error) {
 	tag, err := r.pool.Exec(ctx, `
 		UPDATE peers
 		   SET approval_status      = 'approved',
@@ -527,10 +532,11 @@ func (r *Peers) Approve(ctx context.Context, id uuid.UUID, approver uuid.UUID) (
 }
 
 // Reject flips a peer from approval_status='pending' to 'rejected'.
-// Same shape as Approve: no-op when the row already reached a terminal
-// state. The peer row is retained for audit; callers can later Delete
-// it if they want to free the pubkey for re-registration.
-func (r *Peers) Reject(ctx context.Context, id uuid.UUID, approver uuid.UUID) (int64, error) {
+// Same shape as Approve including the nilable approver — no-op when
+// the row already reached a terminal state. The peer row is retained
+// for audit; callers can later Delete it if they want to free the
+// pubkey for re-registration.
+func (r *Peers) Reject(ctx context.Context, id uuid.UUID, approver *uuid.UUID) (int64, error) {
 	tag, err := r.pool.Exec(ctx, `
 		UPDATE peers
 		   SET approval_status      = 'rejected',

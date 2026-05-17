@@ -64,6 +64,8 @@
       "descriptionPlaceholder": "例如 Han 的 iPhone",
       "reusableLabel": "可重複使用",
       "reusableHint": "預設為一次性使用。可重複的 key 適合批次部署，但較難輪替。",
+      "autoApproveLabel": "自動核准",
+      "autoApproveHint": "預設關閉，由 admin 在「節點」頁手動核准每一個第一次上線的裝置。CI / 公用機等批次場景可勾選自動核准跳過審核。",
       "submit": "產生 key",
       "cancel": "取消",
       "working": "產生中…",
@@ -81,6 +83,15 @@
       "copy": "複製",
       "copied": "已複製",
       "done": "完成"
+    },
+    "pending": {
+      "title": "{count, plural, other {# 個待審核裝置}}",
+      "subtitle": "管理員需審核後裝置才會加入網路",
+      "approve": "核准",
+      "reject": "拒絕",
+      "working": "處理中…",
+      "requestedBy": "{actor} 申請",
+      "registered": "{when} 註冊"
     },
     "search": "搜尋主機名稱或標籤",
     "columns": {

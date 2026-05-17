@@ -57,7 +57,7 @@ type CoordinatorHandler struct {
 // "approve" in the UI would update the DB but other peers' WG configs
 // would lag until their next Register / Heartbeat poll round-tripped
 // the change.
-func (h *CoordinatorHandler) ApprovePeer(ctx context.Context, peerID uuid.UUID, adminUserID uuid.UUID) (peer *repo.Peer, changed bool, err error) {
+func (h *CoordinatorHandler) ApprovePeer(ctx context.Context, peerID uuid.UUID, adminUserID *uuid.UUID) (peer *repo.Peer, changed bool, err error) {
 	rows, err := h.peers.Approve(ctx, peerID, adminUserID)
 	if err != nil {
 		return nil, false, err
@@ -83,7 +83,7 @@ func (h *CoordinatorHandler) ApprovePeer(ctx context.Context, peerID uuid.UUID, 
 // the peer was never visible to other peers and shouldn't be on
 // reject. Returns repo.ErrNotFound if the peer doesn't exist; returns
 // (updated, changed=false) when the row was already rejected.
-func (h *CoordinatorHandler) RejectPeer(ctx context.Context, peerID uuid.UUID, adminUserID uuid.UUID) (peer *repo.Peer, changed bool, err error) {
+func (h *CoordinatorHandler) RejectPeer(ctx context.Context, peerID uuid.UUID, adminUserID *uuid.UUID) (peer *repo.Peer, changed bool, err error) {
 	rows, err := h.peers.Reject(ctx, peerID, adminUserID)
 	if err != nil {
 		return nil, false, err

@@ -806,7 +806,7 @@ func (h *HTTPServer) apiPeerApprove(w http.ResponseWriter, r *http.Request, auth
 		writeError(w, http.StatusConflict, errors.New("peer is rejected; delete + re-register instead of un-rejecting"))
 		return
 	}
-	updated, changed, err := h.coord.ApprovePeer(r.Context(), id, mustAdminUserID(authn))
+	updated, changed, err := h.coord.ApprovePeer(r.Context(), id, adminUserIDFromAuth(authn))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Errorf("approve peer: %w", err))
 		return
@@ -852,7 +852,7 @@ func (h *HTTPServer) apiPeerReject(w http.ResponseWriter, r *http.Request, authn
 		writeError(w, http.StatusConflict, errors.New("peer is already approved; use DELETE to remove it"))
 		return
 	}
-	updated, changed, err := h.coord.RejectPeer(r.Context(), id, mustAdminUserID(authn))
+	updated, changed, err := h.coord.RejectPeer(r.Context(), id, adminUserIDFromAuth(authn))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Errorf("reject peer: %w", err))
 		return
@@ -866,16 +866,18 @@ func (h *HTTPServer) apiPeerReject(w http.ResponseWriter, r *http.Request, authn
 	writeJSON(w, http.StatusOK, peerToJSON(updated))
 }
 
-// mustAdminUserID extracts the JWT user ID for the admin who is
-// driving an approve / reject action. The caller has already passed
-// requireAdmin so authn.claims is guaranteed non-nil — but we still
-// fall back to uuid.Nil rather than panicking, since a panic in the
-// REST hot path is worse than an attributed-to-zero audit row.
-func mustAdminUserID(authn *authnContext) uuid.UUID {
+// adminUserIDFromAuth extracts the JWT user ID for the admin who is
+// driving an approve / reject action. requireAdmin allows the
+// dev-fallback path (no JWT) to pass through with a warn log; in
+// that case we return nil so the repo layer writes
+// approved_by_user_id = NULL rather than synthesizing a zero UUID
+// that the users(id) FK would reject.
+func adminUserIDFromAuth(authn *authnContext) *uuid.UUID {
 	if authn == nil || authn.claims == nil {
-		return uuid.Nil
+		return nil
 	}
-	return authn.claims.UserID
+	uid := authn.claims.UserID
+	return &uid
 }
 
 func (h *HTTPServer) apiPeerDelete(w http.ResponseWriter, r *http.Request, authn *authnContext, tenant *repo.Tenant, idStr string) {
