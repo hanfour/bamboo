@@ -768,6 +768,22 @@ func (h *HTTPServer) apiPeerPatch(w http.ResponseWriter, r *http.Request, authn 
 		diff["status"] = map[string]string{"from": current.Status, "to": *req.Status}
 	}
 	if req.Tags != nil {
+		// Tag-owners RBAC (issue #139). When the tenant policy
+		// declares a tagOwners block, an admin can only assign /
+		// remove tags whose owner list includes their email (or
+		// the "*" wildcard). Dev-fallback (no claims) skips the
+		// check — local `make local-up` doesn't have an admin
+		// email to compare against, and require_auth=true is the
+		// gate that keeps that path off the prod surface.
+		if authn != nil && authn.claims != nil {
+			if rej, err := h.checkTagAssignPermission(r.Context(), tenant.ID, authn.claims.UserID, current.Tags, *req.Tags); err != nil {
+				writeError(w, http.StatusInternalServerError, fmt.Errorf("tag rbac: %w", err))
+				return
+			} else if rej != "" {
+				writeError(w, http.StatusForbidden, fmt.Errorf("not allowed to assign or remove tag %q (tagOwners)", rej))
+				return
+			}
+		}
 		newTags, err := h.peers.SetTags(r.Context(), id, *req.Tags)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, fmt.Errorf("set tags: %w", err))
@@ -790,6 +806,106 @@ func (h *HTTPServer) apiPeerPatch(w http.ResponseWriter, r *http.Request, authn 
 		return
 	}
 	writeJSON(w, http.StatusOK, peerToJSON(updated))
+}
+
+// checkTagAssignPermission enforces the policy.tagOwners contract
+// (issue #139). Computes the (added, removed) tag delta between
+// `current` and `next` and asks the tenant policy whether
+// `userID`'s email may modify each. Returns the offending tag name
+// when one is denied (caller turns it into a 403); empty string ⇒
+// proceed. Internal errors (DB / users repo) are propagated as the
+// err return.
+//
+// No policy authored, or policy has no tagOwners block ⇒ everything
+// is allowed (preserves pre-#139 behavior). A tag named in tagOwners
+// is restricted; one absent from tagOwners is unrestricted.
+func (h *HTTPServer) checkTagAssignPermission(
+	ctx context.Context,
+	tenantID uuid.UUID,
+	userID uuid.UUID,
+	current []string,
+	next []string,
+) (string, error) {
+	policyDoc, err := h.loadPolicyForTagRBAC(ctx, tenantID)
+	if err != nil {
+		return "", err
+	}
+	if policyDoc == nil || len(policyDoc.TagOwners) == 0 {
+		return "", nil
+	}
+	user, err := h.users.GetByID(ctx, userID)
+	if err != nil {
+		// User row missing is treated as "permission denied" rather
+		// than allow-all — the JWT should never outlive the user.
+		return "", fmt.Errorf("lookup user: %w", err)
+	}
+	curSet := stringSet(current)
+	nextSet := stringSet(next)
+	// Added tags = nextSet \ curSet; removed = curSet \ nextSet.
+	// Both directions need permission — admin can't remove a tag
+	// they couldn't have added. Tag names are stored on the peer
+	// without the "tag:" prefix (peer.tags is a bare list) but
+	// the policy keys carry the prefix because that's how rules
+	// reference them ("tag:dev"). Normalize before the lookup.
+	for t := range diffSet(nextSet, curSet) {
+		if !policyDoc.CanAssignTag(prefixTag(t), user.Email) {
+			return t, nil
+		}
+	}
+	for t := range diffSet(curSet, nextSet) {
+		if !policyDoc.CanAssignTag(prefixTag(t), user.Email) {
+			return t, nil
+		}
+	}
+	return "", nil
+}
+
+// prefixTag normalizes a bare peer-tag value into the canonical
+// "tag:<value>" form policy keys use. Existing "tag:" prefixes are
+// preserved so the helper is idempotent.
+func prefixTag(t string) string {
+	if strings.HasPrefix(t, "tag:") {
+		return t
+	}
+	return "tag:" + t
+}
+
+// loadPolicyForTagRBAC is the same code path the data-plane enforcer
+// uses to fetch + parse the current policy, but here we only need
+// the parsed shape (no revision tracking). Errors degrade to nil so
+// a borked policy row doesn't block tag PATCHes entirely; the data
+// plane already logs the parse failure.
+func (h *HTTPServer) loadPolicyForTagRBAC(ctx context.Context, tenantID uuid.UUID) (*policy.Policy, error) {
+	rec, err := h.policies.Get(ctx, tenantID)
+	if errors.Is(err, repo.ErrNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	parsed, perr := policy.Parse("policy.hcl", rec.HCLSource)
+	if perr != nil {
+		return nil, nil
+	}
+	return parsed, nil
+}
+
+func stringSet(s []string) map[string]struct{} {
+	out := make(map[string]struct{}, len(s))
+	for _, v := range s {
+		out[v] = struct{}{}
+	}
+	return out
+}
+
+func diffSet(a, b map[string]struct{}) map[string]struct{} {
+	out := make(map[string]struct{})
+	for k := range a {
+		if _, in := b[k]; !in {
+			out[k] = struct{}{}
+		}
+	}
+	return out
 }
 
 // apiPeerDelete implements DELETE /api/v1/peers/{id}. peer_tags rows

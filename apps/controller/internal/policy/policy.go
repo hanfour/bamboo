@@ -133,4 +133,42 @@ type Rule struct {
 // .Rules is significant.
 type Policy struct {
 	Rules []Rule
+	// TagOwners maps a tag name (e.g. "tag:dev") to the email
+	// addresses authorized to assign/remove it on peers (issue #139).
+	// Empty / nil ⇒ no tagOwners block, falling back to admin-only
+	// assignment for back-compat. A tag listed with "*" (wildcard)
+	// is owned by any tenant member; concrete email lists restrict
+	// assignment to those identities.
+	TagOwners map[string][]string
+}
+
+// CanAssignTag reports whether `email` is allowed to assign tag
+// `name` per the policy's tagOwners block (issue #139). Returns
+// true when:
+//   - the policy has no tagOwners block (legacy / no opt-in);
+//   - the tag has no owner row (pre-#139 tag, falls back to admin);
+//   - the tag's owner list contains the wildcard "*";
+//   - the tag's owner list contains the caller's email.
+//
+// Returns false only when the policy declares an explicit owner
+// list for the tag and the email isn't in it. Case-insensitive on
+// email compare because OIDC providers normalize differently.
+func (p *Policy) CanAssignTag(name, email string) bool {
+	if p == nil || len(p.TagOwners) == 0 {
+		return true
+	}
+	owners, ok := p.TagOwners[name]
+	if !ok {
+		return true
+	}
+	lower := strings.ToLower(email)
+	for _, o := range owners {
+		if o == "*" {
+			return true
+		}
+		if strings.ToLower(o) == lower {
+			return true
+		}
+	}
+	return false
 }
