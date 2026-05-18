@@ -31,6 +31,7 @@ import type {
   LogEvent,
   Peer,
   PeerEvent,
+  PolicyHistoryRow,
   PreAuthKey,
   User,
 } from './types';
@@ -272,6 +273,18 @@ export async function fetchPreAuthKeys(): Promise<FetchResult<PreAuthKey[]>> {
     autoApprove: k.autoApprove ?? false,
   }));
   return { kind: 'ok', value: keys };
+}
+
+// fetchPolicyRevisions backs the /acl Versions tab (issue #134).
+// The endpoint is admin-only on the wire; non-admin callers see a
+// 403 which the FetchErrorState surface translates into the
+// "permission needed" view rather than rendering an empty list.
+export async function fetchPolicyRevisions(): Promise<FetchResult<PolicyHistoryRow[]>> {
+  const r = await fetchResult<{ revisions: PolicyHistoryRow[] }>(
+    '/api/v1/policy/revisions',
+  );
+  if (r.kind !== 'ok') return r;
+  return { kind: 'ok', value: r.value.revisions ?? [] };
 }
 
 export async function fetchActivity(limit = 20): Promise<FetchResult<ActivityEvent[]>> {

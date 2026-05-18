@@ -229,14 +229,44 @@
       "timeWindow": "Time window"
     },
     "empty": "No access policy is configured. New tenants start with allow-all; tighten before going to production.",
+    "tabs": {
+      "source": "Source",
+      "preview": "Preview",
+      "versions": "Versions",
+      "editing": "Editing"
+    },
     "editor": {
+      "edit": "Edit",
       "save": "Save",
       "cancel": "Cancel",
+      "validate": "Validate",
+      "validateOk": "Parsed OK · {rules} rule(s)",
       "working": "Saving…",
-      "errorPrefix": "Save failed:",
+      "errorPrefix": "Failed:",
       "staleRevision": "Another admin just updated the policy. Cancel, refresh the page, then merge your changes.",
       "savedRevision": "Saved as revision {revision}",
       "placeholder": "Edit HCL policy here..."
+    },
+    "preview": {
+      "descDraft": "Simulate the draft policy against currently-approved peers to see who can reach whom.",
+      "descSaved": "Simulate the saved policy against currently-approved peers to see who can reach whom.",
+      "run": "Run simulation",
+      "working": "Simulating…",
+      "error": "Simulation failed",
+      "idle": "Click \"Run simulation\" to see the allow / deny matrix.",
+      "emptyPeers": "No approved peers to simulate. Approve at least two devices on the Peers page first.",
+      "matrixHeader": "Source ＼ Dest",
+      "summary": "{rules} rule(s) · {allowed}/{edges} allowed"
+    },
+    "versions": {
+      "description": "History is shown newest-first. Rolling back applies an older revision as a NEW current revision (the audit trail keeps both).",
+      "empty": "No prior revisions yet.",
+      "current": "Current",
+      "viewSource": "View source",
+      "hideSource": "Hide",
+      "rollback": "Rollback",
+      "rollingBack": "Rolling back…",
+      "rollbackSameAsCurrent": "Same content as current — nothing to roll back"
     }
   },
   "users": {

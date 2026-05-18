@@ -229,14 +229,44 @@
       "timeWindow": "時段"
     },
     "empty": "尚未設定存取政策。新租戶預設允許全部，正式上線前請收緊。",
+    "tabs": {
+      "source": "原始碼",
+      "preview": "模擬",
+      "versions": "版本記錄",
+      "editing": "編輯中"
+    },
     "editor": {
+      "edit": "編輯",
       "save": "儲存",
       "cancel": "取消",
+      "validate": "驗證",
+      "validateOk": "解析成功：{rules} 條規則",
       "working": "儲存中…",
-      "errorPrefix": "儲存失敗：",
+      "errorPrefix": "失敗：",
       "staleRevision": "另一位管理員剛剛更新了政策。請取消後重新載入頁面再合併你的修改。",
       "savedRevision": "已儲存為版本 {revision}",
       "placeholder": "在此編輯 HCL 政策..."
+    },
+    "preview": {
+      "descDraft": "在目前編輯中的草稿上模擬，顯示節點之間是否可互相連線。",
+      "descSaved": "在目前已儲存的政策上模擬，顯示節點之間是否可互相連線。",
+      "run": "執行模擬",
+      "working": "模擬中…",
+      "error": "模擬失敗",
+      "idle": "點擊「執行模擬」以查看 allow / deny 矩陣。",
+      "emptyPeers": "目前沒有已核准的節點，無法模擬。先在「節點」頁核准至少兩個裝置。",
+      "matrixHeader": "來源 ＼ 目的地",
+      "summary": "{rules} 條規則 · {allowed}/{edges} 對允許"
+    },
+    "versions": {
+      "description": "歷史版本以最新優先顯示。點擊「Rollback」會將舊版本重新套用為新的目前版本（不會就地修改編號，會新增一筆版本記錄）。",
+      "empty": "尚無歷史版本。",
+      "current": "目前",
+      "viewSource": "檢視原始碼",
+      "hideSource": "收合",
+      "rollback": "Rollback",
+      "rollingBack": "處理中…",
+      "rollbackSameAsCurrent": "與目前版本內容相同，無需 rollback"
     }
   },
   "users": {
