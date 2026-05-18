@@ -15,7 +15,8 @@ import (
 
 // rawDocument is the gohcl-decoded shape of an ACL document.
 type rawDocument struct {
-	Rules []rawRule `hcl:"rule,block"`
+	Rules     []rawRule           `hcl:"rule,block"`
+	TagOwners map[string][]string `hcl:"tagOwners,optional"`
 }
 
 type rawRule struct {
@@ -43,7 +44,10 @@ func Parse(filename string, source string) (*Policy, error) {
 		return nil, d
 	}
 
-	out := &Policy{Rules: make([]Rule, 0, len(doc.Rules))}
+	out := &Policy{
+		Rules:     make([]Rule, 0, len(doc.Rules)),
+		TagOwners: doc.TagOwners,
+	}
 	var errs hcl.Diagnostics
 
 	for i, raw := range doc.Rules {
