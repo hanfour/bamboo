@@ -83,6 +83,17 @@ type Peer struct {
 	OwnerEmail       string
 	OwnerDisplayName string
 
+	// ConnectionPath records how the peer is currently reaching the
+	// mesh: "direct" (P2P WG handshake), "relay" (NAT traversal
+	// failed; using relay fallback), or "unknown" (legacy / not yet
+	// reported). Nullable on the wire to match the migration's
+	// CHECK + NULL column; the Web UI normalizes nil → "unknown"
+	// for back-compat with pre-#138 rows. Migration 00010 adds the
+	// column. Distinct from Status (which is online / offline).
+	ConnectionPath      *string
+	ConnectionPathAt    *time.Time
+	ConnectionLatencyMs *int32
+
 	// ApprovalStatus is the device-approval lifecycle state. Distinct
 	// from Status (which represents data-plane liveness).
 	//   pending  — first-time register via a manual-approval pre-auth-
@@ -167,7 +178,8 @@ func (r *Peers) Insert(ctx context.Context, p *Peer) (*Peer, error) {
 		          created_at, updated_at, last_seen_at, last_handshake_at,
 		          approval_status, approved_at, approved_by_user_id,
 		          advertised_routes, approved_routes,
-		          exit_node_capable, exit_node_approved, using_exit_node_peer_id
+		          exit_node_capable, exit_node_approved, using_exit_node_peer_id,
+		          connection_path, connection_path_at, connection_latency_ms
 	`, p.TenantID, p.UserID, p.Hostname, p.PeerDNSName, p.WireGuardPublicKey,
 		p.IP, p.OS, p.ClientVersion, p.Status, endpoints,
 		approval, approvedAt, p.ApprovedByUserID).Scan(
@@ -178,6 +190,7 @@ func (r *Peers) Insert(ctx context.Context, p *Peer) (*Peer, error) {
 		&out.ApprovalStatus, &out.ApprovedAt, &out.ApprovedByUserID,
 		&out.AdvertisedRoutes, &out.ApprovedRoutes,
 		&out.ExitNodeCapable, &out.ExitNodeApproved, &out.UsingExitNodePeerID,
+		&out.ConnectionPath, &out.ConnectionPathAt, &out.ConnectionLatencyMs,
 	)
 	if err != nil {
 		return nil, err
@@ -205,7 +218,8 @@ func (r *Peers) GetByID(ctx context.Context, id uuid.UUID) (*Peer, error) {
 		       users.email, users.display_name,
 		       peers.approval_status, peers.approved_at, peers.approved_by_user_id,
 		       peers.advertised_routes, peers.approved_routes,
-		       peers.exit_node_capable, peers.exit_node_approved, peers.using_exit_node_peer_id
+		       peers.exit_node_capable, peers.exit_node_approved, peers.using_exit_node_peer_id,
+		       peers.connection_path, peers.connection_path_at, peers.connection_latency_ms
 		FROM peers
 		LEFT JOIN users ON users.id = peers.user_id AND users.deleted_at IS NULL
 		WHERE peers.id = $1
@@ -219,6 +233,7 @@ func (r *Peers) GetByID(ctx context.Context, id uuid.UUID) (*Peer, error) {
 		&p.ApprovalStatus, &p.ApprovedAt, &p.ApprovedByUserID,
 		&p.AdvertisedRoutes, &p.ApprovedRoutes,
 		&p.ExitNodeCapable, &p.ExitNodeApproved, &p.UsingExitNodePeerID,
+		&p.ConnectionPath, &p.ConnectionPathAt, &p.ConnectionLatencyMs,
 	)
 	if err != nil {
 		return nil, asNotFound(err)
@@ -264,7 +279,8 @@ func (r *Peers) FindByPubKey(ctx context.Context, tenantID uuid.UUID, pubKey str
 		       `+peerTagsSubquery+`,
 		       approval_status, approved_at, approved_by_user_id,
 		       advertised_routes, approved_routes,
-		       exit_node_capable, exit_node_approved, using_exit_node_peer_id
+		       exit_node_capable, exit_node_approved, using_exit_node_peer_id,
+		       connection_path, connection_path_at, connection_latency_ms
 		FROM peers
 		WHERE tenant_id = $1 AND wireguard_public_key = $2
 	`, tenantID, pubKey).Scan(
@@ -276,6 +292,7 @@ func (r *Peers) FindByPubKey(ctx context.Context, tenantID uuid.UUID, pubKey str
 		&p.ApprovalStatus, &p.ApprovedAt, &p.ApprovedByUserID,
 		&p.AdvertisedRoutes, &p.ApprovedRoutes,
 		&p.ExitNodeCapable, &p.ExitNodeApproved, &p.UsingExitNodePeerID,
+		&p.ConnectionPath, &p.ConnectionPathAt, &p.ConnectionLatencyMs,
 	)
 	if err != nil {
 		return nil, asNotFound(err)
@@ -299,7 +316,8 @@ func (r *Peers) ListByTenant(ctx context.Context, tenantID uuid.UUID) ([]*Peer, 
 		       users.email, users.display_name,
 		       peers.approval_status, peers.approved_at, peers.approved_by_user_id,
 		       peers.advertised_routes, peers.approved_routes,
-		       peers.exit_node_capable, peers.exit_node_approved, peers.using_exit_node_peer_id
+		       peers.exit_node_capable, peers.exit_node_approved, peers.using_exit_node_peer_id,
+		       peers.connection_path, peers.connection_path_at, peers.connection_latency_ms
 		FROM peers
 		LEFT JOIN users ON users.id = peers.user_id AND users.deleted_at IS NULL
 		WHERE peers.tenant_id = $1
@@ -324,6 +342,7 @@ func (r *Peers) ListByTenant(ctx context.Context, tenantID uuid.UUID) ([]*Peer, 
 			&p.ApprovalStatus, &p.ApprovedAt, &p.ApprovedByUserID,
 			&p.AdvertisedRoutes, &p.ApprovedRoutes,
 			&p.ExitNodeCapable, &p.ExitNodeApproved, &p.UsingExitNodePeerID,
+			&p.ConnectionPath, &p.ConnectionPathAt, &p.ConnectionLatencyMs,
 		); err != nil {
 			return nil, err
 		}
@@ -616,6 +635,39 @@ func (r *Peers) SetUsingExitNode(ctx context.Context, id uuid.UUID, targetID *uu
 		 WHERE id = $1
 	`, id, targetID)
 	return err
+}
+
+// SetConnectionPath records the peer's most-recent connection path
+// (issue #138). path is one of "direct" / "relay" / "unknown"; the
+// CHECK constraint on the column rejects anything else. latencyMs
+// is optional — pass 0 to leave the column NULL (clients without
+// a measurement do this on every heartbeat).
+//
+// Returns true when the path or latency actually changed (so the
+// caller can decide whether to publish a watch event); a no-op
+// update where both columns matched the prior row returns (false,
+// nil) without an error.
+func (r *Peers) SetConnectionPath(ctx context.Context, id uuid.UUID, path string, latencyMs int32) (bool, error) {
+	var latencyArg any
+	if latencyMs > 0 {
+		latencyArg = latencyMs
+	}
+	tag, err := r.pool.Exec(ctx, `
+		UPDATE peers
+		   SET connection_path        = $2,
+		       connection_path_at     = now(),
+		       connection_latency_ms  = $3,
+		       updated_at             = now()
+		 WHERE id = $1
+		   AND (
+		     connection_path IS DISTINCT FROM $2
+		     OR connection_latency_ms IS DISTINCT FROM $3
+		   )
+	`, id, path, latencyArg)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
 }
 
 // Approve flips a peer from approval_status='pending' to 'approved'

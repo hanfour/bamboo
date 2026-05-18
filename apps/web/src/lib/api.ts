@@ -69,6 +69,9 @@ type ApiPeer = {
   // Web UI doesn't have to special-case the migration boundary.
   approvalStatus?: 'pending' | 'approved' | 'rejected';
   approvedAt?: string;
+  connectionPath?: 'direct' | 'relay' | 'unknown' | null;
+  connectionPathAt?: string;
+  connectionLatencyMs?: number;
 };
 
 function apiPeerToPeer(p: ApiPeer): Peer {
@@ -101,6 +104,9 @@ function apiPeerToPeer(p: ApiPeer): Peer {
     // be dropped.
     approvalStatus: p.approvalStatus ?? 'approved',
     approvedAt: p.approvedAt,
+    connectionPath: p.connectionPath ?? undefined,
+    connectionPathAt: p.connectionPathAt,
+    connectionLatencyMs: p.connectionLatencyMs,
   };
 }
 

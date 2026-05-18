@@ -122,7 +122,11 @@ export function PeerTable({ peers, selectedId, onSelect }: Props) {
  </td>
  <td className="px-3 py-3 align-top text-xs text-bamboo-200/60">{p.os}</td>
  <td className="px-3 py-3 align-top">
- <StatusBadge status={p.status} label={t(`status.${p.status}`)} />
+ <StatusBadge
+ status={p.status}
+ label={t(`status.${p.status}`)}
+ connectionPath={p.connectionPath}
+ />
  </td>
  <td className="px-3 py-3 align-top text-xs text-bamboo-200/60">
  {p.lastSeenAt ? formatRelative(p.lastSeenAt) : '—'}
@@ -217,7 +221,15 @@ function AddressCell({
  );
 }
 
-function StatusBadge({ status, label }: { status: Peer['status']; label: string }) {
+function StatusBadge({
+ status,
+ label,
+ connectionPath,
+}: {
+ status: Peer['status'];
+ label: string;
+ connectionPath?: Peer['connectionPath'];
+}) {
  // Dot + label. bamboo-400 dot for online (the brand accent reads
  // as"alive" against the warm-dark surface); softer bamboo-200/40
  // for offline; hollow ink-700 ring for admin-disabled.
@@ -226,10 +238,24 @@ function StatusBadge({ status, label }: { status: Peer['status']; label: string 
  offline: 'bg-bamboo-200/30',
  disabled: 'border border-bamboo-200/40 bg-transparent',
  }[status];
+ // Path glyph (issue #138): only shown when the peer is online —
+ // a relay/direct distinction is meaningless for an offline peer.
+ // 'unknown' is rendered as no glyph to keep the row clean.
+ const showPath =
+ status === 'online' &&
+ (connectionPath === 'direct' || connectionPath === 'relay');
  return (
  <span className="inline-flex items-center gap-2 text-xs text-bamboo-100/80">
  <span aria-hidden className={`h-1.5 w-1.5 rounded-full ${dot}`} />
  {label}
+ {showPath && (
+ <span
+ className="text-bamboo-200/50"
+ title={connectionPath === 'direct' ? 'direct (P2P)' : 'relay'}
+ >
+ {connectionPath === 'direct' ? '⚡' : '🔄'}
+ </span>
+ )}
  </span>
  );
 }
