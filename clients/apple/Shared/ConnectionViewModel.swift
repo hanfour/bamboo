@@ -75,6 +75,23 @@ public final class ConnectionViewModel: ObservableObject {
     // event doesn't accidentally swap the relay endpoint for a (often
     // unreachable) STUN one.
     private var peerRelayEndpoints: [String: String] = [:]
+    // ACL enforcement state (issue #132). policyRevision > 0 ⇒ the
+    // controller is enforcing an authored ACL; allowedIPs in
+    // cachedAllowedIPs are authoritative, peers absent from the map
+    // are denied. policyRevision == 0 ⇒ no policy is authored and
+    // every peer falls back to its tunnel /32, matching the pre-
+    // enforcement default. Watch-event-derived peer rebuilds READ
+    // from cachedAllowedIPs (Register-only-populated) so a
+    // PeerUpdated for an endpoint change does not silently drop a
+    // peer because its event payload lacks AllowedIps.
+    private var policyRevision: Int64 = 0
+    private var cachedAllowedIPs: [String: [String]] = [:]
+    // Peer-session bearer minted by Register, held in memory so the
+    // policy-refresh flow (issue #132) can authenticate without
+    // re-running the bootstrap-credential dance. Nil when the
+    // controller predates the peer-session-token train; the refresh
+    // falls back to the user-session JWT in the keychain.
+    private var peerSessionBearer: String?
 
     public init(keychain: KeychainStore = KeychainStore()) {
         self.keychain = keychain
@@ -341,11 +358,21 @@ public final class ConnectionViewModel: ObservableObject {
                 }
             }
 
-            let peers = resp.peers.map { p in
-                BambooPeerConfig(
+            // ACL enforcement (issue #132): when the controller is
+            // enforcing (PolicyRevision > 0), a peer with an empty
+            // allowedIps list is policy-denied and must be excluded
+            // from the WG config entirely. We compactMap so denied
+            // peers fall out before BambooPeerConfig is constructed,
+            // mirroring clients/core/wg/config.go's enforcing branch.
+            let enforcing = resp.policyRevision > 0
+            let peers = resp.peers.compactMap { p -> BambooPeerConfig? in
+                guard let allowed = aclAllowedIPs(for: p, enforcing: enforcing) else {
+                    return nil
+                }
+                return BambooPeerConfig(
                     id: p.id,
                     publicKey: p.wireguardPublicKey,
-                    allowedIPs: ["\(p.ip)/32"],
+                    allowedIPs: allowed,
                     endpoint: peerEndpoints[p.id] ?? p.endpoints?.first,
                     persistentKeepalive: 25
                 )
@@ -373,6 +400,13 @@ public final class ConnectionViewModel: ObservableObject {
             self.peerCache = seed
             self.selfPeerID = resp.self_.id
             self.selfIPv4 = resp.self_.ip
+            // Cache the controller-computed AllowedIps separately
+            // from peerCache so a later WatchPeers event (which
+            // carries no AllowedIps) can't accidentally reset a peer
+            // to the deny-by-default empty list during a rebuild.
+            self.policyRevision = resp.policyRevision
+            self.cachedAllowedIPs = Self.allowedIPMap(from: resp.peers)
+            self.peerSessionBearer = resp.peerSessionToken
             // Stash relay-proxy endpoints so watch-driven rebuilds
             // don't swap them for STUN. Empty when relay is disabled
             // — rebuildAndReapply then uses the STUN path as before.
@@ -384,7 +418,31 @@ public final class ConnectionViewModel: ObservableObject {
             // Background loops: heartbeat keeps last_seen fresh +
             // re-reports our endpoint; watcher streams peer changes
             // and triggers a tunnel rebuild on endpoint updates.
-            await heartbeat.start(client: client, peerID: resp.self_.id)
+            await heartbeat.start(
+                client: client,
+                peerID: resp.self_.id,
+                // The heartbeat closure runs off the main actor; we
+                // can't read the @MainActor-isolated stored property
+                // directly. Capture a sendable atomic-ish view by
+                // wrapping it in a function that hops back to main.
+                knownRevision: { [weak self] in
+                    // Hop to MainActor to read the @MainActor-isolated
+                    // stored property safely. The heartbeat task runs
+                    // off the main actor; assumeIsolated would crash.
+                    await MainActor.run { self?.policyRevision ?? 0 }
+                },
+                onPolicyChanged: { [weak self] _ in
+                    // Heartbeat detected a policy bump (issue #132).
+                    // Watch handles this too; running it from both
+                    // paths is intentional — the watch stream can
+                    // briefly disconnect on a relay flap, and we
+                    // don't want a policy delta to wait the full
+                    // reconnect backoff.
+                    Task { @MainActor [weak self] in
+                        await self?.refreshPolicyFromController()
+                    }
+                }
+            )
             // Watch is peer-bound: prefer the peer-session token the
             // controller just minted. Fall back to the user-session
             // bearer for older controllers (and for admin-driven dev
@@ -406,24 +464,151 @@ public final class ConnectionViewModel: ObservableObject {
     }
 
     private func handleWatchEvent(_ event: PeerWatcher.Event) {
+        // Under ACL enforcement (policyRevision > 0), every peer
+        // membership delta also needs fresh per-recipient AllowedIps
+        // from the controller — the WatchPeers event payload itself
+        // carries no AllowedIps (the bus is tenant-wide, doesn't
+        // know the recipient). Without this re-register, an admin
+        // who approves a new peer in the queue wouldn't appear in
+        // OUR WG config until we manually reconnect. Issue #132.
+        let needsPolicyRefresh = policyRevision > 0
         switch event {
         case .peerAdded(let p):
             peerCache[p.id] = p
             log.log("watch: peer_added \(p.hostname, privacy: .public)")
-            rebuildAndReapply()
+            if needsPolicyRefresh {
+                Task { @MainActor [weak self] in
+                    await self?.refreshPolicyFromController()
+                }
+            } else {
+                rebuildAndReapply()
+            }
             syncMagicDNSMap()
         case .peerUpdated(let p):
             peerCache[p.id] = p
             log.log("watch: peer_updated \(p.hostname, privacy: .public)")
+            // Endpoint-only updates (the common PeerUpdated case)
+            // don't need a full policy refresh — the cached
+            // AllowedIPs for this peer remain valid. rebuildAndReapply
+            // re-reads cachedAllowedIPs so the endpoint swap lands
+            // without dropping the route.
             rebuildAndReapply()
             syncMagicDNSMap()
         case .peerRemoved(let id):
             peerCache.removeValue(forKey: id)
+            cachedAllowedIPs.removeValue(forKey: id)
             log.log("watch: peer_removed \(id, privacy: .public)")
             rebuildAndReapply()
             syncMagicDNSMap()
         case .policyChanged(let rev):
             log.log("watch: policy_changed rev=\(rev, privacy: .public)")
+            // ACL enforcement refresh (issue #132). The watch event
+            // signals the controller has a new policy revision; the
+            // cached per-peer AllowedIps is now stale. Re-register
+            // to pull fresh values, then rebuild the WG config.
+            // Errors are logged + tolerated — the tunnel stays up on
+            // the prior config so traffic isn't interrupted by a
+            // transient controller blip.
+            Task { @MainActor [weak self] in
+                await self?.refreshPolicyFromController()
+            }
+        }
+    }
+
+    /// aclAllowedIPs returns the AllowedIPs slice to use for a peer
+    /// when assembling the WireGuard config. Nil signals "skip this
+    /// peer entirely" — the controller's policy engine has denied us
+    /// traffic to them, and listing the peer with no routes would
+    /// still expose its public key for no benefit.
+    ///
+    /// Decision tree:
+    ///   - enforcing == false (policyRevision == 0)           → ["<ip>/32"]
+    ///     Pre-enforcement default; preserves the legacy full-mesh
+    ///     behavior for tenants without an authored policy.
+    ///   - enforcing && cachedAllowedIPs[p.id] is non-empty   → use cache
+    ///   - enforcing && cached entry is empty / missing       → nil (deny)
+    private func aclAllowedIPs(for p: BambooClient.PeerJSON, enforcing: Bool) -> [String]? {
+        if !enforcing {
+            return ["\(p.ip)/32"]
+        }
+        guard let cached = cachedAllowedIPs[p.id], !cached.isEmpty else {
+            return nil
+        }
+        return cached
+    }
+
+    /// allowedIPMap reduces a Register-response peer array into the
+    /// (id → AllowedIPs) form rebuildAndReapply reads. Peers with
+    /// allowedIps == nil (legacy controller or watch-event payload
+    /// that omits the field) are absent from the map; the lookup
+    /// site then falls back to deny under enforcement, or to the
+    /// /32 default under non-enforcement.
+    private static func allowedIPMap(from peers: [BambooClient.PeerJSON]) -> [String: [String]] {
+        var out: [String: [String]] = [:]
+        for p in peers {
+            if let allowed = p.allowedIps {
+                out[p.id] = allowed
+            }
+        }
+        return out
+    }
+
+    /// refreshPolicyFromController re-runs the Register flow and uses
+    /// the freshly-computed AllowedIps to rebuild the WG config. Same
+    /// idempotency guarantee as the connect path — FindByPubKey makes
+    /// Register a read for an existing peer + a side-effect-free mint
+    /// of a new peer-session token.
+    ///
+    /// Errors are intentionally swallowed: the tunnel stays on the
+    /// prior config so traffic isn't interrupted by a transient
+    /// controller blip. A subsequent heartbeat / watch tick will fire
+    /// this again when the controller is reachable.
+    private func refreshPolicyFromController() async {
+        guard let url = URL(string: controllerURL.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+            log.warning("policy refresh: invalid controller URL; staying on prior config")
+            return
+        }
+        let privateKey: PrivateKey
+        do {
+            privateKey = try loadOrCreatePrivateKey()
+        } catch {
+            log.warning("policy refresh: load private key failed: \(String(describing: error), privacy: .public)")
+            return
+        }
+        // Prefer the peer-session bearer the controller minted at
+        // connect time; fall back to the user-session bearer in
+        // the keychain. The controller's authenticate() accepts
+        // either.
+        let bearer = peerSessionBearer
+            ?? keychain.getString(for: BambooKeychainKey.sessionToken)
+        let client = BambooClient(
+            baseURL: url,
+            bearerToken: bearer,
+            tenantSlug: tenantSlug
+        )
+        do {
+            let resp = try await client.register(.init(
+                hostname: hostname,
+                wireguardPublicKey: privateKey.publicKey.base64Key,
+                os: currentOSName(),
+                clientVersion: "0.0.1",
+                preAuthKeySecret: nil,
+                tenantSlug: tenantSlug,
+                endpoints: nil
+            ))
+            self.policyRevision = resp.policyRevision
+            self.cachedAllowedIPs = Self.allowedIPMap(from: resp.peers)
+            self.peerSessionBearer = resp.peerSessionToken
+            // Replace peer cache so removed peers leave the rebuild;
+            // self stays put.
+            var seed: [String: BambooClient.PeerJSON] = [resp.self_.id: resp.self_]
+            for p in resp.peers { seed[p.id] = p }
+            self.peerCache = seed
+            log.log("policy refresh: revision=\(resp.policyRevision, privacy: .public) peers=\(resp.peers.count, privacy: .public)")
+            rebuildAndReapply()
+            syncMagicDNSMap()
+        } catch {
+            log.warning("policy refresh failed: \(String(describing: error), privacy: .public); staying on prior config")
         }
     }
 
@@ -460,19 +645,31 @@ public final class ConnectionViewModel: ObservableObject {
             let prevConfig = lastConfig
         else { return }
 
+        let enforcing = policyRevision > 0
         let peers = peerCache.values
             .filter { $0.id != selfID }
-            .map { p in
+            .compactMap { p -> BambooPeerConfig? in
                 // Prefer the relay-proxy endpoint (127.0.0.1:<port>)
                 // captured at connect time. Without this, a watch-
                 // driven rebuild silently swaps the working relay
                 // path for whatever STUN candidate the peer reported
                 // and the mesh stops carrying packets — same-NAT
                 // peers in particular have no hairpin fallback.
-                BambooPeerConfig(
+                //
+                // AllowedIPs are read from cachedAllowedIPs rather
+                // than p.allowedIps — the watch event payload that
+                // populates peerCache after PeerUpdated carries no
+                // AllowedIps and we don't want a stale-cache rebuild
+                // to silently drop a peer (or expose one the policy
+                // newly denies). The cache is refreshed via a
+                // re-register on .policyChanged.
+                guard let allowed = aclAllowedIPs(for: p, enforcing: enforcing) else {
+                    return nil
+                }
+                return BambooPeerConfig(
                     id: p.id,
                     publicKey: p.wireguardPublicKey,
-                    allowedIPs: ["\(p.ip)/32"],
+                    allowedIPs: allowed,
                     endpoint: peerRelayEndpoints[p.id] ?? p.endpoints?.first,
                     persistentKeepalive: 25
                 )
