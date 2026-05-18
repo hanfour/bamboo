@@ -124,6 +124,28 @@ func (h *HTTPServer) routeAPI(w http.ResponseWriter, r *http.Request) {
 			h.apiPeerReject(w, r, authn, tenant, id)
 			return
 		}
+		// "{id}/routes" — admin approves a subset of the peer's
+		// advertised_routes (issue #136). Body: {"routes": [...]}
+		// with the explicit approved subset; empty list ⇒ revoke
+		// all.
+		if id, found := strings.CutSuffix(rest, "/routes"); found && id != "" && !strings.Contains(id, "/") {
+			if r.Method != http.MethodPost {
+				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+				return
+			}
+			h.apiPeerSetApprovedRoutes(w, r, authn, tenant, id)
+			return
+		}
+		// "{id}/exit-node" — admin approves/revokes the peer's
+		// exit-node role (issue #137). Body: {"approved": bool}.
+		if id, found := strings.CutSuffix(rest, "/exit-node"); found && id != "" && !strings.Contains(id, "/") {
+			if r.Method != http.MethodPost {
+				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+				return
+			}
+			h.apiPeerSetExitNodeApproved(w, r, authn, tenant, id)
+			return
+		}
 		// "{id}" — single peer GET/PATCH/DELETE.
 		if !strings.Contains(rest, "/") {
 			switch r.Method {
@@ -542,6 +564,29 @@ type apiPeerJSON struct {
 	ApprovalStatus  string     `json:"approvalStatus"`
 	ApprovedAt      *time.Time `json:"approvedAt,omitempty"`
 	ApprovedByEmail string     `json:"approvedByEmail,omitempty"`
+	// Subnet router (issue #136) + exit-node (issue #137).
+	// AdvertisedRoutes is what the peer asked for; ApprovedRoutes
+	// is the admin-signed subset that the ACL compiler actually
+	// pushes. ExitNodeCapable mirrors --advertise-exit-node;
+	// ExitNodeApproved mirrors the admin's separate sign-off.
+	// UsingExitNodePeerID points at the peer this row is routing
+	// default traffic through (empty when no exit node in use).
+	AdvertisedRoutes    []string `json:"advertisedRoutes"`
+	ApprovedRoutes      []string `json:"approvedRoutes"`
+	ExitNodeCapable     bool     `json:"exitNodeCapable"`
+	ExitNodeApproved    bool     `json:"exitNodeApproved"`
+	UsingExitNodePeerID string   `json:"usingExitNodePeerId,omitempty"`
+}
+
+// emptyIfNil normalizes a nil []string to an empty slice so the
+// JSON encoder emits "[]" rather than "null" for the routes
+// arrays (issue #136/#137). Empty array is the v1 normal —
+// peers without --advertise-routes carry empty slices.
+func emptyIfNil(s []string) []string {
+	if s == nil {
+		return []string{}
+	}
+	return s
 }
 
 func peerToJSON(p *repo.Peer) apiPeerJSON {
@@ -575,6 +620,16 @@ func peerToJSON(p *repo.Peer) apiPeerJSON {
 		OwnerDisplayName:   p.OwnerDisplayName,
 		ApprovalStatus:     p.ApprovalStatus,
 		ApprovedAt:         p.ApprovedAt,
+		AdvertisedRoutes:   emptyIfNil(p.AdvertisedRoutes),
+		ApprovedRoutes:     emptyIfNil(p.ApprovedRoutes),
+		ExitNodeCapable:    p.ExitNodeCapable,
+		ExitNodeApproved:   p.ExitNodeApproved,
+		UsingExitNodePeerID: func() string {
+			if p.UsingExitNodePeerID == nil {
+				return ""
+			}
+			return p.UsingExitNodePeerID.String()
+		}(),
 		// ApprovedByEmail intentionally left empty here — the
 		// admin's email lives on users, and we don't LEFT JOIN
 		// twice in the peer queries. The pending-list UI doesn't
@@ -1029,6 +1084,143 @@ func adminUserIDFromAuth(authn *authnContext) *uuid.UUID {
 	}
 	uid := authn.claims.UserID
 	return &uid
+}
+
+// apiPeerSetApprovedRoutesReq is the request shape for the
+// admin-approve subnet routes handler (issue #136).
+type apiPeerSetApprovedRoutesReq struct {
+	Routes []string `json:"routes"`
+}
+
+// apiPeerSetApprovedRoutes implements POST /api/v1/peers/{id}/routes
+// (issue #136). Admin replaces the peer's approved_routes list with
+// the explicit subset they sign off on. The list MUST be a subset
+// of the peer's advertised_routes — admin can't conjure CIDRs the
+// peer didn't ask to expose. Empty list ⇒ revoke all.
+//
+// CIDR validation is light here: just netip.ParsePrefix sanity. The
+// admin is trusted to pick non-overlapping ranges; conflict
+// detection between peers is a v2 follow-up.
+func (h *HTTPServer) apiPeerSetApprovedRoutes(w http.ResponseWriter, r *http.Request, authn *authnContext, tenant *repo.Tenant, idStr string) {
+	if !h.requireAdmin(w, r, authn, tenant, "peer.routes.approve") {
+		return
+	}
+	id, err := uuid.Parse(idStr)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	current, err := h.peers.GetByID(r.Context(), id)
+	if errors.Is(err, repo.ErrNotFound) {
+		http.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if current.TenantID != tenant.ID {
+		http.NotFound(w, r)
+		return
+	}
+	var req apiPeerSetApprovedRoutesReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("decode body: %w", err))
+		return
+	}
+	// Validate CIDR shapes + the subset-of-advertised constraint.
+	advertised := make(map[string]struct{}, len(current.AdvertisedRoutes))
+	for _, c := range current.AdvertisedRoutes {
+		advertised[c] = struct{}{}
+	}
+	for _, cidr := range req.Routes {
+		if _, perr := netip.ParsePrefix(cidr); perr != nil {
+			writeError(w, http.StatusBadRequest, fmt.Errorf("invalid CIDR %q: %w", cidr, perr))
+			return
+		}
+		if _, ok := advertised[cidr]; !ok {
+			writeError(w, http.StatusBadRequest, fmt.Errorf("route %q is not advertised by peer", cidr))
+			return
+		}
+	}
+	if err := h.peers.SetApprovedRoutes(r.Context(), id, req.Routes); err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("set approved_routes: %w", err))
+		return
+	}
+	writePeerAudit(r.Context(), h.audits, authn, tenant.ID, id, "peer.routes.approve", map[string]any{
+		"hostname": current.Hostname,
+		"approved_routes": map[string]any{
+			"from": current.ApprovedRoutes,
+			"to":   req.Routes,
+		},
+	})
+	updated, err := h.peers.GetByID(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, peerToJSON(updated))
+}
+
+// apiPeerSetExitNodeApprovedReq is the request shape for
+// approving/revoking exit-node role (issue #137).
+type apiPeerSetExitNodeApprovedReq struct {
+	Approved bool `json:"approved"`
+}
+
+// apiPeerSetExitNodeApproved implements POST /api/v1/peers/{id}/exit-node
+// (issue #137). Admin flips the peer's exit_node_approved bit.
+// Setting true requires the peer to also be exit_node_capable —
+// approving an exit node that doesn't claim to support the role
+// would be misleading.
+func (h *HTTPServer) apiPeerSetExitNodeApproved(w http.ResponseWriter, r *http.Request, authn *authnContext, tenant *repo.Tenant, idStr string) {
+	if !h.requireAdmin(w, r, authn, tenant, "peer.exit-node.approve") {
+		return
+	}
+	id, err := uuid.Parse(idStr)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	current, err := h.peers.GetByID(r.Context(), id)
+	if errors.Is(err, repo.ErrNotFound) {
+		http.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if current.TenantID != tenant.ID {
+		http.NotFound(w, r)
+		return
+	}
+	var req apiPeerSetExitNodeApprovedReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("decode body: %w", err))
+		return
+	}
+	if req.Approved && !current.ExitNodeCapable {
+		writeError(w, http.StatusBadRequest, errors.New("peer is not exit-node-capable; client must register with --advertise-exit-node first"))
+		return
+	}
+	if err := h.peers.SetExitNodeApproved(r.Context(), id, req.Approved); err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("set exit_node_approved: %w", err))
+		return
+	}
+	writePeerAudit(r.Context(), h.audits, authn, tenant.ID, id, "peer.exit-node.approve", map[string]any{
+		"hostname": current.Hostname,
+		"exit_node_approved": map[string]any{
+			"from": current.ExitNodeApproved,
+			"to":   req.Approved,
+		},
+	})
+	updated, err := h.peers.GetByID(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, peerToJSON(updated))
 }
 
 func (h *HTTPServer) apiPeerDelete(w http.ResponseWriter, r *http.Request, authn *authnContext, tenant *repo.Tenant, idStr string) {
