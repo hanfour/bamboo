@@ -142,6 +142,39 @@ export type PeerEvent = {
   occurredAt: string;
 };
 
+// PolicyHistoryRow is one row from GET /api/v1/policy/revisions
+// (issue #134). The Web UI's Versions tab renders these with a
+// rollback button; the HCL source is included inline so the user
+// can diff the candidate revision against their current draft
+// without a separate fetch round-trip per row.
+export type PolicyHistoryRow = {
+  revision: number;
+  hclSource: string;
+  appliedAt: string;
+  // appliedByEmail is empty when the row was applied by a system
+  // path (rollback from a dev-fallback session) or when the user
+  // who applied it has since been deleted.
+  appliedByEmail?: string;
+};
+
+// PolicySimulationEdge is one (src, dst, allow) triple from
+// POST /api/v1/policy/simulate. The Preview tab renders the full
+// edge list as a matrix so the operator can confirm a candidate
+// policy does what they expect before they commit it.
+export type PolicySimulationEdge = {
+  sourceId: string;
+  sourceHostname: string;
+  destId: string;
+  destHostname: string;
+  allow: boolean;
+  allowedIps?: string[];
+};
+
+export type PolicySimulation = {
+  rules: number;
+  edges: PolicySimulationEdge[];
+};
+
 export type AclRule = {
   id: string;
   action: 'allow' | 'deny';
