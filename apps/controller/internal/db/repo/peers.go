@@ -106,6 +106,27 @@ type Peer struct {
 	// rows + for peers that landed 'approved' via auto_approve=true or
 	// require_auth=false dev-fallback (no human admin to attribute).
 	ApprovedByUserID *uuid.UUID
+
+	// AdvertisedRoutes (issue #136) is what the peer asked to expose
+	// to the rest of the tailnet. ApprovedRoutes is the admin-signed
+	// subset that the ACL compiler actually merges into other peers'
+	// allowed_ips. Empty slices are the v1 normal — clients that
+	// don't pass --advertise-routes leave both columns empty.
+	AdvertisedRoutes []string
+	ApprovedRoutes   []string
+	// ExitNodeCapable (issue #137) records the --advertise-exit-node
+	// flag from the peer's last register. ExitNodeApproved tracks
+	// the admin's separate sign-off; storing both lets the admin's
+	// approval survive a future re-register where the client drops
+	// the flag.
+	ExitNodeCapable  bool
+	ExitNodeApproved bool
+	// UsingExitNodePeerID is the peer this row is routing default
+	// traffic through (`bamboo up --exit-node=<dns-name>`). NULL =
+	// no exit node in use. FK enforces "must be in the same tenant"
+	// via ON DELETE SET NULL — if the target peer goes away, this
+	// row falls back to direct routing.
+	UsingExitNodePeerID *uuid.UUID
 }
 
 // Insert creates a new peer. Returns the persisted row.
@@ -144,7 +165,9 @@ func (r *Peers) Insert(ctx context.Context, p *Peer) (*Peer, error) {
 		          host(ip), os, client_version, status, endpoints,
 		          wg_endpoint, rx_bytes, tx_bytes,
 		          created_at, updated_at, last_seen_at, last_handshake_at,
-		          approval_status, approved_at, approved_by_user_id
+		          approval_status, approved_at, approved_by_user_id,
+		          advertised_routes, approved_routes,
+		          exit_node_capable, exit_node_approved, using_exit_node_peer_id
 	`, p.TenantID, p.UserID, p.Hostname, p.PeerDNSName, p.WireGuardPublicKey,
 		p.IP, p.OS, p.ClientVersion, p.Status, endpoints,
 		approval, approvedAt, p.ApprovedByUserID).Scan(
@@ -153,6 +176,8 @@ func (r *Peers) Insert(ctx context.Context, p *Peer) (*Peer, error) {
 		&out.WGEndpoint, &out.RxBytes, &out.TxBytes,
 		&out.CreatedAt, &out.UpdatedAt, &out.LastSeenAt, &out.LastHandshakeAt,
 		&out.ApprovalStatus, &out.ApprovedAt, &out.ApprovedByUserID,
+		&out.AdvertisedRoutes, &out.ApprovedRoutes,
+		&out.ExitNodeCapable, &out.ExitNodeApproved, &out.UsingExitNodePeerID,
 	)
 	if err != nil {
 		return nil, err
@@ -178,7 +203,9 @@ func (r *Peers) GetByID(ctx context.Context, id uuid.UUID) (*Peer, error) {
 		       peers.created_at, peers.updated_at, peers.last_seen_at, peers.last_handshake_at,
 		       `+peerTagsSubquery+`,
 		       users.email, users.display_name,
-		       peers.approval_status, peers.approved_at, peers.approved_by_user_id
+		       peers.approval_status, peers.approved_at, peers.approved_by_user_id,
+		       peers.advertised_routes, peers.approved_routes,
+		       peers.exit_node_capable, peers.exit_node_approved, peers.using_exit_node_peer_id
 		FROM peers
 		LEFT JOIN users ON users.id = peers.user_id AND users.deleted_at IS NULL
 		WHERE peers.id = $1
@@ -190,6 +217,8 @@ func (r *Peers) GetByID(ctx context.Context, id uuid.UUID) (*Peer, error) {
 		&p.Tags,
 		&ownerEmail, &ownerDisplay,
 		&p.ApprovalStatus, &p.ApprovedAt, &p.ApprovedByUserID,
+		&p.AdvertisedRoutes, &p.ApprovedRoutes,
+		&p.ExitNodeCapable, &p.ExitNodeApproved, &p.UsingExitNodePeerID,
 	)
 	if err != nil {
 		return nil, asNotFound(err)
@@ -233,7 +262,9 @@ func (r *Peers) FindByPubKey(ctx context.Context, tenantID uuid.UUID, pubKey str
 		       wg_endpoint, rx_bytes, tx_bytes,
 		       created_at, updated_at, last_seen_at, last_handshake_at,
 		       `+peerTagsSubquery+`,
-		       approval_status, approved_at, approved_by_user_id
+		       approval_status, approved_at, approved_by_user_id,
+		       advertised_routes, approved_routes,
+		       exit_node_capable, exit_node_approved, using_exit_node_peer_id
 		FROM peers
 		WHERE tenant_id = $1 AND wireguard_public_key = $2
 	`, tenantID, pubKey).Scan(
@@ -243,6 +274,8 @@ func (r *Peers) FindByPubKey(ctx context.Context, tenantID uuid.UUID, pubKey str
 		&p.CreatedAt, &p.UpdatedAt, &p.LastSeenAt, &p.LastHandshakeAt,
 		&p.Tags,
 		&p.ApprovalStatus, &p.ApprovedAt, &p.ApprovedByUserID,
+		&p.AdvertisedRoutes, &p.ApprovedRoutes,
+		&p.ExitNodeCapable, &p.ExitNodeApproved, &p.UsingExitNodePeerID,
 	)
 	if err != nil {
 		return nil, asNotFound(err)
@@ -264,7 +297,9 @@ func (r *Peers) ListByTenant(ctx context.Context, tenantID uuid.UUID) ([]*Peer, 
 		       peers.created_at, peers.updated_at, peers.last_seen_at, peers.last_handshake_at,
 		       `+peerTagsSubquery+`,
 		       users.email, users.display_name,
-		       peers.approval_status, peers.approved_at, peers.approved_by_user_id
+		       peers.approval_status, peers.approved_at, peers.approved_by_user_id,
+		       peers.advertised_routes, peers.approved_routes,
+		       peers.exit_node_capable, peers.exit_node_approved, peers.using_exit_node_peer_id
 		FROM peers
 		LEFT JOIN users ON users.id = peers.user_id AND users.deleted_at IS NULL
 		WHERE peers.tenant_id = $1
@@ -287,6 +322,8 @@ func (r *Peers) ListByTenant(ctx context.Context, tenantID uuid.UUID) ([]*Peer, 
 			&p.Tags,
 			&ownerEmail, &ownerDisplay,
 			&p.ApprovalStatus, &p.ApprovedAt, &p.ApprovedByUserID,
+			&p.AdvertisedRoutes, &p.ApprovedRoutes,
+			&p.ExitNodeCapable, &p.ExitNodeApproved, &p.UsingExitNodePeerID,
 		); err != nil {
 			return nil, err
 		}
@@ -501,6 +538,84 @@ func (r *Peers) Delete(ctx context.Context, id uuid.UUID) (int64, error) {
 		return 0, err
 	}
 	return tag.RowsAffected(), nil
+}
+
+// SetAdvertisedRoutes replaces the peer's advertised_routes column
+// (issue #136). Called by the coordinator when a peer Register /
+// Heartbeat carries an --advertise-routes payload. The Web UI's
+// "pending advertisements" view diffs advertised_routes against
+// approved_routes to surface the admin checklist.
+func (r *Peers) SetAdvertisedRoutes(ctx context.Context, id uuid.UUID, routes []string) error {
+	if routes == nil {
+		routes = []string{}
+	}
+	_, err := r.pool.Exec(ctx, `
+		UPDATE peers
+		   SET advertised_routes = $2,
+		       updated_at        = now()
+		 WHERE id = $1
+	`, id, routes)
+	return err
+}
+
+// SetApprovedRoutes replaces the peer's approved_routes column.
+// Admin-only on the wire (the REST handler gates this). The ACL
+// compiler reads approved_routes when assembling other peers'
+// allowed_ips so the approved subset propagates through the mesh
+// without a re-register from anyone else.
+func (r *Peers) SetApprovedRoutes(ctx context.Context, id uuid.UUID, routes []string) error {
+	if routes == nil {
+		routes = []string{}
+	}
+	_, err := r.pool.Exec(ctx, `
+		UPDATE peers
+		   SET approved_routes = $2,
+		       updated_at      = now()
+		 WHERE id = $1
+	`, id, routes)
+	return err
+}
+
+// SetExitNodeCapable records the --advertise-exit-node flag from a
+// Register call (issue #137). Separate from ExitNodeApproved so the
+// admin's sign-off survives a future re-register that drops the
+// flag — re-approval shouldn't be required just because the client
+// config was edited.
+func (r *Peers) SetExitNodeCapable(ctx context.Context, id uuid.UUID, capable bool) error {
+	_, err := r.pool.Exec(ctx, `
+		UPDATE peers
+		   SET exit_node_capable = $2,
+		       updated_at        = now()
+		 WHERE id = $1
+	`, id, capable)
+	return err
+}
+
+// SetExitNodeApproved is the admin's separate sign-off on the
+// peer's exit-node role. Setting true makes the peer eligible to be
+// picked by other peers via --exit-node=<dns>.
+func (r *Peers) SetExitNodeApproved(ctx context.Context, id uuid.UUID, approved bool) error {
+	_, err := r.pool.Exec(ctx, `
+		UPDATE peers
+		   SET exit_node_approved = $2,
+		       updated_at         = now()
+		 WHERE id = $1
+	`, id, approved)
+	return err
+}
+
+// SetUsingExitNode records that this peer is routing default
+// traffic through `targetID`. Pass nil to clear (no exit node).
+// FK enforces the target exists in the same tenant; the REST
+// handler additionally verifies tenant scoping before calling.
+func (r *Peers) SetUsingExitNode(ctx context.Context, id uuid.UUID, targetID *uuid.UUID) error {
+	_, err := r.pool.Exec(ctx, `
+		UPDATE peers
+		   SET using_exit_node_peer_id = $2,
+		       updated_at              = now()
+		 WHERE id = $1
+	`, id, targetID)
+	return err
 }
 
 // Approve flips a peer from approval_status='pending' to 'approved'

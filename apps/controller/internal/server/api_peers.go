@@ -43,6 +43,16 @@ type peerRegisterRequest struct {
 	PreAuthKeySecret   string   `json:"preAuthKeySecret,omitempty"`
 	TenantSlug         string   `json:"tenantSlug,omitempty"`
 	Endpoints          []string `json:"endpoints,omitempty"`
+	// AdvertisedRoutes are CIDRs the peer would like to expose to
+	// the rest of the tailnet (issue #136). Persisted on the peer
+	// row; the admin must approve before they merge into other
+	// peers' allowed_ips.
+	AdvertisedRoutes []string `json:"advertisedRoutes,omitempty"`
+	// AdvertiseExitNode signals --advertise-exit-node from the
+	// client (issue #137). The admin then approves via
+	// /api/v1/peers/{id}/exit-node/approve to make the peer
+	// eligible as an exit node for others.
+	AdvertiseExitNode bool `json:"advertiseExitNode,omitempty"`
 }
 
 // peerJSON is the shape used in the register response and the SSE
@@ -172,6 +182,25 @@ func (h *HTTPServer) apiPeersRegister(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeGRPCError(w, err)
 		return
+	}
+
+	// Persist subnet-route advertisements + exit-node capability
+	// (issues #136 + #137) as a side-channel after the mesh-state
+	// register completes. The fields aren't part of the
+	// CoordinatorService.Register proto today; carrying them on the
+	// REST shape lets clients self-advertise without a proto bump,
+	// at the cost of needing the peer.id from resp.Self.
+	if selfID := resp.GetSelf().GetId(); selfID != "" {
+		if peerUUID, perr := uuid.Parse(selfID); perr == nil {
+			if body.AdvertisedRoutes != nil {
+				if err := h.peers.SetAdvertisedRoutes(r.Context(), peerUUID, body.AdvertisedRoutes); err != nil {
+					slog.Warn("set advertised_routes", "peer_id", selfID, "err", err)
+				}
+			}
+			if err := h.peers.SetExitNodeCapable(r.Context(), peerUUID, body.AdvertiseExitNode); err != nil {
+				slog.Warn("set exit_node_capable", "peer_id", selfID, "err", err)
+			}
+		}
 	}
 
 	out := peerRegisterResponse{

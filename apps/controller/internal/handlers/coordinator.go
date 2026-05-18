@@ -542,9 +542,20 @@ func peerView(p *repo.Peer) policy.PeerView {
 
 // allowedIPsFor returns the AllowedIps slice for dst as seen from src.
 // nil when src is not permitted to reach dst — clients should skip the
-// peer entirely. Today this is a single /32 (or /128) of the
-// destination's tunnel IP; future revisions may add explicit CIDR
-// routes (e.g., subnet routers).
+// peer entirely.
+//
+// Contents (in order):
+//
+//  1. dst's tunnel /32 (or /128 for IPv6) — the always-on baseline
+//     so src can reach dst's own bamboo address.
+//
+//  2. dst's approved subnet routes (issue #136). When the admin has
+//     signed off on a subset of dst.AdvertisedRoutes, those CIDRs
+//     become reachable through dst from every src the policy allows.
+//
+//  3. 0.0.0.0/0 (and ::/0) when src has elected dst as its exit
+//     node (issue #137) and dst is exit_node_approved. Default-route
+//     reachability lets src forward public traffic through dst.
 func allowedIPsFor(p *policy.Policy, src, dst *repo.Peer) []string {
 	if !policy.Allow(p, peerView(src), peerView(dst)) {
 		return nil
@@ -553,7 +564,19 @@ func allowedIPsFor(p *policy.Policy, src, dst *repo.Peer) []string {
 	if addr, err := netip.ParseAddr(dst.IP); err == nil && addr.Is6() {
 		suffix = "/128"
 	}
-	return []string{dst.IP + suffix}
+	out := []string{dst.IP + suffix}
+	// Subnet router (issue #136): merge admin-approved CIDRs.
+	out = append(out, dst.ApprovedRoutes...)
+	// Exit node (issue #137): default-route reachability when src
+	// has dst pinned as its exit node AND admin has approved dst's
+	// exit-node role. The double-gate is important: the requesting
+	// peer's UsingExitNodePeerID alone shouldn't open 0.0.0.0/0
+	// without admin approval, and admin approval alone shouldn't
+	// force every other peer to add 0.0.0.0/0 unless they opt in.
+	if dst.ExitNodeApproved && src.UsingExitNodePeerID != nil && *src.UsingExitNodePeerID == dst.ID {
+		out = append(out, "0.0.0.0/0", "::/0")
+	}
+	return out
 }
 
 // toProtoPeer converts a repo.Peer into the proto type.
