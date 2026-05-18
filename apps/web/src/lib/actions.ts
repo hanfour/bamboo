@@ -11,6 +11,7 @@
 
 import { cookies } from 'next/headers';
 import { revalidatePath } from 'next/cache';
+import type { PolicySimulation } from '@/lib/types';
 
 const BASE = process.env.BAMBOO_API_URL ?? 'http://localhost:8081';
 const TENANT = process.env.BAMBOO_TENANT ?? 'default';
@@ -302,6 +303,88 @@ export async function setPolicyAction(input: {
     const body = (await res.json()) as { revision: number };
     revalidatePath('/[locale]/acl', 'page');
     return { ok: true, revision: body.revision };
+  } catch (e) {
+    return { ok: false, error: (e as Error).message };
+  }
+}
+
+// validatePolicyAction runs the controller's HCL parser against a
+// draft without writing (issue #134). Returns ok+rules on success;
+// ok:false + error on parse failure (the editor renders the error
+// inline). Distinct from setPolicyAction's 400 path because the
+// Validate button fires standalone, not as part of a save attempt.
+export type ValidatePolicyResult =
+  | { ok: true; rules: number }
+  | { ok: false; error: string };
+
+export async function validatePolicyAction(
+  hclSource: string,
+): Promise<ValidatePolicyResult> {
+  try {
+    const res = await fetch(`${BASE}/api/v1/policy/validate`, {
+      method: 'POST',
+      headers: await buildHeaders(),
+      body: JSON.stringify({ hclSource }),
+      cache: 'no-store',
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      return { ok: false, error: text || `${res.status} ${res.statusText}` };
+    }
+    const body = (await res.json()) as { rules: number };
+    return { ok: true, rules: body.rules };
+  } catch (e) {
+    return { ok: false, error: (e as Error).message };
+  }
+}
+
+// simulatePolicyAction asks the controller to compile a draft HCL
+// against the current peer registry and return the allow/deny
+// matrix. Powers the editor's "Preview" tab.
+export type SimulatePolicyResult =
+  | { ok: true; simulation: PolicySimulation }
+  | { ok: false; error: string };
+
+export async function simulatePolicyAction(
+  hclSource: string,
+): Promise<SimulatePolicyResult> {
+  try {
+    const res = await fetch(`${BASE}/api/v1/policy/simulate`, {
+      method: 'POST',
+      headers: await buildHeaders(),
+      body: JSON.stringify({ hclSource }),
+      cache: 'no-store',
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      return { ok: false, error: text || `${res.status} ${res.statusText}` };
+    }
+    const body = (await res.json()) as PolicySimulation;
+    return { ok: true, simulation: body };
+  } catch (e) {
+    return { ok: false, error: (e as Error).message };
+  }
+}
+
+// rollbackPolicyAction re-applies a past revision as a new current
+// (issue #134). Server-side this is a Put of the older HCL — the
+// audit row makes the action visible. Idempotent at the controller
+// (404 on unknown revision is treated as a hard error here; the UI
+// stays on the Versions tab so the operator can refresh + retry).
+export async function rollbackPolicyAction(revision: number): Promise<ActionResult> {
+  try {
+    const res = await fetch(`${BASE}/api/v1/policy/rollback`, {
+      method: 'POST',
+      headers: await buildHeaders(),
+      body: JSON.stringify({ revision }),
+      cache: 'no-store',
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      return { ok: false, error: text || `${res.status} ${res.statusText}` };
+    }
+    revalidatePath('/[locale]/acl', 'page');
+    return { ok: true };
   } catch (e) {
     return { ok: false, error: (e as Error).message };
   }

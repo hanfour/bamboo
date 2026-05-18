@@ -1,21 +1,28 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import { useTranslations } from 'next-intl';
-import { fetchPolicy, fetchRecommendations, type ApiRecommendation } from '@/lib/api';
-import type { AclPolicy } from '@/lib/types';
+import {
+  fetchPolicy,
+  fetchPolicyRevisions,
+  fetchRecommendations,
+  type ApiRecommendation,
+} from '@/lib/api';
+import type { AclPolicy, PolicyHistoryRow } from '@/lib/types';
 import { AclEditor } from '@/components/AclEditor';
 import { FetchErrorState } from '@/components/FetchErrorState';
 
 export default async function AclPage() {
- const [policy, recommendations] = await Promise.all([
+ const [policy, recommendations, revisions] = await Promise.all([
  fetchPolicy(),
  fetchRecommendations(),
+ fetchPolicyRevisions(),
  ]);
 
  // The ACL page is the policy editor. Policy is load-bearing; if we
  // can't load it we surface the failure rather than render the empty
  // placeholder that lies about there being no policy. Recommendations
- // are advisory — failing to load them just hides the section.
+ // and revisions are advisory; failing to load either just hides the
+ // section / shows the empty-state ("no history yet").
  if (policy.kind !== 'ok') {
  return <FetchErrorState kind={policy.kind} />;
  }
@@ -24,6 +31,7 @@ export default async function AclPage() {
  <Acl
  policy={policy.value}
  recommendations={recommendations.kind === 'ok' ? recommendations.value : []}
+ revisions={revisions.kind === 'ok' ? revisions.value : []}
  />
  );
 }
@@ -31,9 +39,11 @@ export default async function AclPage() {
 function Acl({
  policy,
  recommendations,
+ revisions,
 }: {
  policy: AclPolicy;
  recommendations: ApiRecommendation[];
+ revisions: PolicyHistoryRow[];
 }) {
  const t = useTranslations('acl');
 
@@ -68,7 +78,11 @@ function Acl({
  </p>
  </header>
 
- <AclEditor hclSource={policy.hclSource} revision={policy.revision} />
+ <AclEditor
+ hclSource={policy.hclSource}
+ revision={policy.revision}
+ revisions={revisions}
+ />
 
  <section className="space-y-2">
  <h2 className="text-sm font-medium uppercase tracking-wide text-bamboo-200/60">

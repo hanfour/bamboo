@@ -4,131 +4,515 @@
 
 import { useState, useTransition } from 'react';
 import { useTranslations } from 'next-intl';
-import { setPolicyAction } from '@/lib/actions';
+import {
+  rollbackPolicyAction,
+  setPolicyAction,
+  simulatePolicyAction,
+  validatePolicyAction,
+} from '@/lib/actions';
+import type { PolicyHistoryRow, PolicySimulation } from '@/lib/types';
 
-// AclEditor wraps the HCL source view with an Edit / Save flow. Read
-// mode is a <pre> that mirrors the prior server-rendered view; edit
-// mode swaps in a <textarea> + Save / Cancel buttons + an inline
-// error region.
+// AclEditor is the issue-#134 tabbed editor for the tenant ACL.
+// Three tabs:
 //
-// Deliberately NOT shipping CodeMirror or a similar editor: the
-// bundle cost (~300KB) is hard to justify for an admin surface that
-// rarely changes. A plain monospace textarea covers the use case
-// (paste, light edit, save); syntax highlighting + preview tabs are
-// P2 if the editor gets heavy traffic.
+//   Source   — read-only HCL view; click Edit to switch to an
+//              inline textarea with Validate / Save / Cancel.
+//   Preview  — run the controller's simulator against the current
+//              draft (or the saved policy when not editing) and
+//              render the allow/deny matrix across approved peers.
+//   Versions — list past revisions with timestamps + applier and a
+//              Rollback button per row.
 //
-// Save flow:
-// - Disable Save while pending
-// - On success: switch back to read mode; the page re-renders with
-// the new revision via revalidatePath('/[locale]/acl')
-// - On 400 (parse error): keep edit mode open, show the controller's
-// parser message inline near the textarea
-// - On 409 (stale revision): show a"someone else saved" hint and
-// ask the operator to cancel + reload
+// Why no CodeMirror: bundle cost vs traffic. The HCL surface is
+// rarely-touched admin tooling; a monospace textarea + Validate +
+// Simulator covers the editor's job without dragging in ~300KB of
+// JS. If admin usage grows we can upgrade to CodeMirror as a
+// follow-up.
+type Tab = 'source' | 'preview' | 'versions';
+
 export function AclEditor({
- hclSource,
- revision,
+  hclSource,
+  revision,
+  revisions,
 }: {
- hclSource: string;
- revision: number;
+  hclSource: string;
+  revision: number;
+  // Server-rendered at page-load time so the Versions tab renders
+  // synchronously when the operator clicks it. Empty array when
+  // the revisions fetch failed or the user lacks admin permission —
+  // the tab still renders, just with the "no history" empty state.
+  revisions: PolicyHistoryRow[];
 }) {
- const t = useTranslations('acl');
- const tEdit = useTranslations('acl.editor');
- const [editing, setEditing] = useState(false);
- const [draft, setDraft] = useState(hclSource);
- const [pending, startTransition] = useTransition();
- const [error, setError] = useState<{ msg: string; stale: boolean } | null>(null);
+  const [tab, setTab] = useState<Tab>('source');
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(hclSource);
 
- function save() {
- setError(null);
- startTransition(async () => {
- const res = await setPolicyAction({
- hclSource: draft,
- expectedRevision: revision,
- });
- if (res.ok) {
- setEditing(false);
- } else {
- setError({ msg: res.error, stale: Boolean(res.staleRevision) });
- }
- });
- }
+  return (
+    <section className="space-y-4">
+      <TabBar
+        tab={tab}
+        onChange={setTab}
+        editing={editing}
+        versionCount={revisions.length}
+      />
+      {tab === 'source' && (
+        <SourceTab
+          hclSource={hclSource}
+          revision={revision}
+          editing={editing}
+          setEditing={setEditing}
+          draft={draft}
+          setDraft={setDraft}
+        />
+      )}
+      {tab === 'preview' && (
+        <PreviewTab hclSource={editing ? draft : hclSource} editing={editing} />
+      )}
+      {tab === 'versions' && (
+        <VersionsTab
+          revisions={revisions}
+          currentRevision={revision}
+          currentHclSource={hclSource}
+        />
+      )}
+    </section>
+  );
+}
 
- function cancel() {
- setEditing(false);
- setDraft(hclSource);
- setError(null);
- }
+function TabBar({
+  tab,
+  onChange,
+  editing,
+  versionCount,
+}: {
+  tab: Tab;
+  onChange: (t: Tab) => void;
+  editing: boolean;
+  versionCount: number;
+}) {
+  const t = useTranslations('acl.tabs');
+  // Tabs read as ghost buttons; the active one carries a 2px bottom
+  // stripe (same affordance the sidebar active item uses) and the
+  // bamboo-50 text the rest of the page already uses for primary
+  // content. The "editing" pill next to Source nudges the operator
+  // away from accidentally clicking Preview before they save.
+  const items: { id: Tab; label: string; badge?: string }[] = [
+    { id: 'source', label: t('source'), badge: editing ? t('editing') : undefined },
+    { id: 'preview', label: t('preview') },
+    { id: 'versions', label: t('versions') + (versionCount ? ` · ${versionCount}` : '') },
+  ];
+  return (
+    <div className="flex items-end gap-6 border-b border-ink-800">
+      {items.map((it) => {
+        const active = it.id === tab;
+        return (
+          <button
+            key={it.id}
+            type="button"
+            onClick={() => onChange(it.id)}
+            className={[
+              'relative pb-2 text-sm font-medium transition-colors',
+              active
+                ? 'text-bamboo-50 before:absolute before:inset-x-0 before:-bottom-px before:h-0.5 before:rounded-full before:bg-bamboo-400'
+                : 'text-bamboo-200/60 hover:text-bamboo-50',
+            ].join(' ')}
+          >
+            {it.label}
+            {it.badge && (
+              <span className="ml-2 rounded bg-bamboo-300/15 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-bamboo-300">
+                {it.badge}
+              </span>
+            )}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
 
- if (!editing) {
- return (
- <section className="space-y-2">
- <div className="flex items-baseline justify-between gap-2">
- <h2 className="text-sm font-medium uppercase tracking-wide text-bamboo-200/60">
- {t('viewSource')}
- </h2>
- <button
- type="button"
- onClick={() => {
- setDraft(hclSource);
- setEditing(true);
- }}
- className="rounded-md border border-bamboo-200/30 px-3 py-1.5 text-sm font-medium text-bamboo-100 transition-colors hover:border-bamboo-200/60 hover:text-bamboo-50 dark:text-bamboo-100 dark:hover:text-bamboo-50"
- >
- {t('edit')}
- </button>
- </div>
- <pre className="overflow-x-auto rounded-lg border border-ink-800 p-4 font-mono text-xs leading-relaxed text-bamboo-50 dark:text-bamboo-100">
- <code>{hclSource}</code>
- </pre>
- </section>
- );
- }
+function SourceTab({
+  hclSource,
+  revision,
+  editing,
+  setEditing,
+  draft,
+  setDraft,
+}: {
+  hclSource: string;
+  revision: number;
+  editing: boolean;
+  setEditing: (e: boolean) => void;
+  draft: string;
+  setDraft: (s: string) => void;
+}) {
+  const tEdit = useTranslations('acl.editor');
+  const [pending, startTransition] = useTransition();
+  const [error, setError] = useState<{ msg: string; stale: boolean } | null>(null);
+  const [validation, setValidation] = useState<{ ok: boolean; rules?: number; error?: string } | null>(null);
 
- return (
- <section className="space-y-2">
- <div className="flex items-baseline justify-between gap-2">
- <h2 className="text-sm font-medium uppercase tracking-wide text-bamboo-200/60">
- {t('viewSource')}
- </h2>
- <div className="flex items-center gap-2">
- <button
- type="button"
- onClick={cancel}
- disabled={pending}
- className="rounded-md border border-bamboo-200/30 px-3 py-1.5 text-sm text-bamboo-100 transition-colors hover:border-bamboo-200/60 hover:text-bamboo-50 disabled:opacity-50 dark:text-bamboo-100 dark:hover:text-bamboo-50"
- >
- {tEdit('cancel')}
- </button>
- <button
- type="button"
- onClick={save}
- disabled={pending || draft === hclSource}
- className="rounded-md bg-bamboo-50 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-ink-800 hover:bg-ink-800 dark:text-bamboo-50"
- >
- {pending ? tEdit('working') : tEdit('save')}
- </button>
- </div>
- </div>
- <textarea
- value={draft}
- onChange={(e) => setDraft(e.target.value)}
- spellCheck={false}
- disabled={pending}
- placeholder={tEdit('placeholder')}
- className="w-full min-h-[20rem] rounded-lg border border-bamboo-200/30 bg-ink-950 px-4 py-3 font-mono text-xs leading-relaxed text-bamboo-50 outline-none focus:border-bamboo-300 focus:ring-1 focus:ring-bamboo-300 dark:bg-ink-900 dark:text-bamboo-50"
- />
- {error && (
- <div className="rounded-md border border-red-300 px-3 py-2 text-sm text-red-700 dark:border-red-900/50 dark:text-red-400">
- {error.stale ? (
- tEdit('staleRevision')
- ) : (
- <>
- {tEdit('errorPrefix')} <code className="font-mono text-xs">{error.msg}</code>
- </>
- )}
- </div>
- )}
- </section>
- );
+  function validate() {
+    setError(null);
+    setValidation(null);
+    startTransition(async () => {
+      const r = await validatePolicyAction(draft);
+      setValidation(r.ok ? { ok: true, rules: r.rules } : { ok: false, error: r.error });
+    });
+  }
+
+  function save() {
+    setError(null);
+    startTransition(async () => {
+      const res = await setPolicyAction({ hclSource: draft, expectedRevision: revision });
+      if (res.ok) {
+        setEditing(false);
+        setValidation(null);
+      } else {
+        setError({ msg: res.error, stale: Boolean(res.staleRevision) });
+      }
+    });
+  }
+
+  function cancel() {
+    setEditing(false);
+    setDraft(hclSource);
+    setError(null);
+    setValidation(null);
+  }
+
+  if (!editing) {
+    return (
+      <div className="space-y-2">
+        <div className="flex items-center justify-end">
+          <button
+            type="button"
+            onClick={() => setEditing(true)}
+            className="rounded-md border border-bamboo-200/30 px-3 py-1.5 text-sm font-medium text-bamboo-100 transition-colors hover:border-bamboo-200/60 hover:text-bamboo-50"
+          >
+            {tEdit('edit')}
+          </button>
+        </div>
+        <pre className="overflow-x-auto rounded-lg border border-ink-800 p-4 font-mono text-xs leading-relaxed text-bamboo-50">
+          <code>{hclSource}</code>
+        </pre>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-end gap-2">
+        <button
+          type="button"
+          onClick={cancel}
+          disabled={pending}
+          className="rounded-md border border-bamboo-200/30 px-3 py-1.5 text-sm text-bamboo-100 transition-colors hover:border-bamboo-200/60 hover:text-bamboo-50 disabled:opacity-50"
+        >
+          {tEdit('cancel')}
+        </button>
+        <button
+          type="button"
+          onClick={validate}
+          disabled={pending}
+          className="rounded-md border border-bamboo-200/30 px-3 py-1.5 text-sm text-bamboo-100 transition-colors hover:border-bamboo-200/60 hover:text-bamboo-50 disabled:opacity-50"
+        >
+          {tEdit('validate')}
+        </button>
+        <button
+          type="button"
+          onClick={save}
+          disabled={pending || draft === hclSource}
+          className="rounded-md border border-bamboo-300/40 bg-bamboo-50 px-3 py-1.5 text-sm font-medium text-ink-950 transition-colors hover:bg-bamboo-100 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {pending ? tEdit('working') : tEdit('save')}
+        </button>
+      </div>
+      <textarea
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        spellCheck={false}
+        disabled={pending}
+        placeholder={tEdit('placeholder')}
+        className="w-full min-h-[20rem] rounded-lg border border-bamboo-200/30 bg-ink-950 px-4 py-3 font-mono text-xs leading-relaxed text-bamboo-50 outline-none focus:border-bamboo-300 focus:ring-1 focus:ring-bamboo-300"
+      />
+      {validation && validation.ok && (
+        <div className="rounded-md border border-bamboo-300/30 px-3 py-2 text-sm text-bamboo-200/80">
+          {tEdit('validateOk', { rules: validation.rules ?? 0 })}
+        </div>
+      )}
+      {validation && !validation.ok && (
+        <div className="rounded-md border border-red-900/50 px-3 py-2 text-sm text-red-400">
+          {tEdit('errorPrefix')}{' '}
+          <code className="font-mono text-xs">{validation.error}</code>
+        </div>
+      )}
+      {error && (
+        <div className="rounded-md border border-red-900/50 px-3 py-2 text-sm text-red-400">
+          {error.stale ? (
+            tEdit('staleRevision')
+          ) : (
+            <>
+              {tEdit('errorPrefix')} <code className="font-mono text-xs">{error.msg}</code>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PreviewTab({ hclSource, editing }: { hclSource: string; editing: boolean }) {
+  const t = useTranslations('acl.preview');
+  const [state, setState] = useState<
+    | { kind: 'idle' }
+    | { kind: 'loading' }
+    | { kind: 'ok'; simulation: PolicySimulation }
+    | { kind: 'error'; message: string }
+  >({ kind: 'idle' });
+  const [, startTransition] = useTransition();
+
+  function run() {
+    setState({ kind: 'loading' });
+    startTransition(async () => {
+      const r = await simulatePolicyAction(hclSource);
+      if (r.ok) {
+        setState({ kind: 'ok', simulation: r.simulation });
+      } else {
+        setState({ kind: 'error', message: r.error });
+      }
+    });
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="text-sm text-bamboo-200/70">
+          {editing ? t('descDraft') : t('descSaved')}
+        </p>
+        <button
+          type="button"
+          onClick={run}
+          disabled={state.kind === 'loading'}
+          className="rounded-md border border-bamboo-200/30 px-3 py-1.5 text-sm font-medium text-bamboo-100 transition-colors hover:border-bamboo-200/60 hover:text-bamboo-50 disabled:opacity-50"
+        >
+          {state.kind === 'loading' ? t('working') : t('run')}
+        </button>
+      </div>
+
+      {state.kind === 'idle' && (
+        <p className="rounded-md border border-dashed border-ink-700 p-6 text-center text-sm text-bamboo-200/60">
+          {t('idle')}
+        </p>
+      )}
+      {state.kind === 'error' && (
+        <div className="rounded-md border border-red-900/50 px-3 py-2 text-sm text-red-400">
+          {t('error')}: <code className="font-mono text-xs">{state.message}</code>
+        </div>
+      )}
+      {state.kind === 'ok' && (
+        <SimulationMatrix simulation={state.simulation} />
+      )}
+    </div>
+  );
+}
+
+function SimulationMatrix({ simulation }: { simulation: PolicySimulation }) {
+  const t = useTranslations('acl.preview');
+  // Build the unique peer set in column order (sorted by hostname for
+  // deterministic rendering). Then for each row, look up the verdict
+  // in a map keyed by `${src}->${dst}`.
+  const peerSet = new Map<string, string>();
+  for (const e of simulation.edges) {
+    peerSet.set(e.sourceId, e.sourceHostname);
+    peerSet.set(e.destId, e.destHostname);
+  }
+  const peers = Array.from(peerSet.entries()).sort((a, b) => a[1].localeCompare(b[1]));
+  const edgeMap = new Map(simulation.edges.map((e) => [`${e.sourceId}->${e.destId}`, e]));
+
+  if (peers.length === 0) {
+    return (
+      <p className="rounded-md border border-dashed border-ink-700 p-6 text-center text-sm text-bamboo-200/60">
+        {t('emptyPeers')}
+      </p>
+    );
+  }
+
+  return (
+    <div className="space-y-2">
+      <p className="text-xs text-bamboo-200/60">
+        {t('summary', {
+          rules: simulation.rules,
+          edges: simulation.edges.length,
+          allowed: simulation.edges.filter((e) => e.allow).length,
+        })}
+      </p>
+      <div className="overflow-x-auto">
+        <table className="border-collapse text-xs">
+          <thead>
+            <tr>
+              <th className="border border-ink-800 bg-ink-900/50 p-2 text-left font-medium text-bamboo-200/60">
+                {t('matrixHeader')}
+              </th>
+              {peers.map(([id, name]) => (
+                <th
+                  key={id}
+                  className="border border-ink-800 bg-ink-900/50 p-2 font-medium text-bamboo-200/80"
+                  title={id}
+                >
+                  {name}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {peers.map(([srcId, srcName]) => (
+              <tr key={srcId}>
+                <th
+                  className="border border-ink-800 bg-ink-900/50 p-2 text-left font-medium text-bamboo-200/80"
+                  title={srcId}
+                >
+                  {srcName}
+                </th>
+                {peers.map(([dstId]) => {
+                  if (srcId === dstId) {
+                    return (
+                      <td
+                        key={dstId}
+                        className="border border-ink-800 p-2 text-center text-bamboo-200/30"
+                      >
+                        —
+                      </td>
+                    );
+                  }
+                  const edge = edgeMap.get(`${srcId}->${dstId}`);
+                  const allow = edge?.allow ?? false;
+                  return (
+                    <td
+                      key={dstId}
+                      className={[
+                        'border border-ink-800 p-2 text-center text-xs font-medium',
+                        allow ? 'text-bamboo-300' : 'text-red-400/70',
+                      ].join(' ')}
+                      title={
+                        edge?.allowedIps && edge.allowedIps.length > 0
+                          ? edge.allowedIps.join(', ')
+                          : undefined
+                      }
+                    >
+                      {allow ? '✓' : '✗'}
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function VersionsTab({
+  revisions,
+  currentRevision,
+  currentHclSource,
+}: {
+  revisions: PolicyHistoryRow[];
+  currentRevision: number;
+  currentHclSource: string;
+}) {
+  const t = useTranslations('acl.versions');
+  const [busyRev, setBusyRev] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [, startTransition] = useTransition();
+  const [expandedRev, setExpandedRev] = useState<number | null>(null);
+
+  function rollback(rev: number) {
+    setError(null);
+    setBusyRev(rev);
+    startTransition(async () => {
+      const r = await rollbackPolicyAction(rev);
+      setBusyRev(null);
+      if (!r.ok) {
+        setError(r.error);
+      }
+    });
+  }
+
+  if (revisions.length === 0) {
+    return (
+      <p className="rounded-md border border-dashed border-ink-700 p-6 text-center text-sm text-bamboo-200/60">
+        {t('empty')}
+      </p>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      <p className="text-sm text-bamboo-200/70">{t('description')}</p>
+      {error && (
+        <div className="rounded-md border border-red-900/50 px-3 py-2 text-sm text-red-400">
+          {error}
+        </div>
+      )}
+      <ol className="divide-y divide-ink-800 rounded-lg border border-ink-800">
+        {revisions.map((r) => {
+          const isCurrent = r.revision === currentRevision;
+          const isExpanded = expandedRev === r.revision;
+          const sameAsCurrent = r.hclSource === currentHclSource;
+          return (
+            <li key={r.revision} className="space-y-2 p-4">
+              <div className="flex flex-wrap items-baseline justify-between gap-3">
+                <div className="space-y-1">
+                  <div className="flex items-baseline gap-3">
+                    <span className="font-mono text-sm text-bamboo-50">
+                      r{r.revision}
+                    </span>
+                    {isCurrent && (
+                      <span className="rounded bg-bamboo-300/15 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-bamboo-300">
+                        {t('current')}
+                      </span>
+                    )}
+                  </div>
+                  <div className="text-xs text-bamboo-200/60">
+                    <time dateTime={r.appliedAt}>{new Date(r.appliedAt).toLocaleString()}</time>
+                    {r.appliedByEmail && (
+                      <>
+                        {' · '}
+                        <span>{r.appliedByEmail}</span>
+                      </>
+                    )}
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setExpandedRev(isExpanded ? null : r.revision)}
+                    className="rounded border border-ink-700 px-2.5 py-1 text-xs text-bamboo-200/80 transition-colors hover:bg-ink-800 hover:text-bamboo-50"
+                  >
+                    {isExpanded ? t('hideSource') : t('viewSource')}
+                  </button>
+                  {!isCurrent && (
+                    <button
+                      type="button"
+                      onClick={() => rollback(r.revision)}
+                      disabled={busyRev !== null || sameAsCurrent}
+                      title={sameAsCurrent ? t('rollbackSameAsCurrent') : undefined}
+                      className="rounded border border-bamboo-300/40 bg-bamboo-50 px-2.5 py-1 text-xs font-medium text-ink-950 transition-colors hover:bg-bamboo-100 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {busyRev === r.revision ? t('rollingBack') : t('rollback')}
+                    </button>
+                  )}
+                </div>
+              </div>
+              {isExpanded && (
+                <pre className="overflow-x-auto rounded border border-ink-800 p-3 font-mono text-[11px] leading-relaxed text-bamboo-100">
+                  <code>{r.hclSource}</code>
+                </pre>
+              )}
+            </li>
+          );
+        })}
+      </ol>
+    </div>
+  );
 }
