@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/netip"
 	"strconv"
 	"strings"
 	"time"
@@ -216,6 +217,40 @@ func (h *HTTPServer) routeAPI(w http.ResponseWriter, r *http.Request) {
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
+		return
+	}
+	// /api/v1/policy/{validate,simulate,revisions,rollback} — admin
+	// tooling endpoints powering the ACL editor (issue #134).
+	if r.URL.Path == "/api/v1/policy/validate" {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		h.apiValidatePolicy(w, r, authn, tenant)
+		return
+	}
+	if r.URL.Path == "/api/v1/policy/simulate" {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		h.apiSimulatePolicy(w, r, authn, tenant)
+		return
+	}
+	if r.URL.Path == "/api/v1/policy/revisions" {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		h.apiPolicyRevisions(w, r, authn, tenant)
+		return
+	}
+	if r.URL.Path == "/api/v1/policy/rollback" {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		h.apiPolicyRollback(w, r, authn, tenant)
 		return
 	}
 
@@ -1532,6 +1567,271 @@ func (h *HTTPServer) apiPutPolicy(w http.ResponseWriter, r *http.Request, authn 
 		HCLSource: rec.HCLSource,
 		UpdatedAt: &rec.UpdatedAt,
 		Rules:     rules,
+	})
+}
+
+// apiValidatePolicy parses a candidate HCL body and reports whether
+// the controller would accept it on a PUT (issue #134). No DB write
+// happens — this powers the editor's "Validate" affordance so an
+// operator can iterate against the controller's parser before they
+// commit a revision that bumps every client's heartbeat.
+//
+// Admin-only on the wire: the parser is cheap but a non-admin should
+// not be able to probe HCL syntax errors against the controller's
+// version; that's a small leak vector for inferring parser internals.
+// Returns 200 with {ok:true,rules:N} on success; 400 with
+// {error: "<parser message>"} on failure.
+func (h *HTTPServer) apiValidatePolicy(w http.ResponseWriter, r *http.Request, authn *authnContext, tenant *repo.Tenant) {
+	if !h.requireAdmin(w, r, authn, tenant, "policy.validate") {
+		return
+	}
+	var req apiPutPolicyReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("decode body: %w", err))
+		return
+	}
+	parsed, parseErr := policy.Parse("policy.hcl", req.HCLSource)
+	if parseErr != nil {
+		// Mirror apiPutPolicy's contract: 400 with the bare message
+		// so the editor can show line/column info verbatim. No audit
+		// row — validate is a no-op on the data plane.
+		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid policy: %v", parseErr))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":    true,
+		"rules": len(parsed.Rules),
+	})
+}
+
+// apiSimulatePolicyReq is the request shape for the "Preview" tab.
+// HCLSource is the draft the operator is considering; the simulator
+// parses it locally + evaluates the allow/deny matrix against the
+// current peer registry and returns the per-pair verdict.
+type apiSimulatePolicyReq struct {
+	HCLSource string `json:"hclSource"`
+}
+
+// apiSimulatePolicyEdge is one (src, dst, allow) triple in the
+// simulator response. We surface IDs + hostnames so the UI can
+// render a readable matrix without a second round-trip; allowedIps
+// is included so the same compile path the data plane uses (issue
+// #132) doubles as the explanation here.
+type apiSimulatePolicyEdge struct {
+	SourceID       string   `json:"sourceId"`
+	SourceHostname string   `json:"sourceHostname"`
+	DestID         string   `json:"destId"`
+	DestHostname   string   `json:"destHostname"`
+	Allow          bool     `json:"allow"`
+	AllowedIPs     []string `json:"allowedIps,omitempty"`
+}
+
+// apiSimulatePolicyResp packages the matrix together with the parsed
+// rule count so the editor can title the preview ("4 rules · 12 of
+// 20 pairs allowed"). Peers field carries the IDs the matrix is
+// indexed on so the renderer doesn't need a separate peer fetch.
+type apiSimulatePolicyResp struct {
+	Rules int                     `json:"rules"`
+	Edges []apiSimulatePolicyEdge `json:"edges"`
+}
+
+// apiSimulatePolicy evaluates a draft HCL policy against the
+// tenant's current peer registry and returns the per-(src,dst)
+// verdict (issue #134). Admin-only — the matrix is membership-
+// inferring.
+//
+// Self-pairs (src == dst) are omitted; the simulator answers "does
+// the policy let peer A reach peer B" for A != B.
+func (h *HTTPServer) apiSimulatePolicy(w http.ResponseWriter, r *http.Request, authn *authnContext, tenant *repo.Tenant) {
+	if !h.requireAdmin(w, r, authn, tenant, "policy.simulate") {
+		return
+	}
+	var req apiSimulatePolicyReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("decode body: %w", err))
+		return
+	}
+	parsed, parseErr := policy.Parse("policy.hcl", req.HCLSource)
+	if parseErr != nil {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid policy: %v", parseErr))
+		return
+	}
+	peers, err := h.peers.ListByTenant(r.Context(), tenant.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("list peers: %w", err))
+		return
+	}
+	// Only approved peers participate in the mesh (issue #133), so
+	// only approved peers participate in the simulator. Pending /
+	// rejected rows would skew the matrix toward "you can't reach
+	// anyone" without explaining why.
+	approved := make([]*repo.Peer, 0, len(peers))
+	for _, p := range peers {
+		if p.ApprovalStatus == "approved" {
+			approved = append(approved, p)
+		}
+	}
+	resp := apiSimulatePolicyResp{
+		Rules: len(parsed.Rules),
+		Edges: make([]apiSimulatePolicyEdge, 0, len(approved)*len(approved)),
+	}
+	for _, src := range approved {
+		for _, dst := range approved {
+			if src.ID == dst.ID {
+				continue
+			}
+			edge := apiSimulatePolicyEdge{
+				SourceID:       src.ID.String(),
+				SourceHostname: src.Hostname,
+				DestID:         dst.ID.String(),
+				DestHostname:   dst.Hostname,
+				Allow:          simulateAllow(parsed, src, dst),
+			}
+			if edge.Allow {
+				edge.AllowedIPs = []string{dst.IP + dstPrefixSuffix(dst.IP)}
+			}
+			resp.Edges = append(resp.Edges, edge)
+		}
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// simulateAllow is a thin wrapper that maps repo.Peer onto the
+// policy.PeerView the evaluator wants, keeping the api-side handler
+// readable. Duplicates handlers/coordinator.go:peerView intentionally
+// — that one is hot-path (called on every Register) and lives in the
+// handlers package; this one is admin-tooling and would create an
+// awkward import cycle if reused across.
+func simulateAllow(p *policy.Policy, src, dst *repo.Peer) bool {
+	srcView := policy.PeerView{Tags: src.Tags}
+	dstView := policy.PeerView{Tags: dst.Tags}
+	if addr, err := netip.ParseAddr(src.IP); err == nil {
+		srcView.IP = addr
+	}
+	if addr, err := netip.ParseAddr(dst.IP); err == nil {
+		dstView.IP = addr
+	}
+	return policy.Allow(p, srcView, dstView)
+}
+
+// dstPrefixSuffix picks /32 for v4 and /128 for v6 so the simulator
+// renders allowed_ips the same way the coordinator's enforcement
+// path does.
+func dstPrefixSuffix(ip string) string {
+	if addr, err := netip.ParseAddr(ip); err == nil && addr.Is6() {
+		return "/128"
+	}
+	return "/32"
+}
+
+// apiHistoryRecordJSON is one row of the Versions tab.
+type apiHistoryRecordJSON struct {
+	Revision       int64     `json:"revision"`
+	HCLSource      string    `json:"hclSource"`
+	AppliedAt      time.Time `json:"appliedAt"`
+	AppliedByEmail string    `json:"appliedByEmail,omitempty"`
+}
+
+// apiPolicyRevisions lists past policy revisions for the Web UI's
+// Versions tab (issue #134). Admin-only. Returns the 20 most-recent
+// rows, newest first.
+func (h *HTTPServer) apiPolicyRevisions(w http.ResponseWriter, r *http.Request, authn *authnContext, tenant *repo.Tenant) {
+	if !h.requireAdmin(w, r, authn, tenant, "policy.revisions") {
+		return
+	}
+	rows, err := h.policies.ListHistory(r.Context(), tenant.ID, 20)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	out := make([]apiHistoryRecordJSON, 0, len(rows))
+	for _, h := range rows {
+		out = append(out, apiHistoryRecordJSON{
+			Revision:       h.Revision,
+			HCLSource:      h.HCLSource,
+			AppliedAt:      h.AppliedAt,
+			AppliedByEmail: h.AppliedByEmail,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"revisions": out})
+}
+
+// apiRollbackPolicyReq targets a specific past revision. The rollback
+// is implemented as a Put of that revision's HCL — a new revision
+// gets minted, the audit row records the rollback, and the history
+// preserves both the original revision and the rollback row.
+type apiRollbackPolicyReq struct {
+	Revision int64 `json:"revision"`
+}
+
+// apiPolicyRollback re-applies a past revision as a fresh current
+// (issue #134). Conceptually "restore", implementation-wise just a
+// Put of the older HCL source. Admin-only.
+//
+// Why a new revision instead of swapping the current row's revision
+// number back: the history table is append-only and the rollback's
+// timestamp/actor must record who pressed the button, not who
+// originally authored the rule. Treating rollback as "write the old
+// HCL as if it were new" makes the audit trail honest.
+func (h *HTTPServer) apiPolicyRollback(w http.ResponseWriter, r *http.Request, authn *authnContext, tenant *repo.Tenant) {
+	if !h.requireAdmin(w, r, authn, tenant, "policy.rollback") {
+		return
+	}
+	var req apiRollbackPolicyReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("decode body: %w", err))
+		return
+	}
+	if req.Revision <= 0 {
+		writeError(w, http.StatusBadRequest, errors.New("revision must be positive"))
+		return
+	}
+	rows, err := h.policies.ListHistory(r.Context(), tenant.ID, 100)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	var target *repo.HistoryRecord
+	for _, h := range rows {
+		if h.Revision == req.Revision {
+			target = h
+			break
+		}
+	}
+	if target == nil {
+		writeError(w, http.StatusNotFound, fmt.Errorf("revision %d not found in history", req.Revision))
+		return
+	}
+	var updatedBy *uuid.UUID
+	if authn != nil && authn.claims != nil {
+		uid := authn.claims.UserID
+		updatedBy = &uid
+	}
+	// expectedRevision=0 because the operator's intent is "make this
+	// the current, regardless of what got written since they opened
+	// the Versions tab". The audit row makes the override visible.
+	rec, err := h.policies.Put(r.Context(), tenant.ID, target.HCLSource, updatedBy, 0)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("rollback put: %w", err))
+		return
+	}
+	if h.audits != nil {
+		_ = h.audits.Insert(r.Context(), &repo.AuditEvent{
+			TenantID:     &tenant.ID,
+			ActorType:    "user",
+			ActorID:      pointerIfNonZero(claimsUserID(authn)),
+			Action:       "policy.rollback",
+			ResourceType: "policy",
+			Diff: marshalDiffJSON(map[string]any{
+				"rolled_back_to": target.Revision,
+				"new_revision":   rec.Revision,
+			}),
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"revision":    rec.Revision,
+		"appliedFrom": target.Revision,
+		"appliedAt":   rec.UpdatedAt,
 	})
 }
 

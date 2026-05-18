@@ -33,6 +33,19 @@ type PolicyRecord struct {
 	UpdatedBy *uuid.UUID
 }
 
+// HistoryRecord is a single row from acl_policy_history. Distinct
+// from PolicyRecord because the history table tracks who applied a
+// revision (applied_by) rather than who currently holds it. The Web
+// UI lists these for the rollback + diff features in issue #134.
+type HistoryRecord struct {
+	TenantID       uuid.UUID
+	Revision       int64
+	HCLSource      string
+	AppliedAt      time.Time
+	AppliedBy      *uuid.UUID
+	AppliedByEmail string // populated by LEFT JOIN; empty when applied_by is NULL or the user has been deleted.
+}
+
 // ErrRevisionMismatch is returned by Put when expectedRevision is
 // non-zero and does not match the current revision (optimistic
 // concurrency control).
@@ -121,4 +134,47 @@ func (r *Policies) Put(
 		return nil, fmt.Errorf("commit: %w", err)
 	}
 	return &rec, nil
+}
+
+// ListHistory returns the most recent N revisions for a tenant,
+// newest first. Used by the Web UI's "Versions" tab (issue #134) to
+// render the rollback list with timestamps and the admin email who
+// applied each revision. limit clamps to a small constant — the
+// table grows append-only and we don't want to ship an unbounded
+// payload over the wire for a tenant with churn.
+//
+// LEFT JOINs users so the row carries the applier's email inline.
+// Deleted users (users.deleted_at IS NOT NULL) yield an empty string
+// rather than orphan-rendering the row; the audit semantics survive
+// the user deletion even though the friendly email doesn't.
+func (r *Policies) ListHistory(ctx context.Context, tenantID uuid.UUID, limit int) ([]*HistoryRecord, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+	rows, err := r.pool.Query(ctx, `
+		SELECT h.tenant_id, h.revision, h.hcl_source, h.applied_at, h.applied_by,
+		       COALESCE(u.email, '')
+		FROM acl_policy_history h
+		LEFT JOIN users u ON u.id = h.applied_by AND u.deleted_at IS NULL
+		WHERE h.tenant_id = $1
+		ORDER BY h.revision DESC
+		LIMIT $2
+	`, tenantID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []*HistoryRecord
+	for rows.Next() {
+		var h HistoryRecord
+		if err := rows.Scan(
+			&h.TenantID, &h.Revision, &h.HCLSource, &h.AppliedAt, &h.AppliedBy,
+			&h.AppliedByEmail,
+		); err != nil {
+			return nil, err
+		}
+		out = append(out, &h)
+	}
+	return out, rows.Err()
 }
