@@ -61,6 +61,15 @@ export type Peer = {
   // flipped the gate. Backfilled to createdAt for legacy rows so
   // the UI timeline column stays coherent.
   approvedAt?: string;
+  // connectionPath is how the peer is currently reaching the mesh
+  // (issue #138). 'direct' ⇒ P2P WG handshake; 'relay' ⇒ NAT
+  // traversal failed and the peer is using the relay fallback;
+  // 'unknown' ⇒ legacy / pre-#138 row, or the peer hasn't reported
+  // yet. The Web UI renders ⚡ direct / 🔄 relay icons next to the
+  // online indicator on PeerTable.
+  connectionPath?: 'direct' | 'relay' | 'unknown';
+  connectionPathAt?: string;
+  connectionLatencyMs?: number;
 };
 
 // FetchResult is a discriminated union for read paths so the UI can

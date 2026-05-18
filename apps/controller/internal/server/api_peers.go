@@ -253,6 +253,14 @@ type peerHeartbeatRequest struct {
 	PeerID              string   `json:"peerId"`
 	KnownPolicyRevision int64    `json:"knownPolicyRevision"`
 	Endpoints           []string `json:"endpoints,omitempty"`
+	// ConnectionPath reports how this peer is currently reaching
+	// the mesh (issue #138). One of "direct" / "relay" / "unknown".
+	// Empty string → controller leaves the column unchanged so a
+	// peer that doesn't yet detect path doesn't reset prior info.
+	ConnectionPath string `json:"connectionPath,omitempty"`
+	// LatencyMs is the most-recent RTT measurement the peer has
+	// (heartbeat / ping). Zero → leave the column unchanged.
+	LatencyMs int32 `json:"latencyMs,omitempty"`
 }
 
 type peerHeartbeatResponse struct {
@@ -286,6 +294,20 @@ func (h *HTTPServer) apiPeersHeartbeat(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeGRPCError(w, err)
 		return
+	}
+	// Connection-path side-channel (issue #138). We persist on the
+	// peer row outside the coord.Heartbeat call because the path is
+	// admin-visibility data, not part of the mesh-state contract.
+	// Validation happens in the repo's CHECK constraint; an invalid
+	// value would surface as a 500 here, so guard at the API edge.
+	if body.ConnectionPath != "" {
+		switch body.ConnectionPath {
+		case "direct", "relay", "unknown":
+			peerID, perr := uuid.Parse(body.PeerID)
+			if perr == nil {
+				_, _ = h.peers.SetConnectionPath(r.Context(), peerID, body.ConnectionPath, body.LatencyMs)
+			}
+		}
 	}
 	writeJSON(w, http.StatusOK, peerHeartbeatResponse{
 		PeersChanged:          resp.GetPeersChanged(),

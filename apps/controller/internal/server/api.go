@@ -576,6 +576,13 @@ type apiPeerJSON struct {
 	ExitNodeCapable     bool     `json:"exitNodeCapable"`
 	ExitNodeApproved    bool     `json:"exitNodeApproved"`
 	UsingExitNodePeerID string   `json:"usingExitNodePeerId,omitempty"`
+	// ConnectionPath is "direct" / "relay" / "unknown" (issue #138).
+	// Reported by the peer on heartbeat; nil on the wire when the
+	// peer hasn't reported yet. The Web UI normalizes nil → "unknown"
+	// and shows ⚡ direct / 🔄 relay icons in the status column.
+	ConnectionPath      *string    `json:"connectionPath,omitempty"`
+	ConnectionPathAt    *time.Time `json:"connectionPathAt,omitempty"`
+	ConnectionLatencyMs *int32     `json:"connectionLatencyMs,omitempty"`
 }
 
 // emptyIfNil normalizes a nil []string to an empty slice so the
@@ -630,6 +637,9 @@ func peerToJSON(p *repo.Peer) apiPeerJSON {
 			}
 			return p.UsingExitNodePeerID.String()
 		}(),
+		ConnectionPath:      p.ConnectionPath,
+		ConnectionPathAt:    p.ConnectionPathAt,
+		ConnectionLatencyMs: p.ConnectionLatencyMs,
 		// ApprovedByEmail intentionally left empty here — the
 		// admin's email lives on users, and we don't LEFT JOIN
 		// twice in the peer queries. The pending-list UI doesn't
