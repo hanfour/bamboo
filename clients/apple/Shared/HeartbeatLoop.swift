@@ -19,8 +19,17 @@ public actor HeartbeatLoop {
 
     /// Start (or replace) the heartbeat loop. Calling start() again
     /// while already running first cancels the previous task.
+    ///
+    /// knownRevision is a closure rather than a value because the
+    /// caller's policy revision moves over time as the controller
+    /// pushes ACL updates (issue #132). The heartbeat reports
+    /// whichever revision the ViewModel currently considers
+    /// authoritative; the controller sets policyChanged=true when
+    /// its revision differs, which the onPolicyChanged callback
+    /// then resolves via a re-register.
     public func start(client: BambooClient,
                       peerID: String,
+                      knownRevision: @Sendable @escaping () async -> Int64 = { 0 },
                       onPolicyChanged: @Sendable @escaping (Int64) -> Void = { _ in },
                       onPeersChanged: @Sendable @escaping () -> Void = {}) {
         task?.cancel()
@@ -39,10 +48,11 @@ public actor HeartbeatLoop {
                     log.debug("heartbeat stun refresh failed: \(String(describing: error), privacy: .public)")
                 }
 
+                let rev = await knownRevision()
                 do {
                     let resp = try await client.heartbeat(.init(
                         peerId: peerID,
-                        knownPolicyRevision: 1,
+                        knownPolicyRevision: rev,
                         endpoints: endpoints
                     ))
                     if resp.policyChanged {

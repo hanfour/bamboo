@@ -74,6 +74,15 @@ public struct BambooClient {
         /// or admin-renamed. Optional: legacy controllers / peers
         /// registered before the column existed omit it.
         public var peerDnsName: String?
+        /// allowedIps is the controller-computed L3 reachability set
+        /// (issue #132). Only populated on Register responses; watch
+        /// events carry an absent allowedIps and the recipient must
+        /// preserve the prior register-time value in a side cache. An
+        /// empty array under PolicyRevision > 0 means "policy denies"
+        /// and the peer should be omitted from the WireGuard config
+        /// entirely; under PolicyRevision == 0 (no policy authored)
+        /// the client falls back to a /32 per peer.
+        public var allowedIps: [String]?
     }
 
     public struct RegisterResponse: Decodable {
