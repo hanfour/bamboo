@@ -178,8 +178,8 @@ func TestPolicyRevisions_ListsAllPriorRevisions(t *testing.T) {
 		t.Fatalf("got %d revisions, want 3; revisions=%+v", len(out.Revisions), out.Revisions)
 	}
 	// Newest first.
-	if !(out.Revisions[0].Revision > out.Revisions[1].Revision &&
-		out.Revisions[1].Revision > out.Revisions[2].Revision) {
+	if out.Revisions[0].Revision <= out.Revisions[1].Revision ||
+		out.Revisions[1].Revision <= out.Revisions[2].Revision {
 		t.Errorf("revisions out of order: %d %d %d",
 			out.Revisions[0].Revision, out.Revisions[1].Revision, out.Revisions[2].Revision)
 	}
