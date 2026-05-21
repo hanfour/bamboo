@@ -96,12 +96,22 @@ targets:
         com.apple.security.network.server: true
         com.apple.developer.networking.networkextension:
           - packet-tunnel-provider
-          # macOS NEDNSProxyProvider as a *System Extension*
-          # (separate target below). Note the -systemextension
-          # suffix vs the bare `dns-proxy` value iOS App Extensions
-          # use; Apple uses the suffix as the per-Network-Extension-
-          # type entitlement variant for System Extensions.
-          - dns-proxy-systemextension
+          # macOS NEDNSProxyProvider implemented as a System
+          # Extension (separate target below). The entitlement
+          # value is plain `dns-proxy` — same as the iOS App
+          # Extension form. The System Extension distinction is
+          # determined by (a) the target's type:system-extension
+          # (xcodegen places the bundle under
+          # Contents/Library/SystemExtensions/), (b) the Info.plist
+          # NetworkExtension dict + NEProviderClasses keying off
+          # com.apple.networkextension.dns-proxy, and (c) the host
+          # app's com.apple.developer.system-extension.install
+          # entitlement. The `-systemextension` suffix used to live
+          # here was a misread of Apple docs that doesn't appear in
+          # any SDK header — Apple's auto-minted profile always
+          # listed plain `dns-proxy`, which is why xcodebuild was
+          # rejecting the mismatch.
+          - dns-proxy
         # Submitted via OSSystemExtensionRequest from the host app
         # — requires this entitlement so the activation request is
         # accepted by sysextd.
@@ -202,7 +212,11 @@ targets:
         com.apple.security.network.client: true
         com.apple.security.network.server: true
         com.apple.developer.networking.networkextension:
-          - dns-proxy-systemextension
+          # Plain `dns-proxy` — same as the iOS App Extension form.
+          # See the host app's entitlements section for the long-
+          # form explanation of why the `-systemextension` suffix
+          # isn't a real Apple entitlement value.
+          - dns-proxy
         com.apple.security.application-groups:
           - group.dev.hanfour.bamboo
     settings:
