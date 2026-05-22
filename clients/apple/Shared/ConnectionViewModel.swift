@@ -98,6 +98,37 @@ public final class ConnectionViewModel: ObservableObject {
         statusTask = Task { @MainActor [weak self] in
             guard let self = self else { return }
             await self.tunnel.refresh()
+            // Cold-start handoff: if the tunnel System Extension
+            // survived the host app exit, the kernel tunnel is still
+            // carrying packets but our in-process state (peerCache,
+            // peerSessionBearer, heartbeat / watch / relay tasks) is
+            // empty. The user then sees a "Connected" UI but the
+            // device never reports a heartbeat, never receives
+            // peer_updated events, and never refreshes ACL policy —
+            // mesh debug 2026-05-22.
+            //
+            // Rerun connectAsync() to register again, restart the
+            // background loops, and reapply the tunnel config.
+            // connectAsync is idempotent: register is a read for an
+            // existing peer (FindByPubKey), the keychain still has
+            // the WG private key, and tunnel.startTunnel for an
+            // already-running SystemExt is a save-and-start that the
+            // VPN subsystem applies in place. The brief UI flicker
+            // (Connected → Connecting → Connected) is preferable to
+            // sitting in a stale half-alive state forever.
+            //
+            // Race note: while connectAsync runs, tunnel.$status
+            // transitions are NOT observed (the for-await below
+            // hasn't subscribed yet). connectAsync sets
+            // self.status itself (.connecting at entry, .failing on
+            // throw via the catch), so the UI sees the high-level
+            // result; intermediate tunnel-level flaps are
+            // intentionally dropped here to avoid duplicating work
+            // applyTunnelStatus does once we settle.
+            if case .connected = self.tunnel.status {
+                self.log.log("cold-start: tunnel already up; rerunning connect cycle to restart heartbeat/watch/relay")
+                await self.connectAsync()
+            }
             for await _ in self.tunnel.$status.values {
                 self.applyTunnelStatus()
             }
@@ -137,6 +168,12 @@ public final class ConnectionViewModel: ObservableObject {
     }
 
     public func connect() {
+        // Mesh-debug 2026-05-22: h4 reportedly never runs the full
+        // register/relay/heartbeat after Connect press. Log
+        // unconditionally so we can tell whether the button handler
+        // fires at all and what tunnel.status looked like at the
+        // moment. Cheap; safe to leave in.
+        log.log("Connect button pressed; viewModel.status=\(self.status.rawValue, privacy: .public) tunnel.status=\(String(describing: self.tunnel.status), privacy: .public)")
         Task { await self.connectAsync() }
     }
 
@@ -200,6 +237,10 @@ public final class ConnectionViewModel: ObservableObject {
     }
 
     public func disconnect() {
+        // Symmetric breadcrumb for the disconnect path so a button
+        // mis-binding (UI shows "Disconnect" because status was
+        // misread as .connected at cold-start) is obvious in the log.
+        log.log("Disconnect button pressed; viewModel.status=\(self.status.rawValue, privacy: .public) tunnel.status=\(String(describing: self.tunnel.status), privacy: .public)")
         let r = relay
         relay = nil
         Task { [heartbeat, watcher] in
