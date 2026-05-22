@@ -396,8 +396,26 @@ public final class ConnectionViewModel: ObservableObject {
             // through the relay server. Useful on networks where
             // direct STUN endpoints fail (symmetric NAT, restrictive
             // egress firewalls).
+            //
+            // Each non-relay-enabled exit path logs explicitly: the
+            // earlier silent skip masked a destructive UserDefaults
+            // overwrite (the @Published relayURL was unexpectedly
+            // empty post un-sandbox migration, and the relay block
+            // skipped without saying so), so this fix splits the
+            // three failure shapes into named log lines.
             var peerEndpoints: [String: String] = [:] // peer.id -> endpoint
-            if !relayURL.isEmpty, let url = URL(string: relayURL) {
+            let trimmedRelayURL = relayURL.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmedRelayURL.isEmpty {
+                log.log("relay: skipped (relayURL is empty; type one in Settings to enable)")
+            } else if let url = URL(string: trimmedRelayURL),
+                      let scheme = url.scheme?.lowercased(),
+                      scheme == "ws" || scheme == "wss" {
+                // URL(string:) on macOS 26 rejects strings with
+                // trailing whitespace or newlines (verified via
+                // `swift -e`), so we trim first. The scheme guard
+                // catches strings like "abc" — URL(string:) returns
+                // a non-nil URL with scheme==nil that would otherwise
+                // pass through to RelayClient.dial and hang there.
                 do {
                     let r = try await ensureRelay(client: client,
                                                    selfId: resp.self_.id,
@@ -415,6 +433,8 @@ public final class ConnectionViewModel: ObservableObject {
                 } catch {
                     log.warning("relay init failed; falling back to direct: \(String(describing: error), privacy: .public)")
                 }
+            } else {
+                log.warning("relay: not a valid ws/wss URL — relayURL=\(trimmedRelayURL, privacy: .public); fix in Settings")
             }
 
             // ACL enforcement (issue #132): when the controller is
