@@ -192,8 +192,8 @@ public final class ConnectionViewModel: ObservableObject {
         defer { isSigningIn = false }
         lastError = nil
 
-        UserDefaults.bambooStandard.set(controllerURL, forKey: "controllerURL")
-        UserDefaults.bambooStandard.set(tenantSlug, forKey: "tenantSlug")
+        persistSettingIfNonEmpty(controllerURL, forKey: "controllerURL")
+        persistSettingIfNonEmpty(tenantSlug, forKey: "tenantSlug")
 
         guard let url = URL(string: controllerURL) else {
             self.lastError = "controller URL is not a valid URL"
@@ -310,13 +310,31 @@ public final class ConnectionViewModel: ObservableObject {
         return UInt16(bigEndian: bound.sin_port)
     }
 
+    /// Persist a user-typed setting back to UserDefaults so the next
+    /// launch's @Published init picks it up. Empty @Published values
+    /// (typically because the un-sandboxed prefs store after PR #153
+    /// started empty and the user never re-typed this field) are
+    /// NOT written, so they don't clobber whatever a future migration
+    /// or other code path might restore. A user who wants to *clear*
+    /// a stored value should use an explicit Settings action that
+    /// calls removeObject(forKey:) directly — silently erasing on
+    /// every connect was the destructive-overwrite bug this fixes.
+    /// As a side effect, trims surrounding whitespace; macOS 26
+    /// URL(string:) rejects trailing newline / space, and pasted
+    /// settings often carry one.
+    private func persistSettingIfNonEmpty(_ value: String, forKey key: String) {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        UserDefaults.bambooStandard.set(trimmed, forKey: key)
+    }
+
     private func connectAsync() async {
         status = .connecting
         lastError = nil
 
-        UserDefaults.bambooStandard.set(controllerURL, forKey: "controllerURL")
-        UserDefaults.bambooStandard.set(tenantSlug, forKey: "tenantSlug")
-        UserDefaults.bambooStandard.set(relayURL, forKey: "relayURL")
+        persistSettingIfNonEmpty(controllerURL, forKey: "controllerURL")
+        persistSettingIfNonEmpty(tenantSlug, forKey: "tenantSlug")
+        persistSettingIfNonEmpty(relayURL, forKey: "relayURL")
 
         do {
             let privateKey = try loadOrCreatePrivateKey()
