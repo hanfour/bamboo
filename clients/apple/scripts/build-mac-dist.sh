@@ -32,19 +32,35 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR/.."
 
 SCHEME="${SCHEME:-BambooApp-macOS}"
-# Default to Debug: the network-extension entitlement requires an Apple
-# Development certificate to sign, and Xcode's Release config wants a
-# distribution certificate by default. Cmd+R in Xcode also uses Debug,
-# so this matches the binary you already verified locally. If you want
-# a Release binary, you need to either notarize a Developer ID build
-# or override CODE_SIGN_IDENTITY=Apple Development explicitly.
-CONFIG="${CONFIG:-Debug}"
+# Release config + Developer ID Application signing is what produces a
+# .app that other Macs can install without disabling SIP. Apple
+# Development signing only works on machines registered to the same
+# team AND requires `systemextensionsctl developer on` (SIP must be
+# off) — not useful for dist. Override CONFIG=Debug if you specifically
+# need Xcode-cmd+R parity.
+CONFIG="${CONFIG:-Release}"
 
 # Apple Developer Team ID. project.yml deliberately omits this so Xcode
 # GUI picks it from your signed-in Apple ID, but the xcodebuild CLI
 # can't ask interactively — it needs the team explicitly. Override via
 # BAMBOO_TEAM_ID if you're forking.
 TEAM_ID="${BAMBOO_TEAM_ID:-UK48R5KWLV}"
+
+# Developer ID Application signing identity. Must be present in the
+# login keychain. Apple mints these via developer.apple.com →
+# Certificates → "Developer ID Application". See clients/apple/docs
+# for the bootstrap steps (CSR + cert download + p12 import).
+SIGN_IDENTITY="${SIGN_IDENTITY:-Developer ID Application: PoHan Huang (UK48R5KWLV)}"
+
+# Manual provisioning profile specifiers. The Developer ID flow
+# requires per-bundle-ID profiles that grant the
+# *-systemextension entitlement values; xcodebuild can't auto-mint
+# Developer ID profiles, so we install them ahead of time under
+# ~/Library/MobileDevice/Provisioning Profiles/ and reference by
+# the human-readable name shown in the portal.
+PROFILE_APP="${PROFILE_APP:-bamboo app DevID}"
+PROFILE_TUNNEL="${PROFILE_TUNNEL:-bamboo tunnel DevID}"
+PROFILE_DNSPROXY="${PROFILE_DNSPROXY:-bamboo dnsproxy DevID}"
 DERIVED_DIR="${DERIVED_DIR:-$HOME/.cache/bamboo-mac-dist}"
 DIST_DIR="$(pwd)/dist"
 OUT_ZIP="$DIST_DIR/bamboo-mac.zip"
@@ -62,14 +78,18 @@ xcodegen generate
 
 echo "==> xcodebuild build (scheme=$SCHEME, config=$CONFIG)"
 mkdir -p "$DERIVED_DIR"
+# Per-target signing identity + provisioning profile names live in
+# project.yml's per-config settings blocks (Release config). Only
+# the team and runtime-hardening flag are passed here.
 xcodebuild build \
     -project bamboo.xcodeproj \
     -scheme "$SCHEME" \
     -configuration "$CONFIG" \
     -derivedDataPath "$DERIVED_DIR" \
     -destination 'generic/platform=macOS' \
-    -allowProvisioningUpdates \
     DEVELOPMENT_TEAM="$TEAM_ID" \
+    OTHER_CODE_SIGN_FLAGS="--options=runtime --timestamp" \
+    CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO \
     | tail -20
 
 APP_PATH="$DERIVED_DIR/Build/Products/$CONFIG/bamboo.app"
@@ -78,18 +98,25 @@ if [[ ! -d "$APP_PATH" ]]; then
     exit 1
 fi
 
-# Embedded extension sanity-check — without this the destination Mac
-# would silently fail at Connect time the way PR #113 fixed.
-EXT_INFO="$APP_PATH/Contents/PlugIns/bamboo-tunnel.appex/Contents/Info.plist"
-if [[ ! -f "$EXT_INFO" ]]; then
-    echo "error: $EXT_INFO missing — extension wasn't embedded" >&2
-    exit 1
-fi
-if ! /usr/libexec/PlistBuddy -c 'Print :NSExtension:NSExtensionPointIdentifier' "$EXT_INFO" 2>/dev/null \
-        | grep -q "com.apple.networkextension.packet-tunnel"; then
-    echo "error: extension Info.plist missing NSExtension dict — see PR #113" >&2
-    exit 1
-fi
+# System Extension sanity-check — both tunnel and dnsproxy live under
+# Contents/Library/SystemExtensions/ as .systemextension bundles on
+# macOS 15+. The wrapper directory name must equal the bundle
+# identifier (PRODUCT_NAME is set to the identifier in project.yml)
+# because sysextd looks for ${identifier}.systemextension when
+# realizing the extension; a PRODUCT_NAME like "bamboo-dnsproxy"
+# produces a wrapper sysextd can't find.
+SYSEXT_DIR="$APP_PATH/Contents/Library/SystemExtensions"
+for ext in dev.hanfour.bamboo.app.tunnel.systemextension dev.hanfour.bamboo.app.dnsproxy.systemextension; do
+    EXT_INFO="$SYSEXT_DIR/$ext/Contents/Info.plist"
+    if [[ ! -f "$EXT_INFO" ]]; then
+        echo "error: $EXT_INFO missing — extension wasn't embedded" >&2
+        exit 1
+    fi
+    if [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundlePackageType' "$EXT_INFO" 2>/dev/null)" != "SYSX" ]]; then
+        echo "error: $ext CFBundlePackageType is not SYSX — sysextd won't see it" >&2
+        exit 1
+    fi
+done
 
 echo "==> packaging"
 mkdir -p "$DIST_DIR"

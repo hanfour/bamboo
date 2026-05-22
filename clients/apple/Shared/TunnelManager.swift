@@ -37,6 +37,17 @@ public final class TunnelManager: ObservableObject {
     private var manager: NETunnelProviderManager?
     private var statusObserver: NSObjectProtocol?
 
+    #if os(macOS)
+    // macOS PacketTunnelProvider is a System Extension. Activated
+    // lazily on the first startTunnel() call so the user only sees
+    // the Privacy & Security prompt when they actually try to
+    // connect — not at app launch.
+    private let installer = SystemExtensionInstaller(
+        bundleIdentifier: extensionBundleID
+    )
+    private var systemExtensionActivated = false
+    #endif
+
     public init() {}
 
     /// Reload the saved tunnel manager (or no-op if none exists).
@@ -54,6 +65,13 @@ public final class TunnelManager: ObservableObject {
 
     /// Install (or update) the bamboo profile and start the tunnel.
     public func startTunnel(with config: BambooTunnelConfig) async throws {
+        #if os(macOS)
+        if !systemExtensionActivated {
+            try await installer.activate()
+            systemExtensionActivated = true
+        }
+        #endif
+
         let mgr = manager ?? NETunnelProviderManager()
         let proto = (mgr.protocolConfiguration as? NETunnelProviderProtocol) ?? NETunnelProviderProtocol()
         proto.providerBundleIdentifier = extensionBundleID
