@@ -1178,12 +1178,11 @@ func (h *HTTPServer) apiPeerSetApprovedRoutes(w http.ResponseWriter, r *http.Req
 		writeError(w, http.StatusInternalServerError, fmt.Errorf("set approved_routes: %w", err))
 		return
 	}
-	// #170: bump policy_revision + publish PolicyChanged so peers
-	// re-pull allowed_ips without a manual reconnect.
-	if _, err := h.coord.BumpPolicyRevision(r.Context(), tenant.ID); err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Errorf("bump policy revision: %w", err))
-		return
-	}
+	// Write the audit row BEFORE the policy-revision bump so a bump
+	// failure doesn't lose the trail of what just persisted. The
+	// approved_routes write already committed — an operator retrying
+	// after a 5xx from the bump leg should see exactly one audit row,
+	// not zero (silent partial write) and not two (one per retry).
 	writePeerAudit(r.Context(), h.audits, authn, tenant.ID, id, "peer.routes.approve", map[string]any{
 		"hostname": current.Hostname,
 		"approved_routes": map[string]any{
@@ -1191,6 +1190,12 @@ func (h *HTTPServer) apiPeerSetApprovedRoutes(w http.ResponseWriter, r *http.Req
 			"to":   req.Routes,
 		},
 	})
+	// #170: bump policy_revision + publish PolicyChanged so peers
+	// re-pull allowed_ips without a manual reconnect.
+	if _, err := h.coord.BumpPolicyRevision(r.Context(), tenant.ID); err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("bump policy revision: %w", err))
+		return
+	}
 	updated, err := h.peers.GetByID(r.Context(), id)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
@@ -1245,12 +1250,9 @@ func (h *HTTPServer) apiPeerSetExitNodeApproved(w http.ResponseWriter, r *http.R
 		writeError(w, http.StatusInternalServerError, fmt.Errorf("set exit_node_approved: %w", err))
 		return
 	}
-	// #170: bump policy_revision + publish PolicyChanged so peers
-	// re-pull allowed_ips without a manual reconnect.
-	if _, err := h.coord.BumpPolicyRevision(r.Context(), tenant.ID); err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Errorf("bump policy revision: %w", err))
-		return
-	}
+	// Audit BEFORE bump — see comment in apiPeerSetApprovedRoutes
+	// for the rationale (preserve audit trail across partial-failure
+	// retries).
 	writePeerAudit(r.Context(), h.audits, authn, tenant.ID, id, "peer.exit-node.approve", map[string]any{
 		"hostname": current.Hostname,
 		"exit_node_approved": map[string]any{
@@ -1258,6 +1260,12 @@ func (h *HTTPServer) apiPeerSetExitNodeApproved(w http.ResponseWriter, r *http.R
 			"to":   req.Approved,
 		},
 	})
+	// #170: bump policy_revision + publish PolicyChanged so peers
+	// re-pull allowed_ips without a manual reconnect.
+	if _, err := h.coord.BumpPolicyRevision(r.Context(), tenant.ID); err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("bump policy revision: %w", err))
+		return
+	}
 	updated, err := h.peers.GetByID(r.Context(), id)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
