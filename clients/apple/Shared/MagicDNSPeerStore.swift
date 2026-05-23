@@ -46,6 +46,14 @@ public struct MagicDNSPeerStore {
         self.url = URL(fileURLWithPath: Self.sharedPath)
     }
 
+    /// Test-only constructor that points the store at an arbitrary
+    /// file path. Used by AppleSharedTests to avoid colliding with
+    /// the production /private/tmp file (or polluting it). Marked
+    /// internal — production code paths always use init?().
+    internal init(path: String) {
+        self.url = URL(fileURLWithPath: path)
+    }
+
     /// PeerEntry is the per-peer DNS record. ipv4 is always set for
     /// peers in the 100.64.0.0/10 tailnet; ipv6 is reserved for a
     /// future expansion (currently peer IPs are IPv4-only, so the

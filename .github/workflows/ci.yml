@@ -159,6 +159,35 @@ jobs:
       - run: npm run typecheck
       - run: npm run build
 
+  apple:
+    name: Apple Shared tests
+    runs-on: macos-15
+    defaults:
+      run:
+        working-directory: clients/apple
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install xcodegen
+        run: brew install xcodegen
+      - name: Generate Xcode project
+        run: xcodegen generate
+      - name: Run AppleSharedTests
+        # The test target compiles Shared/MagicDNSPeerStore.swift +
+        # Shared/MagicDNSResolver.swift directly (no NetworkExtension
+        # dependency, no WireGuardKit package fetch needed for tests).
+        # Code-sign off because GitHub runners don't have a Developer
+        # ID identity. xcodebuild output is verbose; we let it spill
+        # for now since failures are easier to read in raw form than
+        # behind a formatter.
+        run: |
+          xcodebuild test \
+            -project bamboo.xcodeproj \
+            -scheme AppleSharedTests \
+            -destination 'platform=macOS' \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO
+
   ai:
     name: AI (Python lint + tests)
     runs-on: ubuntu-latest
