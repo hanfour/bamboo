@@ -18,7 +18,7 @@
 	<true/>
 	<key>com.apple.security.temporary-exception.files.absolute-path.read-only</key>
 	<array>
-		<string>/private/tmp/dev.hanfour.bamboo.magicdns-peers.v1.json</string>
+		<string>/Users/Shared/dev.hanfour.bamboo/magicdns-peers.v1.json</string>
 	</array>
 </dict>
 </plist>

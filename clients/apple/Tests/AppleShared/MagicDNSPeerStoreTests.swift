@@ -106,17 +106,36 @@ final class MagicDNSPeerStoreTests: XCTestCase {
 
     // MARK: - file permissions (cross-uid access)
 
-    func testWrittenFileHasMode0644() throws {
+    func testWrittenFileHasMode0600() throws {
         let store = makeStore()
         store.setPeers(["a": .init(ipv4: "100.64.0.1")])
 
         let attrs = try FileManager.default.attributesOfItem(atPath: testPath)
         let perms = (attrs[.posixPermissions] as? NSNumber)?.uint16Value
-        // 0644 == 0o644 — owner rw, group r, other r. Required so the
-        // root-running DNSProxy SystemExt can read the file the
-        // user-running host app writes.
-        XCTAssertEqual(perms, 0o644,
-                       "file must be world-readable so the root SystemExt can read")
+        // 0600 == 0o600 — owner-only read/write. Tightened from
+        // 0644 in issue #154 to block other local users from
+        // reading the peer-map. The root-running DNSProxy SystemExt
+        // bypasses POSIX so the tight mode is fine.
+        XCTAssertEqual(perms, 0o600,
+                       "file must be owner-only (0600) — non-root users blocked, root bypasses")
+    }
+
+    func testCreatedParentDirHasMode0700() throws {
+        // Point at a path under a fresh subdir that doesn't exist
+        // yet — exercises the createDirectory(withIntermediate)
+        // branch and asserts the new dir is mode 0700.
+        let subdir = NSTemporaryDirectory()
+            + "bamboo-tests-dir-\(UUID().uuidString)"
+        defer { try? FileManager.default.removeItem(atPath: subdir) }
+        let path = subdir + "/peers.json"
+        let store = MagicDNSPeerStore(path: path)
+
+        store.setPeers(["a": .init(ipv4: "100.64.0.1")])
+
+        let attrs = try FileManager.default.attributesOfItem(atPath: subdir)
+        let perms = (attrs[.posixPermissions] as? NSNumber)?.uint16Value
+        XCTAssertEqual(perms, 0o700,
+                       "parent dir must be owner-only-traversable (0700) so other users can't even open the file")
     }
 
     // MARK: - atomic write (rename-based, not unlink+move)
