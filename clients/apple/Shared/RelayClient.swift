@@ -154,14 +154,22 @@ public actor RelayClient {
         // endpointString() silently returns port 0 → WireGuard then
         // tries to handshake "127.0.0.1:0" and the proxy never
         // receives anything. Mesh-debug 2026-05-23.
+        var settled = false
         for _ in 0..<100 {
             if case .ready = conn.state,
                conn.currentPath?.localEndpoint != nil {
+                settled = true
                 break
             }
             try await Task.sleep(nanoseconds: 20_000_000)
         }
         let endpoint = ps.endpointString()
+        if !settled {
+            // 2s budget exhausted. Future "mesh isn't forwarding"
+            // debug should see this rather than chase a phantom
+            // `127.0.0.1:0` endpoint in the WG config.
+            log.warning("relay.addPeer: wait timed out — state=\(String(describing: conn.state), privacy: .public) localEndpoint=\(String(describing: conn.currentPath?.localEndpoint), privacy: .public) — proceeding with possibly stale endpoint \(endpoint, privacy: .public)")
+        }
         log.log("relay.addPeer: peer=\(peerKey.prefix(6).map { String(format: "%02x", $0) }.joined(), privacy: .public) endpoint=\(endpoint, privacy: .public) state=\(String(describing: conn.state), privacy: .public)")
         return endpoint
     }

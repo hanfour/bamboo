@@ -1,11 +1,18 @@
 // SPDX-License-Identifier: Apache-2.0
 
-// macOS variant of the MagicDNS resolver. The Swift code is identical
-// to clients/apple/DNSProxy-iOS/DNSProxyProvider.swift — the
+// macOS variant of the MagicDNS resolver. Mostly parallel to
+// clients/apple/DNSProxy-iOS/DNSProxyProvider.swift — the
 // difference is the *packaging*: on macOS this is a System Extension
 // (Contents/Library/SystemExtensions/), installed via
 // OSSystemExtensionRequest. The NEDNSProxyProvider subclass and
 // per-flow handling are platform-agnostic.
+//
+// macOS-specific behavior here: explicit DNSFlowHandler retention
+// (process-wide Set) so the handler isn't GC'd before flow.open's
+// completion fires. iOS hasn't shown the same lifetime concern in
+// practice — App Extensions run in the host app's address space and
+// the closure retain seems sufficient — so the iOS sibling kept the
+// simpler inline-instantiate pattern.
 
 import Foundation
 import Network
@@ -58,7 +65,7 @@ final class DNSProxyProvider: NEDNSProxyProvider {
 fileprivate final class DNSFlowHandler: Hashable {
 
     private let flow: NEAppProxyUDPFlow
-    private let store: MagicDNSPeerStore?
+    private let store: MagicDNSPeerStore
     private let id = UUID()
 
     init(flow: NEAppProxyUDPFlow) {
@@ -114,7 +121,7 @@ fileprivate final class DNSFlowHandler: Hashable {
     }
 
     private func handleOne(query: Data, endpoint: NWHostEndpoint) {
-        let peers = store?.peers() ?? [:]
+        let peers = store.peers()
         switch MagicDNSResolver.handle(query: query, peers: peers) {
         case .answered(let response):
             flow.writeDatagrams([response], sentBy: [endpoint]) { error in

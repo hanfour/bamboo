@@ -272,18 +272,22 @@ targets:
     entitlements:
       path: DNSProxy-macOS/DNSProxy_macOS.entitlements
       properties:
-        # Sandbox disabled (mesh-debug 2026-05-23). The DNSProxy
-        # System Extension runs as root and needs to read the
-        # shared MagicDNS peer-map file written by the host app at
-        # /private/tmp/dev.hanfour.bamboo.magicdns-peers.v1.json.
-        # The original design used a shared App Group UserDefaults
-        # suite, but App Group containers on macOS are per-user, so
-        # a root-running SystemExt cannot see what the user-space
-        # host app writes. With sandbox=true, /private/tmp reads
-        # also return EPERM. Disabling sandbox is the simplest way
-        # to let the proxy read the shared file; the security
-        # envelope is similar (this is a root process anyway).
-        com.apple.security.app-sandbox: false
+        # Sandbox restored (PR-followup to #153). PR #153 commit
+        # 57db4d3 turned this off because /private/tmp reads returned
+        # EPERM under the default sandbox profile — but disabling
+        # sandbox entirely also removed mach-service constraints,
+        # additional filesystem ACLs, and other defense-in-depth
+        # that's worth keeping for a process running as root.
+        #
+        # Restore sandbox=true and grant a targeted
+        # read-only exception for just the shared MagicDNS peer-map
+        # file. Apple's notary accepts
+        # `com.apple.security.temporary-exception.files.absolute-path.read-only`
+        # for Developer ID distribution (only Mac App Store is
+        # picky about these, and bamboo doesn't ship there).
+        com.apple.security.app-sandbox: true
+        com.apple.security.temporary-exception.files.absolute-path.read-only:
+          - /private/tmp/dev.hanfour.bamboo.magicdns-peers.v1.json
         com.apple.security.network.client: true
         com.apple.security.network.server: true
         com.apple.developer.networking.networkextension:

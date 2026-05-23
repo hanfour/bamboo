@@ -195,7 +195,10 @@ public final class ConnectionViewModel: ObservableObject {
         persistSettingIfNonEmpty(controllerURL, forKey: "controllerURL")
         persistSettingIfNonEmpty(tenantSlug, forKey: "tenantSlug")
 
-        guard let url = URL(string: controllerURL) else {
+        // Trim same as the relay block (a29bdcb): macOS 26
+        // URL(string:) rejects strings with trailing whitespace or
+        // newlines, and pasted settings often carry one.
+        guard let url = URL(string: controllerURL.trimmingCharacters(in: .whitespacesAndNewlines)) else {
             self.lastError = "controller URL is not a valid URL"
             return
         }
@@ -340,7 +343,7 @@ public final class ConnectionViewModel: ObservableObject {
             let privateKey = try loadOrCreatePrivateKey()
             let publicKey = privateKey.publicKey.base64Key
 
-            guard let url = URL(string: controllerURL) else {
+            guard let url = URL(string: controllerURL.trimmingCharacters(in: .whitespacesAndNewlines)) else {
                 throw ConnectionError.invalidControllerURL
             }
 
@@ -708,7 +711,7 @@ public final class ConnectionViewModel: ObservableObject {
                 hostname: p.hostname
             )
         }
-        peerStore?.setPeers(map)
+        peerStore.setPeers(map)
         log.log("magicdns: synced \(map.count, privacy: .public) peer name(s)")
     }
 
