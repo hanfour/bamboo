@@ -139,5 +139,6 @@ func buildHTTPMuxWithCH(pool *db.Pool, coord *handlers.CoordinatorHandler, ch *c
 		1*time.Hour,
 		coord,
 	)
+	httpSrv.StartPublisher(context.Background())
 	return httpSrv.Handler(), httpSrv
 }

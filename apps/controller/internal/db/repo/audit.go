@@ -19,11 +19,42 @@ import (
 // semantics.
 type AuditLogs struct {
 	pool *db.Pool
+	hook AuditHook
+}
+
+// AuditHook is fired by AuditLogs.Insert after a successful DB
+// write. The webhook publisher (§4 P2) uses this to fan an event
+// out to outbound HTTP subscriptions without the audit repo
+// having to import the publisher package — the dependency points
+// downward, server → publisher → repo, never back up.
+//
+// Hooks run synchronously on the caller's goroutine. A slow hook
+// would become a latency floor on the user-facing operation that
+// triggered the audit; implementations must do their work
+// asynchronously (the webhook publisher uses an internal bounded
+// channel + worker goroutine, and the hook itself returns within
+// a few microseconds).
+//
+// Receiving an event with ev.TenantID == nil is legal — instance-
+// wide audit rows happen for bootstrap operations. The hook is
+// expected to filter appropriately.
+type AuditHook interface {
+	Hook(ctx context.Context, ev *AuditEvent)
 }
 
 // NewAuditLogs constructs an AuditLogs repository.
 func NewAuditLogs(pool *db.Pool) *AuditLogs {
 	return &AuditLogs{pool: pool}
+}
+
+// SetHook installs (or replaces) the AuditHook. Pass nil to
+// disable. The hook fires after every successful Insert.
+// Idempotent; safe to call before or after the server starts.
+func (r *AuditLogs) SetHook(hook AuditHook) {
+	if r == nil {
+		return
+	}
+	r.hook = hook
 }
 
 // AuditEvent is a single row in audit_log.
@@ -45,7 +76,11 @@ type AuditEvent struct {
 	ActorEmail string
 }
 
-// Insert persists a single event.
+// Insert persists a single event. After a successful DB write the
+// installed AuditHook (if any) fires synchronously. Hook errors do
+// not propagate — the audit write is the source of truth, and a
+// hook failure (e.g. webhook publisher queue full) is recoverable
+// from the audit row.
 func (r *AuditLogs) Insert(ctx context.Context, e *AuditEvent) error {
 	if e.ActorType == "" {
 		e.ActorType = "system"
@@ -60,6 +95,9 @@ func (r *AuditLogs) Insert(ctx context.Context, e *AuditEvent) error {
 		e.ResourceType, e.ResourceID, nullableJSON(e.Diff),
 		nullableString(e.IPAddress), nullableString(e.UserAgent),
 	)
+	if err == nil && r.hook != nil {
+		r.hook.Hook(ctx, e)
+	}
 	return err
 }
 

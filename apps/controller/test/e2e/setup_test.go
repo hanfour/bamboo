@@ -158,6 +158,12 @@ func buildHTTPMux(pool *db.Pool, coord *handlers.CoordinatorHandler) (http.Handl
 		1*time.Hour,
 		coord,
 	)
+	// Start the webhook publisher worker against a background ctx
+	// that lives for the test process. Without this the audit-hook
+	// queue would fill up and dropped events would start showing
+	// up as "queue full" log noise in any test that touches an
+	// audited handler.
+	httpSrv.StartPublisher(context.Background())
 	return httpSrv.Handler(), httpSrv
 }
 
