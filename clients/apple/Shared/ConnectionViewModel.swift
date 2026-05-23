@@ -761,6 +761,19 @@ public final class ConnectionViewModel: ObservableObject {
             wgListenPort: prevConfig.wgListenPort,
             peers: peers
         )
+
+        // Heartbeat-driven watch events fire every ~30s and re-trigger
+        // rebuildAndReapply even when nothing relevant changed (the
+        // peer's last_seen ticked, the peer's STUN endpoint didn't,
+        // and we use relay-proxy endpoints anyway). Each WG apply has
+        // a real cost: wireguard-go's UAPI sometimes silently drops
+        // the new peer set with "device closed" (mesh-debug 2026-05-23,
+        // h4 ended up with 0 peers after a watch tick), and even a
+        // successful apply burns CPU. Skip the apply when the
+        // computed config equals what we already pushed.
+        if config == self.lastConfig {
+            return
+        }
         self.lastConfig = config
 
         Task {
@@ -768,7 +781,9 @@ public final class ConnectionViewModel: ObservableObject {
             // can apply the new config without dropping the tunnel.
             // Fall back to the heavy saveToPreferences + startVPNTunnel
             // path only when IPC fails (typically: extension hasn't
-            // started yet, or the IPC channel is wedged).
+            // started yet, the IPC channel is wedged, or
+            // PacketTunnelProvider's post-update peer-count check
+            // detected wireguard-go silently dropped the peer set).
             if await self.tunnel.applyConfig(config) {
                 self.log.log("rebuild applied via IPC (no restart)")
                 return
