@@ -295,9 +295,16 @@ targets:
         # `com.apple.security.temporary-exception.files.absolute-path.read-only`
         # for Developer ID distribution (only Mac App Store is
         # picky about these, and bamboo doesn't ship there).
+        #
+        # Path moved from /private/tmp to /Users/Shared in issue #154
+        # to survive reboot + add an owner-only-traversable parent
+        # dir (mode 0700) so other local users can't read the
+        # peer-map file. The targeted exception still applies because
+        # the SystemExt runs as root and bypasses POSIX — sandbox is
+        # what we need to override for the read.
         com.apple.security.app-sandbox: true
         com.apple.security.temporary-exception.files.absolute-path.read-only:
-          - /private/tmp/dev.hanfour.bamboo.magicdns-peers.v1.json
+          - /Users/Shared/dev.hanfour.bamboo/magicdns-peers.v1.json
         com.apple.security.network.client: true
         com.apple.security.network.server: true
         com.apple.developer.networking.networkextension:

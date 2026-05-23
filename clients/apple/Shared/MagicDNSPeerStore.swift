@@ -12,33 +12,42 @@ import Foundation
 /// the OS maps the App Group container into both the host app and
 /// extension's sandbox. **It does NOT work for macOS System
 /// Extensions running as root** — App Group containers are
-/// per-user, so the host app (uid hanfourmini) writes to
-/// `/Users/hanfourmini/Library/Group Containers/<group>/…` while
-/// the SystemExt (uid 0) reads from `/var/root/Library/Group Containers/…`
+/// per-user, so the host app (uid user) writes to
+/// `/Users/<user>/Library/Group Containers/<group>/…` while the
+/// SystemExt (uid 0) reads from `/var/root/Library/Group Containers/…`
 /// (or nothing at all). Result: every *.bamboo query NXDOMAINs.
 ///
-/// Switching to a shared filesystem path that both processes can
-/// reach. `/private/tmp` is world-readable + world-writable + sticky-
-/// bit so only the writer can rewrite — adequate for non-confidential
-/// peer metadata. Cleared on reboot; the host app rewrites the file
-/// on every connect, so the post-reboot empty-window is bounded by
-/// host-app launch latency.
+/// **Current design (issue #154)**: shared file under
+/// `/Users/Shared/dev.hanfour.bamboo/`, parent dir mode 0700, file
+/// mode 0600. /Users/Shared is itself world-traversable (1777), but
+/// our 0700 subdir prevents other local users from reading the peer
+/// map. The DNSProxy SystemExt runs as root and bypasses POSIX
+/// permission checks; its sandbox profile grants explicit read
+/// access via the `temporary-exception.files.absolute-path.read-only`
+/// entitlement (DNSProxy_macOS.entitlements). Survives reboot
+/// (unlike the previous /private/tmp location, which was cleared on
+/// every boot).
 ///
-/// Future hardening: move to a system-wide location like
-/// `/Library/Application Support/bamboo/`, which would require a one-
-/// time admin-elevated `mkdir` (e.g. via SMAppService or a separate
-/// installer helper). For v1 the /private/tmp path matches the security
-/// envelope of the existing UserDefaults App Group (process-level
-/// only; no cryptographic separation).
+/// Future hardening if the security envelope tightens further:
+/// /Library/Application Support/<group>/ owned by root, written via
+/// an SMAppService-installed LaunchDaemon. For today the 0700-dir
+/// model satisfies the issue's "not readable by other local users"
+/// acceptance without the privileged-helper UX cost (one-time
+/// admin auth prompt on install).
 public struct MagicDNSPeerStore {
 
-    /// Shared file path. Both the host app and the root-running
-    /// DNSProxy SystemExt read/write here. The host app's writes
-    /// land owner=hanfourmini mode 0644; the SystemExt only reads.
-    /// If the file is missing the reader returns an empty map, and
-    /// the resolver NXDOMAINs every *.bamboo query (expected when
-    /// bamboo isn't running or just launched).
-    public static let sharedPath = "/private/tmp/dev.hanfour.bamboo.magicdns-peers.v1.json"
+    /// Parent directory for the shared peer-map file. Created on
+    /// first write with mode 0700 (owner-only). On a multi-user Mac
+    /// only the first user to run bamboo can write here; secondary
+    /// users would block at the directory open. Single-user dev
+    /// machines (the common case) are unaffected.
+    public static let sharedDir = "/Users/Shared/dev.hanfour.bamboo"
+
+    /// Shared file path. Mode 0600 (owner read+write). The root-
+    /// running DNSProxy SystemExt bypasses POSIX, so the read still
+    /// works once the sandbox entitlement is in place; other local
+    /// users are blocked at the directory boundary (sharedDir is 0700).
+    public static let sharedPath = sharedDir + "/magicdns-peers.v1.json"
 
     private let url: URL
 
@@ -75,25 +84,35 @@ public struct MagicDNSPeerStore {
         }
     }
 
-    /// Replace the entire peer map atomically. Writes a temp file
-    /// (chmoded 0644 so the root SystemExt can read), then uses
-    /// POSIX `rename(2)` to swap it onto the destination path in one
-    /// atomic kernel operation. A concurrent reader's `open(2)`
-    /// lands on either the old inode or the new one — never a
-    /// missing file. The earlier `removeItem` + `moveItem` pattern
-    /// (Foundation's `moveItem` throws if the destination exists)
-    /// left a microsecond window where the file didn't exist and a
-    /// reader saw `[:]` → NXDOMAIN.
+    /// Replace the entire peer map atomically. Ensures the parent
+    /// dir exists with mode 0700, writes a temp file (chmoded 0600),
+    /// then uses POSIX `rename(2)` to swap it onto the destination
+    /// path in one atomic kernel operation. A concurrent reader's
+    /// `open(2)` lands on either the old inode or the new one —
+    /// never a missing file.
     public func setPeers(_ peers: [String: PeerEntry]) {
         do {
+            // Ensure parent dir exists. createDirectory with
+            // withIntermediateDirectories is idempotent — if the dir
+            // already exists it succeeds without modifying perms
+            // (no permission-creep if some other code changed the
+            // mode after we created it). First-time creation sets
+            // mode 0700 so other local users can't traverse into it.
+            try FileManager.default.createDirectory(
+                atPath: url.deletingLastPathComponent().path,
+                withIntermediateDirectories: true,
+                attributes: [.posixPermissions: 0o700]
+            )
             let data = try JSONEncoder().encode(peers)
             let tmp = url.deletingLastPathComponent()
                 .appendingPathComponent(".magicdns-peers.\(UUID().uuidString).tmp")
             try data.write(to: tmp, options: [.atomic])
-            // Permissions 0644 so the root-running SystemExt can read
-            // (FileManager .write defaults to 0600 on macOS).
+            // Permissions 0600 (owner-only). The root-running
+            // DNSProxy SystemExt reads via the sandbox temporary-
+            // exception entitlement; root bypasses POSIX so the
+            // tight mode is fine.
             try FileManager.default.setAttributes(
-                [.posixPermissions: 0o644],
+                [.posixPermissions: 0o600],
                 ofItemAtPath: tmp.path
             )
             if Darwin.rename(tmp.path, url.path) != 0 {
