@@ -21,6 +21,7 @@ import (
 	"github.com/hanfour/bamboo/apps/controller/internal/db/repo"
 	"github.com/hanfour/bamboo/apps/controller/internal/handlers"
 	"github.com/hanfour/bamboo/apps/controller/internal/mail"
+	"github.com/hanfour/bamboo/apps/controller/internal/metrics"
 )
 
 // HTTPServer hosts the OIDC redirect / callback routes plus a thin
@@ -46,6 +47,7 @@ type HTTPServer struct {
 	anomalies   *clickhouse.Anomalies
 	connEvents  *clickhouse.ConnectionEvents
 	coord       *handlers.CoordinatorHandler
+	metrics     *metrics.Registry
 	secret      []byte
 	baseURL     string
 	ttl         time.Duration
@@ -87,9 +89,15 @@ func NewHTTPServer(
 		anomalies:  clickhouse.NewAnomalies(ch),
 		connEvents: clickhouse.NewConnectionEvents(ch),
 		coord:      coord,
-		secret:     secret,
-		baseURL:    baseURL,
-		ttl:        ttl,
+		// metrics.NewRegistry constructs a fresh prometheus.Registry
+		// scoped to this HTTPServer so tests stay isolated. version
+		// + commit default to "unknown"; the production wiring calls
+		// SetBuildInfo with the ldflags-injected values once those
+		// are plumbed through the cmd entrypoint (follow-up).
+		metrics: metrics.NewRegistry("", ""),
+		secret:  secret,
+		baseURL: baseURL,
+		ttl:     ttl,
 	}
 	mux.HandleFunc("/auth/", h.routeAuth)
 	mux.HandleFunc("/auth/sign-out", h.handleSignOut)
@@ -100,14 +108,142 @@ func NewHTTPServer(
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	})
+	// /metrics serves the controller's Prometheus scrape (§4 P2
+	// observability). Mounted alongside /healthz on the existing
+	// HTTP port rather than a dedicated metrics port so a single
+	// scrape target reaches both — operators running self-hosted
+	// don't need to expose a second port through their firewall.
+	mux.Handle("/metrics", h.metrics.Handler())
 	h.srv = &http.Server{
 		Addr:              addr,
-		Handler:           withCORS(mux),
+		Handler:           withCORS(metricsMiddleware(h.metrics, mux)),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      30 * time.Second,
 	}
 	return h
+}
+
+// SetBuildInfo records the version + commit on the metrics
+// registry's bamboo_build_info gauge. Called from the cmd
+// entrypoint once the ldflags-injected build vars are plumbed
+// through, so dashboards can group panels by deploy. Idempotent;
+// safe to call before or after Start.
+func (h *HTTPServer) SetBuildInfo(version, commit string) {
+	if h == nil || h.metrics == nil {
+		return
+	}
+	h.metrics.SetBuildInfo(version, commit)
+}
+
+// metricsMiddleware wraps the mux so every incoming request bumps
+// bamboo_http_requests_total + bamboo_http_request_duration_seconds.
+// Route labels are *patterns* (e.g. "/api/v1/peers/{id}") rather
+// than raw paths so a busy tenant with many UUIDs doesn't blow up
+// the Prometheus time-series count. /metrics scrapes skip
+// instrumentation — scraping yourself is a self-reference loop the
+// dashboards would have to filter out anyway.
+func metricsMiddleware(reg *metrics.Registry, next http.Handler) http.Handler {
+	if reg == nil {
+		return next
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/metrics" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		start := time.Now()
+		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+		next.ServeHTTP(rec, r)
+		route := normalizeRoute(r.URL.Path)
+		reg.HTTPRequestsTotal.WithLabelValues(r.Method, route, metrics.StatusFamily(rec.status)).Inc()
+		reg.HTTPRequestDurationSeconds.WithLabelValues(r.Method, route).Observe(time.Since(start).Seconds())
+	})
+}
+
+// statusRecorder wraps http.ResponseWriter to capture the status
+// code so the metrics middleware can label by status family.
+// Standard pattern, kept private to this file.
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+	wrote  bool
+}
+
+func (s *statusRecorder) WriteHeader(code int) {
+	if !s.wrote {
+		s.status = code
+		s.wrote = true
+	}
+	s.ResponseWriter.WriteHeader(code)
+}
+
+// Flush passes through to the underlying ResponseWriter when it
+// supports flushing — needed so the SSE WatchPeers stream keeps
+// working through this middleware (without Flush the keepalive
+// comments buffer and never reach the client).
+func (s *statusRecorder) Flush() {
+	if f, ok := s.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+// normalizeRoute collapses UUID-bearing paths to patterns so the
+// metrics cardinality stays bounded. The router itself uses
+// strings.CutPrefix / CutSuffix to dispatch, so we mirror its
+// shape here: /api/v1/peers/{id} → "/api/v1/peers/{id}",
+// /api/v1/peers/{id}/events → "/api/v1/peers/{id}/events", etc.
+//
+// Unknown paths fall through as-is so a new endpoint introduced
+// without a matching pattern still shows up in metrics — under its
+// own series, which is the right signal that the pattern table
+// needs updating.
+func normalizeRoute(path string) string {
+	// Fast-path the static endpoints first.
+	switch path {
+	case "/healthz", "/metrics", "/api/v1/", "/api/v1",
+		"/api/v1/policy", "/api/v1/policy/validate", "/api/v1/policy/simulate",
+		"/api/v1/policy/revisions", "/api/v1/policy/rollback",
+		"/api/v1/logs", "/api/v1/activity", "/api/v1/recommendations",
+		"/api/v1/me", "/api/v1/users", "/api/v1/invitations",
+		"/api/v1/preauth-keys", "/api/v1/dns", "/api/v1/tenant",
+		"/api/v1/overview", "/api/v1/peers/register", "/api/v1/peers/heartbeat",
+		"/api/v1/peers/watch", "/api/v1/relay-token":
+		return path
+	}
+	// /api/v1/peers/{id}/<subpath> family — collapse the UUID.
+	if rest, ok := strings.CutPrefix(path, "/api/v1/peers/"); ok && rest != "" {
+		for _, sub := range []string{
+			"events", "connection-events", "route-conflicts",
+			"approve", "reject", "routes", "exit-node",
+		} {
+			if strings.HasSuffix(rest, "/"+sub) {
+				return "/api/v1/peers/{id}/" + sub
+			}
+		}
+		// Bare /api/v1/peers/{id}
+		if !strings.Contains(rest, "/") {
+			return "/api/v1/peers/{id}"
+		}
+	}
+	// /api/v1/preauth-keys/{id}/revoke
+	if rest, ok := strings.CutPrefix(path, "/api/v1/preauth-keys/"); ok && rest != "" {
+		if strings.HasSuffix(rest, "/revoke") {
+			return "/api/v1/preauth-keys/{id}/revoke"
+		}
+	}
+	// /auth/<provider>/{start,callback}, /auth/sign-out
+	if strings.HasPrefix(path, "/auth/") {
+		if path == "/auth/sign-out" {
+			return path
+		}
+		parts := strings.SplitN(strings.TrimPrefix(path, "/auth/"), "/", 3)
+		if len(parts) >= 2 {
+			return "/auth/{provider}/" + parts[1]
+		}
+		return "/auth/{provider}"
+	}
+	return path
 }
 
 // withCORS adds permissive CORS for the dev environment so the Next.js

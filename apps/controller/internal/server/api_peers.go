@@ -16,6 +16,7 @@ import (
 	"github.com/hanfour/bamboo/apps/controller/internal/auth"
 	"github.com/hanfour/bamboo/apps/controller/internal/clickhouse"
 	bamboov1 "github.com/hanfour/bamboo/proto/gen/go/bamboo/v1"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 )
@@ -114,12 +115,26 @@ type peerRegisterResponse struct {
 }
 
 func (h *HTTPServer) apiPeersRegister(w http.ResponseWriter, r *http.Request) {
+	// Outcome label for bamboo_register_total. Defaults to "error";
+	// each happy / explicit-rejection path overwrites it. Catch-all
+	// at the deferred Inc keeps the metric honest if a future return
+	// path forgets to set outcome — we'd rather see "error" than
+	// silently undercount.
+	outcome := "error"
+	defer func() {
+		if h.metrics != nil {
+			h.metrics.RegisterTotal.WithLabelValues(outcome).Inc()
+		}
+	}()
+
 	var body peerRegisterRequest
 	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&body); err != nil {
+		outcome = "denied"
 		writeError(w, http.StatusBadRequest, fmt.Errorf("decode request: %w", err))
 		return
 	}
 	if body.Hostname == "" || body.WireguardPublicKey == "" {
+		outcome = "denied"
 		writeError(w, http.StatusBadRequest, errors.New("hostname and wireguardPublicKey are required"))
 		return
 	}
@@ -136,6 +151,7 @@ func (h *HTTPServer) apiPeersRegister(w http.ResponseWriter, r *http.Request) {
 		if body.PreAuthKeySecret == "" && h.peerSessionFromRequest(r) == nil {
 			authn, err := h.authenticate(r)
 			if err != nil || authn.claims == nil {
+				outcome = "denied"
 				writeError(w, http.StatusUnauthorized, errors.New("register requires a pre-auth key, peer-session bearer, or user-session credential"))
 				return
 			}
@@ -188,9 +204,19 @@ func (h *HTTPServer) apiPeersRegister(w http.ResponseWriter, r *http.Request) {
 	}
 	resp, err := h.coord.Register(ctx, req)
 	if err != nil {
+		// Treat all gRPC InvalidArgument / Unauthenticated /
+		// PermissionDenied / FailedPrecondition as "denied" — they
+		// mean the caller's request was wrong, not that the
+		// controller broke. Anything else is "error".
+		if code := status.Code(err); code == codes.InvalidArgument ||
+			code == codes.Unauthenticated || code == codes.PermissionDenied ||
+			code == codes.FailedPrecondition {
+			outcome = "denied"
+		}
 		writeGRPCError(w, err)
 		return
 	}
+	outcome = "success"
 
 	// Persist subnet-route advertisements + exit-node capability
 	// (issues #136 + #137) as a side-channel after the mesh-state
@@ -338,8 +364,20 @@ type peerHeartbeatResponse struct {
 }
 
 func (h *HTTPServer) apiPeersHeartbeat(w http.ResponseWriter, r *http.Request) {
+	// See apiPeersRegister for the outcome-defer rationale. Heartbeat
+	// is the highest-rate endpoint the controller serves (every peer
+	// hits it every ~30s), so the metric is what surfaces hot-path
+	// regressions fastest after a deploy.
+	outcome := "error"
+	defer func() {
+		if h.metrics != nil {
+			h.metrics.HeartbeatTotal.WithLabelValues(outcome).Inc()
+		}
+	}()
+
 	var body peerHeartbeatRequest
 	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<14)).Decode(&body); err != nil {
+		outcome = "denied"
 		writeError(w, http.StatusBadRequest, fmt.Errorf("decode request: %w", err))
 		return
 	}
@@ -350,6 +388,7 @@ func (h *HTTPServer) apiPeersHeartbeat(w http.ResponseWriter, r *http.Request) {
 	// rejected.
 	if h.requireAuth {
 		if !h.peerCredentialAllows(r, body.PeerID) {
+			outcome = "denied"
 			writeError(w, http.StatusUnauthorized, errors.New("heartbeat requires a peer-session bearer matching the peerId, or a user-session credential"))
 			return
 		}
@@ -360,9 +399,15 @@ func (h *HTTPServer) apiPeersHeartbeat(w http.ResponseWriter, r *http.Request) {
 		Endpoints:           body.Endpoints,
 	})
 	if err != nil {
+		if code := status.Code(err); code == codes.InvalidArgument ||
+			code == codes.Unauthenticated || code == codes.PermissionDenied ||
+			code == codes.NotFound {
+			outcome = "denied"
+		}
 		writeGRPCError(w, err)
 		return
 	}
+	outcome = "success"
 	// Connection-path side-channel (issue #138). We persist on the
 	// peer row outside the coord.Heartbeat call because the path is
 	// admin-visibility data, not part of the mesh-state contract.
@@ -440,6 +485,16 @@ func (h *HTTPServer) apiPeersWatch(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Connection", "keep-alive")
 	w.WriteHeader(http.StatusOK)
 	flusher.Flush()
+
+	// bamboo_watch_streams_active is incremented for the lifetime of
+	// the stream. Inc + deferred Dec covers all exit paths (client
+	// disconnect, ctx cancel, server shutdown, write error inside
+	// streamWatchEvents). nil-safe so test fixtures that bypass
+	// NewHTTPServer still work.
+	if h.metrics != nil {
+		h.metrics.WatchStreamsActive.Inc()
+		defer h.metrics.WatchStreamsActive.Dec()
+	}
 
 	streamWatchEvents(r.Context(), w, flusher, ch, watchKeepaliveInterval)
 }
