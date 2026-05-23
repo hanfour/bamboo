@@ -10,6 +10,7 @@ import {
   simulatePolicyAction,
   validatePolicyAction,
 } from '@/lib/actions';
+import { lineDiff, type DiffRow } from '@/lib/lineDiff';
 import type { PolicyHistoryRow, PolicySimulation } from '@/lib/types';
 
 // AclEditor is the issue-#134 tabbed editor for the tenant ACL.
@@ -424,7 +425,11 @@ function VersionsTab({
   const [busyRev, setBusyRev] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [, startTransition] = useTransition();
-  const [expandedRev, setExpandedRev] = useState<number | null>(null);
+  // Each row can independently expand into Source OR Diff. We track
+  // them as a (rev, mode) pair rather than two booleans so toggling
+  // between modes on the same row stays click-cheap (the panel
+  // re-renders rather than collapsing + re-expanding).
+  const [expanded, setExpanded] = useState<{ rev: number; mode: 'source' | 'diff' } | null>(null);
 
   function rollback(rev: number) {
     setError(null);
@@ -457,8 +462,18 @@ function VersionsTab({
       <ol className="divide-y divide-ink-800 rounded-lg border border-ink-800">
         {revisions.map((r) => {
           const isCurrent = r.revision === currentRevision;
-          const isExpanded = expandedRev === r.revision;
+          const isSourceOpen = expanded?.rev === r.revision && expanded.mode === 'source';
+          const isDiffOpen = expanded?.rev === r.revision && expanded.mode === 'diff';
           const sameAsCurrent = r.hclSource === currentHclSource;
+
+          function toggle(mode: 'source' | 'diff') {
+            if (expanded?.rev === r.revision && expanded.mode === mode) {
+              setExpanded(null);
+            } else {
+              setExpanded({ rev: r.revision, mode });
+            }
+          }
+
           return (
             <li key={r.revision} className="space-y-2 p-4">
               <div className="flex flex-wrap items-baseline justify-between gap-3">
@@ -486,11 +501,22 @@ function VersionsTab({
                 <div className="flex items-center gap-2">
                   <button
                     type="button"
-                    onClick={() => setExpandedRev(isExpanded ? null : r.revision)}
+                    onClick={() => toggle('source')}
                     className="rounded border border-ink-700 px-2.5 py-1 text-xs text-bamboo-200/80 transition-colors hover:bg-ink-800 hover:text-bamboo-50"
                   >
-                    {isExpanded ? t('hideSource') : t('viewSource')}
+                    {isSourceOpen ? t('hideSource') : t('viewSource')}
                   </button>
+                  {!isCurrent && (
+                    <button
+                      type="button"
+                      onClick={() => toggle('diff')}
+                      disabled={sameAsCurrent}
+                      title={sameAsCurrent ? t('rollbackSameAsCurrent') : undefined}
+                      className="rounded border border-ink-700 px-2.5 py-1 text-xs text-bamboo-200/80 transition-colors hover:bg-ink-800 hover:text-bamboo-50 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {isDiffOpen ? t('hideDiff') : t('viewDiff')}
+                    </button>
+                  )}
                   {!isCurrent && (
                     <button
                       type="button"
@@ -504,15 +530,123 @@ function VersionsTab({
                   )}
                 </div>
               </div>
-              {isExpanded && (
+              {isSourceOpen && (
                 <pre className="overflow-x-auto rounded border border-ink-800 p-3 font-mono text-[11px] leading-relaxed text-bamboo-100">
                   <code>{r.hclSource}</code>
                 </pre>
+              )}
+              {isDiffOpen && (
+                <DiffView
+                  oldText={r.hclSource}
+                  newText={currentHclSource}
+                  oldLabel={t('diffOldLabel', { revision: r.revision })}
+                  newLabel={t('diffNewLabel', { revision: currentRevision })}
+                />
               )}
             </li>
           );
         })}
       </ol>
+    </div>
+  );
+}
+
+// DiffView renders a side-by-side line-by-line comparison of two HCL
+// blobs. The Versions tab pipes (historical revision → current) here
+// so an operator can answer "what did r5 → r7 actually change?"
+// without copy-pasting into an external diff tool.
+//
+// Visual conventions:
+//   * Left column = historical (old). Right column = current (new).
+//   * Removed lines: left filled with red tint, right blank.
+//   * Added lines: right filled with green tint, left blank.
+//   * Same lines: both columns show the line in muted gray.
+//
+// Gutter line numbers are 1-based; "same" rows show both, "add" / "remove"
+// rows show only the side that has content. The empty-on-both-sides
+// case (two empty inputs) renders an explanatory line rather than an
+// empty pane so the section doesn't look broken.
+function DiffView({
+  oldText,
+  newText,
+  oldLabel,
+  newLabel,
+}: {
+  oldText: string;
+  newText: string;
+  oldLabel: string;
+  newLabel: string;
+}) {
+  const t = useTranslations('acl.versions');
+  const rows = lineDiff(oldText, newText);
+  if (rows.length === 0) {
+    return (
+      <p className="rounded border border-ink-800 p-3 text-xs text-bamboo-200/60">
+        {t('diffEmpty')}
+      </p>
+    );
+  }
+  return (
+    <div className="overflow-hidden rounded border border-ink-800 font-mono text-[11px] leading-relaxed">
+      <div className="grid grid-cols-2 divide-x divide-ink-800 border-b border-ink-800 bg-ink-900/60 text-[10px] uppercase tracking-wide text-bamboo-200/60">
+        <div className="px-3 py-1.5">{oldLabel}</div>
+        <div className="px-3 py-1.5">{newLabel}</div>
+      </div>
+      <div className="grid grid-cols-2 divide-x divide-ink-800 overflow-x-auto">
+        <div>
+          {rows.map((row, i) => (
+            <DiffCell key={`L-${i}`} side="old" row={row} />
+          ))}
+        </div>
+        <div>
+          {rows.map((row, i) => (
+            <DiffCell key={`R-${i}`} side="new" row={row} />
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// DiffCell renders one side of one diff row. Kept as its own
+// component so the empty-side states (a "remove" row on the right,
+// or an "add" row on the left) get a consistent vertical rhythm
+// without rendering an actual placeholder line — the absence is the
+// signal.
+function DiffCell({ side, row }: { side: 'old' | 'new'; row: DiffRow }) {
+  // Empty side: render a blank background-tinted row so the two
+  // columns stay aligned. Without this the columns would drift in
+  // height as one side has more content rows.
+  const empty =
+    (side === 'old' && row.kind === 'add') || (side === 'new' && row.kind === 'remove');
+  if (empty) {
+    return <div className="h-[1.65em] bg-ink-900/40" aria-hidden="true" />;
+  }
+  const text = side === 'old' ? row.oldLine ?? '' : row.newLine ?? '';
+  const lineNo = side === 'old' ? row.oldLineNumber : row.newLineNumber;
+  let bg = '';
+  let prefix = ' ';
+  if (row.kind === 'remove') {
+    bg = 'bg-red-900/25 text-red-100';
+    prefix = '-';
+  } else if (row.kind === 'add') {
+    bg = 'bg-emerald-900/25 text-emerald-100';
+    prefix = '+';
+  } else {
+    bg = 'text-bamboo-200/80';
+  }
+  return (
+    <div className={`flex items-baseline gap-2 px-3 ${bg}`}>
+      <span
+        aria-hidden="true"
+        className="select-none text-[10px] text-bamboo-200/40 tabular-nums w-6 text-right"
+      >
+        {lineNo ?? ''}
+      </span>
+      <span className="select-none text-[10px] text-bamboo-200/40 w-3">{prefix}</span>
+      <pre className="flex-1 whitespace-pre-wrap break-words text-[11px] leading-relaxed">
+        {text || ' '}
+      </pre>
     </div>
   );
 }
