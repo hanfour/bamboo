@@ -417,6 +417,53 @@
     },
     "noRule": "—"
   },
+  "webhooks": {
+    "title": "Webhooks",
+    "titleAccent": "delivery",
+    "subtitle": "對外 HTTP 端點，當本租戶有可稽核事件時，controller 會帶 HMAC 簽章 POST 過去。接收端用訂閱 secret 對原始 request body 算 sha256 然後比對 X-Bamboo-Signature header 即可驗證。",
+    "empty": "尚無 webhook 訂閱。新增一筆即可開始接收事件。",
+    "errorPrefix": "操作失敗：",
+    "allEvents": "全部事件",
+    "inactiveBadge": "已停用",
+    "form": {
+      "openButton": "新增 webhook",
+      "cancel": "取消",
+      "submit": "建立",
+      "working": "處理中…",
+      "urlLabel": "接收端 URL",
+      "urlHint": "必須以 http:// 或 https:// 開頭。自架內部網址也可。",
+      "urlPlaceholder": "https://receiver.example.com/bamboo",
+      "eventTypesLabel": "事件類型",
+      "eventTypesHint": "以逗號分隔。留空 = 所有事件。可填精確動作（peer.register）或前綴加點（peer.）以匹配所有子動作。",
+      "eventTypesPlaceholder": "peer., policy.update",
+      "descriptionLabel": "備註",
+      "descriptionPlaceholder": "此接收端用途說明"
+    },
+    "actions": {
+      "test": "測試",
+      "enable": "啟用",
+      "disable": "停用",
+      "delete": "刪除",
+      "confirmDelete": "確定刪除",
+      "cancel": "取消"
+    },
+    "test": {
+      "delivered": "接收端回應 {status}",
+      "non2xx": "接收端回應 {status} —— 請確認端點是否接受此 payload",
+      "transportError": "無法連線到接收端：",
+      "controllerError": "Controller 錯誤："
+    },
+    "secretModal": {
+      "title": "Webhook secret",
+      "description": "請現在複製此 secret 並與接收端的驗證設定一起儲存。產生後僅顯示一次，controller 不會保留可復原的副本。",
+      "urlLabel": "接收端 URL",
+      "secretLabel": "Secret",
+      "warning": "若遺失此 secret，請刪除訂閱重新建立 —— 沒有輪替路徑。",
+      "copy": "複製",
+      "copied": "已複製",
+      "done": "完成"
+    }
+  },
   "settings": {
     "title": "設定",
     "titleAccent": "tenant",
@@ -437,6 +484,11 @@
       "title": "Pre-auth keys",
       "description": "管理租戶可發行的連線金鑰，給新節點首次連線使用。",
       "link": "前往 Pre-auth keys"
+    },
+    "webhooksCard": {
+      "title": "Webhooks",
+      "description": "對外 HTTP 端點，當本租戶有可稽核事件時 controller 會帶 HMAC 簽章 POST 過去。",
+      "link": "前往 Webhooks"
     }
   },
   "invite": {

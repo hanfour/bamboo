@@ -417,6 +417,53 @@
     },
     "noRule": "—"
   },
+  "webhooks": {
+    "title": "Webhooks",
+    "titleAccent": "delivery",
+    "subtitle": "Outbound HTTP endpoints that receive a signed POST whenever an audited event happens in this tenant. The receiver verifies the X-Bamboo-Signature header (sha256=<hex>) against the raw request body using the subscription secret.",
+    "empty": "No webhook subscriptions yet. Add one to start receiving event deliveries.",
+    "errorPrefix": "Action failed:",
+    "allEvents": "All events",
+    "inactiveBadge": "Inactive",
+    "form": {
+      "openButton": "Add webhook",
+      "cancel": "Cancel",
+      "submit": "Create webhook",
+      "working": "Creating…",
+      "urlLabel": "Receiver URL",
+      "urlHint": "Must start with http:// or https://. Self-hosted internal endpoints are accepted.",
+      "urlPlaceholder": "https://receiver.example.com/bamboo",
+      "eventTypesLabel": "Event types",
+      "eventTypesHint": "Comma-separated. Empty = all events. Use exact actions (peer.register) or prefix.+dot (peer.) to match every sub-action.",
+      "eventTypesPlaceholder": "peer., policy.update",
+      "descriptionLabel": "Description",
+      "descriptionPlaceholder": "What this receiver does"
+    },
+    "actions": {
+      "test": "Test",
+      "enable": "Enable",
+      "disable": "Disable",
+      "delete": "Delete",
+      "confirmDelete": "Confirm delete",
+      "cancel": "Cancel"
+    },
+    "test": {
+      "delivered": "Receiver responded {status}",
+      "non2xx": "Receiver returned {status} — verify endpoint accepts the payload",
+      "transportError": "Couldn't reach receiver:",
+      "controllerError": "Controller error:"
+    },
+    "secretModal": {
+      "title": "Webhook secret",
+      "description": "Copy this secret now and store it next to your receiver's verification config. It's shown once and the controller doesn't keep a recovery copy.",
+      "urlLabel": "Receiver URL",
+      "secretLabel": "Secret",
+      "warning": "If you lose this secret, delete the subscription and create a new one — there's no rotation path.",
+      "copy": "Copy",
+      "copied": "Copied",
+      "done": "Done"
+    }
+  },
   "settings": {
     "title": "Settings",
     "titleAccent": "tenant",
@@ -437,6 +484,11 @@
       "title": "Pre-auth keys",
       "description": "Mint and revoke the keys that new devices paste into their bamboo client on first connection.",
       "link": "Go to Pre-auth keys"
+    },
+    "webhooksCard": {
+      "title": "Webhooks",
+      "description": "Outbound HTTP endpoints that receive a signed POST whenever an audited event happens in this tenant.",
+      "link": "Go to Webhooks"
     }
   },
   "invite": {

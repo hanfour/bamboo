@@ -34,6 +34,7 @@ import type {
   PolicyHistoryRow,
   PreAuthKey,
   User,
+  Webhook,
 } from './types';
 
 const BASE = process.env.BAMBOO_API_URL ?? 'http://localhost:8081';
@@ -291,6 +292,17 @@ export async function fetchPreAuthKeys(): Promise<FetchResult<PreAuthKey[]>> {
     autoApprove: k.autoApprove ?? false,
   }));
   return { kind: 'ok', value: keys };
+}
+
+// fetchWebhooks lists every subscription for the tenant (§4 P2).
+// Admin-only on the wire; non-admin callers see a 403 which the
+// FetchErrorState surface translates into the "permission needed"
+// view. Secret is never returned by the controller's list path —
+// the Webhook type doesn't even carry it.
+export async function fetchWebhooks(): Promise<FetchResult<Webhook[]>> {
+  const r = await fetchResult<{ webhooks: Webhook[] }>('/api/v1/webhooks');
+  if (r.kind !== 'ok') return r;
+  return { kind: 'ok', value: r.value.webhooks ?? [] };
 }
 
 // fetchPolicyRevisions backs the /acl Versions tab (issue #134).

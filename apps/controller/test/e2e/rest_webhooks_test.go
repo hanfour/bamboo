@@ -209,6 +209,130 @@ func TestRESTWebhooks_DeliversSignedPayloadOnAuditEvent(t *testing.T) {
 	}
 }
 
+// TestRESTWebhooks_TestEndpointReportsReceiverOutcome drives the
+// synchronous test-probe path: subscribe, hit POST /test, the
+// receiver returns 200 / 5xx / nothing, and the endpoint response
+// faithfully reports the outcome so the Web UI can render a
+// green/red badge.
+func TestRESTWebhooks_TestEndpointReportsReceiverOutcome(t *testing.T) {
+	f := startFixture(t)
+
+	// Receiver toggles its response based on a probe path so we can
+	// drive 200 then 503 then "down" through the same handler.
+	var (
+		responseCode = http.StatusOK
+		mu           sync.Mutex
+		received     int
+	)
+	setCode := func(code int) {
+		mu.Lock()
+		responseCode = code
+		mu.Unlock()
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		mu.Lock()
+		code := responseCode
+		received++
+		mu.Unlock()
+		w.WriteHeader(code)
+	}))
+	t.Cleanup(srv.Close)
+
+	create := sendJSONWithTenant(t, http.MethodPost,
+		f.httpURL+"/api/v1/webhooks", f.tenantSlug,
+		map[string]any{"url": srv.URL})
+	if create.status != http.StatusCreated {
+		t.Fatalf("subscribe: status=%d body=%s", create.status, create.body)
+	}
+	// Drain the initial webhook.create audit-event delivery so it
+	// doesn't pollute the receiver counter below.
+	time.Sleep(200 * time.Millisecond)
+	mu.Lock()
+	received = 0
+	mu.Unlock()
+	var subResp struct {
+		ID string `json:"id"`
+	}
+	_ = json.Unmarshal(create.body, &subResp)
+
+	// Happy path: receiver returns 200 → delivered=true, status=200.
+	hit := sendJSONWithTenant(t, http.MethodPost,
+		f.httpURL+"/api/v1/webhooks/"+subResp.ID+"/test", f.tenantSlug, nil)
+	if hit.status != http.StatusOK {
+		t.Fatalf("test endpoint: status=%d body=%s", hit.status, hit.body)
+	}
+	var ok struct {
+		Delivered bool   `json:"delivered"`
+		Status    int    `json:"status"`
+		Error     string `json:"error"`
+	}
+	_ = json.Unmarshal(hit.body, &ok)
+	if !ok.Delivered || ok.Status != 200 || ok.Error != "" {
+		t.Errorf("happy path: got %+v, want delivered=true status=200", ok)
+	}
+
+	// Receiver returns 503 → delivered=false but status=503 carries
+	// the signal; error stays empty (the request completed, just
+	// not with 2xx).
+	setCode(http.StatusServiceUnavailable)
+	hit = sendJSONWithTenant(t, http.MethodPost,
+		f.httpURL+"/api/v1/webhooks/"+subResp.ID+"/test", f.tenantSlug, nil)
+	_ = json.Unmarshal(hit.body, &ok)
+	if ok.Delivered || ok.Status != 503 {
+		t.Errorf("5xx path: got %+v, want delivered=false status=503", ok)
+	}
+
+	// One POST per /test call — the synchronous probe must NOT
+	// trigger the retry loop the regular delivery path uses.
+	mu.Lock()
+	receivedCount := received
+	mu.Unlock()
+	if receivedCount != 2 {
+		t.Errorf("receiver got %d POSTs, want 2 (one per /test call, no retries)", receivedCount)
+	}
+}
+
+// TestRESTWebhooks_TestEndpointReportsTransportError drives the
+// connection-refused path: receiver is closed before /test fires.
+// Endpoint must report Status=0 + a non-empty Error so the UI can
+// surface "couldn't reach the receiver" rather than a misleading
+// success.
+func TestRESTWebhooks_TestEndpointReportsTransportError(t *testing.T) {
+	f := startFixture(t)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	subURL := srv.URL
+	srv.Close()
+
+	create := sendJSONWithTenant(t, http.MethodPost,
+		f.httpURL+"/api/v1/webhooks", f.tenantSlug,
+		map[string]any{"url": subURL})
+	if create.status != http.StatusCreated {
+		t.Fatalf("subscribe: status=%d body=%s", create.status, create.body)
+	}
+	var sub struct {
+		ID string `json:"id"`
+	}
+	_ = json.Unmarshal(create.body, &sub)
+
+	hit := sendJSONWithTenant(t, http.MethodPost,
+		f.httpURL+"/api/v1/webhooks/"+sub.ID+"/test", f.tenantSlug, nil)
+	if hit.status != http.StatusOK {
+		t.Fatalf("test endpoint: status=%d body=%s", hit.status, hit.body)
+	}
+	var out struct {
+		Delivered bool   `json:"delivered"`
+		Status    int    `json:"status"`
+		Error     string `json:"error"`
+	}
+	_ = json.Unmarshal(hit.body, &out)
+	if out.Delivered || out.Status != 0 || out.Error == "" {
+		t.Errorf("transport-error path: got %+v, want delivered=false status=0 error!=\"\"", out)
+	}
+}
+
 // TestRESTWebhooks_404ForCrossTenant verifies tenant scoping on
 // the patch/delete paths: a webhook id owned by another tenant
 // resolves to 404 before any update runs.

@@ -510,3 +510,135 @@ async function peerApprovalAction(
     return { ok: false, error: (e as Error).message };
   }
 }
+
+// WebhookCreateResult is the response shape from createWebhookAction.
+// `secret` is the plaintext HMAC key — surfaced ONCE on this
+// response, never returned by subsequent list / patch reads. The
+// modal must capture it before close.
+export type WebhookCreateResult =
+  | { ok: true; id: string; secret: string }
+  | { ok: false; error: string };
+
+// createWebhookAction mints a new webhook subscription. URL +
+// optional event-type allowlist + optional description. The
+// controller validates url scheme + event-type grammar; we trim
+// inputs at the boundary but otherwise pass through verbatim so
+// the operator sees the controller's diagnostic verbatim on a
+// rejection.
+export async function createWebhookAction(input: {
+  url: string;
+  eventTypes: string[];
+  description: string;
+}): Promise<WebhookCreateResult> {
+  try {
+    const res = await fetch(`${BASE}/api/v1/webhooks`, {
+      method: 'POST',
+      headers: await buildHeaders(),
+      body: JSON.stringify({
+        url: input.url.trim(),
+        eventTypes: input.eventTypes
+          .map((e) => e.trim())
+          .filter((e) => e.length > 0),
+        description: input.description.trim(),
+      }),
+      cache: 'no-store',
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      return { ok: false, error: `${res.status} ${text || res.statusText}` };
+    }
+    const body = (await res.json()) as { id: string; secret: string };
+    revalidatePath('/[locale]/webhooks', 'page');
+    return { ok: true, id: body.id, secret: body.secret };
+  } catch (e) {
+    return { ok: false, error: (e as Error).message };
+  }
+}
+
+// updateWebhookAction sends a partial PATCH. Each field is optional
+// so the UI can wire "toggle active" + "edit URL" + "edit event
+// types" through one action.
+export async function updateWebhookAction(
+  id: string,
+  patch: {
+    url?: string;
+    eventTypes?: string[];
+    description?: string;
+    active?: boolean;
+  },
+): Promise<ActionResult> {
+  try {
+    const res = await fetch(`${BASE}/api/v1/webhooks/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      headers: await buildHeaders(),
+      body: JSON.stringify(patch),
+      cache: 'no-store',
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      return { ok: false, error: `${res.status} ${text || res.statusText}` };
+    }
+    revalidatePath('/[locale]/webhooks', 'page');
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: (e as Error).message };
+  }
+}
+
+// deleteWebhookAction removes a subscription. Idempotent at the
+// controller (re-deleting still returns 204) so the UI doesn't
+// have to guard against double-clicks.
+export async function deleteWebhookAction(id: string): Promise<ActionResult> {
+  try {
+    const res = await fetch(`${BASE}/api/v1/webhooks/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+      headers: await buildHeaders(),
+      cache: 'no-store',
+    });
+    if (!res.ok && res.status !== 204) {
+      const text = await res.text().catch(() => '');
+      return { ok: false, error: `${res.status} ${text || res.statusText}` };
+    }
+    revalidatePath('/[locale]/webhooks', 'page');
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: (e as Error).message };
+  }
+}
+
+// WebhookTestResult mirrors the controller's apiTestWebhookResponse.
+// `delivered` is the headline; `status` is the receiver's HTTP code
+// (0 when the connection never completed); `error` is the transport-
+// level message on connection failure. The UI uses all three:
+// delivered=true → green check, delivered=false + status>0 → "got
+// {status}" amber badge, delivered=false + status=0 → "{error}" red
+// banner.
+export type WebhookTestResult =
+  | { ok: true; delivered: boolean; status: number; error?: string }
+  | { ok: false; error: string };
+
+// testWebhookAction fires a synthetic POST to the subscription's
+// receiver via the controller's /test endpoint. Synchronous — the
+// admin gets immediate yes/no feedback rather than having to scrape
+// audit logs after the fact.
+export async function testWebhookAction(id: string): Promise<WebhookTestResult> {
+  try {
+    const res = await fetch(`${BASE}/api/v1/webhooks/${encodeURIComponent(id)}/test`, {
+      method: 'POST',
+      headers: await buildHeaders(),
+      cache: 'no-store',
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      return { ok: false, error: `${res.status} ${text || res.statusText}` };
+    }
+    const body = (await res.json()) as {
+      delivered: boolean;
+      status: number;
+      error?: string;
+    };
+    return { ok: true, delivered: body.delivered, status: body.status, error: body.error };
+  } catch (e) {
+    return { ok: false, error: (e as Error).message };
+  }
+}

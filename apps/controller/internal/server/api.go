@@ -275,6 +275,17 @@ func (h *HTTPServer) routeAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if rest, ok := strings.CutPrefix(r.URL.Path, "/api/v1/webhooks/"); ok && rest != "" {
+		// {id}/test — synchronous probe; one POST to the receiver,
+		// returns the outcome inline so the Web UI's Test button
+		// can render immediate green / red feedback.
+		if id, found := strings.CutSuffix(rest, "/test"); found && id != "" && !strings.Contains(id, "/") {
+			if r.Method != http.MethodPost {
+				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+				return
+			}
+			h.apiTestWebhook(w, r, authn, tenant, id)
+			return
+		}
 		if !strings.Contains(rest, "/") {
 			switch r.Method {
 			case http.MethodPatch:
@@ -3333,6 +3344,68 @@ func authnActorID(a *authnContext) *uuid.UUID {
 		return &uid
 	}
 	return nil
+}
+
+// apiTestWebhookResponse is the wire shape for POST
+// /api/v1/webhooks/{id}/test. Always returns 200 (the operation
+// itself succeeded — we ran the probe); the outcome is in the
+// body. Receiver-side failures (non-2xx, connection refused) are
+// information for the operator, not a controller error.
+type apiTestWebhookResponse struct {
+	// Delivered is true when the receiver returned a 2xx. False
+	// for any other outcome — transport error, 4xx, 5xx.
+	Delivered bool `json:"delivered"`
+	// Status is the receiver's HTTP status code. 0 when the
+	// request never completed (transport-level failure).
+	Status int `json:"status"`
+	// Error carries the transport-level error string when
+	// Delivered=false and Status=0. Empty otherwise — receiver-
+	// reported non-2xx status doesn't surface here because the
+	// status field already carries the signal.
+	Error string `json:"error,omitempty"`
+}
+
+// apiTestWebhook fires a synthetic delivery to the subscription.
+// Admin-only. Synchronous: one POST, no retry, the receiver's
+// status is reported in the response body so the UI can show
+// immediate yes/no feedback. Distinct from the production delivery
+// path which buffers + retries — the test wants determinism over
+// resilience.
+func (h *HTTPServer) apiTestWebhook(w http.ResponseWriter, r *http.Request, authn *authnContext, tenant *repo.Tenant, idStr string) {
+	if !h.requireAdmin(w, r, authn, tenant, "webhooks.test") {
+		return
+	}
+	id, err := uuid.Parse(idStr)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	sub, err := h.webhooks.GetByID(r.Context(), id)
+	if errors.Is(err, repo.ErrNotFound) {
+		http.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if sub.TenantID != tenant.ID {
+		http.NotFound(w, r)
+		return
+	}
+	if h.publisher == nil {
+		writeError(w, http.StatusServiceUnavailable, errors.New("webhook publisher not configured"))
+		return
+	}
+	status, derr := h.publisher.TestDeliver(r.Context(), sub)
+	resp := apiTestWebhookResponse{Status: status}
+	switch {
+	case derr != nil:
+		resp.Error = derr.Error()
+	case status >= 200 && status < 300:
+		resp.Delivered = true
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // insertAudit is the fire-and-forget audit write used by handlers
