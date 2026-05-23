@@ -134,6 +134,22 @@ export type PreAuthKey = {
   useCount: number;
 };
 
+// Webhook is one subscription row from /api/v1/webhooks (list /
+// patch / read shape — the create response carries an additional
+// plaintext `secret` field, see WebhookCreateResult in lib/actions.ts).
+// Secret is NEVER returned by list/patch reads; the controller
+// shows it once at mint time and the UI must capture it then or
+// rotate via delete-then-create.
+export type Webhook = {
+  id: string;
+  url: string;
+  eventTypes: string[];
+  description?: string;
+  active: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+
 // ActivityEvent is one row from the tenant-wide audit feed
 // (`/api/v1/activity`). Same shape as PeerEvent but carries
 // resourceType/resourceId because activity spans peer.* / policy.*

@@ -299,6 +299,40 @@ func (p *Publisher) post(ctx context.Context, url, sig, eventID, eventType strin
 	return resp.StatusCode, nil
 }
 
+// TestDeliver fires ONE synthetic POST to the given subscription
+// and returns the receiver's HTTP status (or transport error).
+// Synchronous + retry-free by design — the admin clicking "Test
+// delivery" in the UI wants immediate yes/no feedback, not a
+// fire-and-forget background attempt. The audit log isn't touched
+// because Test is a probe, not a state-changing action.
+//
+// The body shape matches a real delivery so a receiver that
+// already accepts production webhooks accepts the test too:
+//
+//	{ "id": "<uuid>", "type": "webhook.test", "tenantId": "<uuid>",
+//	  "occurredAt": "<rfc3339>", "data": null }
+//
+// HMAC signature + event-type / event-id headers are computed the
+// same way as production deliveries, so the receiver's
+// verification code path is exercised.
+func (p *Publisher) TestDeliver(ctx context.Context, sub *repo.WebhookSubscription) (int, error) {
+	if sub == nil {
+		return 0, fmt.Errorf("nil subscription")
+	}
+	payload := Event{
+		ID:         uuid.NewString(),
+		Type:       "webhook.test",
+		TenantID:   sub.TenantID.String(),
+		OccurredAt: time.Now().UTC(),
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return 0, fmt.Errorf("marshal test payload: %w", err)
+	}
+	sig := signature(sub.Secret, body)
+	return p.post(ctx, sub.URL, sig, payload.ID, payload.Type, body)
+}
+
 // Signature is the public helper that computes the HMAC-SHA256
 // hex string a receiver would verify against. Exposed so tests
 // (and ops tooling) can re-derive the same value.
