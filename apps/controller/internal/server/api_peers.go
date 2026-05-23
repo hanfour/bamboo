@@ -3,6 +3,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -325,6 +326,16 @@ func (h *HTTPServer) apiPeersHeartbeat(w http.ResponseWriter, r *http.Request) {
 // where <type> is one of peer_added, peer_updated, peer_removed,
 // policy_changed. Browsers and Swift clients (URLSession bytes API)
 // consume this directly without an SSE library.
+//
+// The handler also emits a periodic SSE comment (`: keepalive\n\n`)
+// every watchKeepaliveInterval. SSE comments start with ':' and are
+// ignored by all conformant clients including the Swift PeerWatcher
+// (which only matches `event: ` / `data: ` line prefixes). The point
+// is to keep TCP/HTTP-2 idle timeouts from tearing the stream down
+// between real events: mesh debug 2026-05-22 showed steady
+// NSURLErrorDomain Code=-1005 ("network connection was lost") drops
+// every 30–60s in the absence of activity, which then forced a
+// retry+resubscribe burst on every peer.
 func (h *HTTPServer) apiPeersWatch(w http.ResponseWriter, r *http.Request) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -353,6 +364,25 @@ func (h *HTTPServer) apiPeersWatch(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	flusher.Flush()
 
+	streamWatchEvents(r.Context(), w, flusher, ch, watchKeepaliveInterval)
+}
+
+// streamWatchEvents drains events from ch to w as SSE frames, with
+// a periodic SSE comment frame to defeat HTTP/2 + load-balancer idle
+// timeouts. Returns when ch is closed, when the context is done, or
+// when a write to w fails. Factored out of apiPeersWatch so tests
+// can exercise the keepalive timing without standing up a full HTTP
+// server + coordinator subscription.
+func streamWatchEvents(
+	ctx context.Context,
+	w io.Writer,
+	flusher http.Flusher,
+	ch <-chan *bamboov1.WatchPeersEvent,
+	keepaliveInterval time.Duration,
+) {
+	keepalive := time.NewTicker(keepaliveInterval)
+	defer keepalive.Stop()
+
 	for {
 		select {
 		case event, ok := <-ch:
@@ -363,11 +393,23 @@ func (h *HTTPServer) apiPeersWatch(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			flusher.Flush()
-		case <-r.Context().Done():
+		case <-keepalive.C:
+			if _, err := io.WriteString(w, ": keepalive\n\n"); err != nil {
+				return
+			}
+			flusher.Flush()
+		case <-ctx.Done():
 			return
 		}
 	}
 }
+
+// watchKeepaliveInterval is the period between SSE comment frames on
+// /api/v1/peers/watch. 20s is well under the 30-60s idle-disconnect
+// window we observed in production; an integer divisor of 60s also
+// stays well clear of common load-balancer 30s defaults. Package-
+// scoped + non-const so server-package tests can override.
+var watchKeepaliveInterval = 20 * time.Second
 
 func writeSSE(w io.Writer, event *bamboov1.WatchPeersEvent) error {
 	switch e := event.GetEvent().(type) {
