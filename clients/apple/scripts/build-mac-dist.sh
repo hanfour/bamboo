@@ -65,6 +65,19 @@ DERIVED_DIR="${DERIVED_DIR:-$HOME/.cache/bamboo-mac-dist}"
 DIST_DIR="$(pwd)/dist"
 OUT_ZIP="$DIST_DIR/bamboo-mac.zip"
 
+# CFBundleVersion override. sysextd compares CFBundleVersion to decide
+# whether a freshly built .app's embedded SystemExtensions should
+# replace the already-staged copy under /Library/SystemExtensions/.
+# When the version is unchanged across builds, sysextd treats the
+# new bundle as identical and skips re-staging — so all our local
+# code changes inside the SystemExt (PacketTunnelProvider /
+# DNSProxyProvider) get silently ignored at runtime, and the running
+# extension keeps executing the stale binary from the prior stage.
+# Auto-bump to the build epoch so each dev build forces a fresh
+# stage. Override BAMBOO_PROJECT_VERSION when reproducing a specific
+# build.
+PROJECT_VERSION="${BAMBOO_PROJECT_VERSION:-$(date +%s)}"
+
 for cmd in xcodegen xcodebuild ditto go; do
     if ! command -v "$cmd" >/dev/null 2>&1; then
         echo "error: '$cmd' not in PATH" >&2
@@ -81,6 +94,7 @@ mkdir -p "$DERIVED_DIR"
 # Per-target signing identity + provisioning profile names live in
 # project.yml's per-config settings blocks (Release config). Only
 # the team and runtime-hardening flag are passed here.
+echo "==> CFBundleVersion=$PROJECT_VERSION (forces sysextd re-stage)"
 xcodebuild build \
     -project bamboo.xcodeproj \
     -scheme "$SCHEME" \
@@ -90,6 +104,7 @@ xcodebuild build \
     DEVELOPMENT_TEAM="$TEAM_ID" \
     OTHER_CODE_SIGN_FLAGS="--options=runtime --timestamp" \
     CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO \
+    CURRENT_PROJECT_VERSION="$PROJECT_VERSION" \
     | tail -20
 
 APP_PATH="$DERIVED_DIR/Build/Products/$CONFIG/bamboo.app"
