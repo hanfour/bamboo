@@ -22,6 +22,7 @@ import (
 	"github.com/hanfour/bamboo/apps/controller/internal/handlers"
 	"github.com/hanfour/bamboo/apps/controller/internal/mail"
 	"github.com/hanfour/bamboo/apps/controller/internal/metrics"
+	"github.com/hanfour/bamboo/apps/controller/internal/webhooks"
 )
 
 // HTTPServer hosts the OIDC redirect / callback routes plus a thin
@@ -41,6 +42,7 @@ type HTTPServer struct {
 	keys        *repo.PreAuthKeys
 	dns         *repo.TenantDNS
 	invitations *repo.UserInvitations
+	webhooks    *repo.Webhooks
 	mailer      *mail.Sender
 	publicURL   string // for /invite links in invitation email; falls back to baseURL
 	traces      *clickhouse.Traces
@@ -48,6 +50,7 @@ type HTTPServer struct {
 	connEvents  *clickhouse.ConnectionEvents
 	coord       *handlers.CoordinatorHandler
 	metrics     *metrics.Registry
+	publisher   *webhooks.Publisher
 	secret      []byte
 	baseURL     string
 	ttl         time.Duration
@@ -82,6 +85,7 @@ func NewHTTPServer(
 		keys:        repo.NewPreAuthKeys(pool),
 		dns:         repo.NewTenantDNS(pool),
 		invitations: repo.NewUserInvitations(pool),
+		webhooks:    repo.NewWebhooks(pool),
 		// Default mailer is the no-op sender — server boot calls
 		// SetMailer to wire in the real SMTP relay when configured.
 		mailer:     mail.New(config.SMTPConfig{}),
@@ -99,6 +103,17 @@ func NewHTTPServer(
 		baseURL: baseURL,
 		ttl:     ttl,
 	}
+	// Webhook publisher (§4 P2). The audit repo hook fires on every
+	// successful Insert; the publisher's bounded channel + worker
+	// goroutine handle delivery off the audit-write path. The
+	// worker itself starts in Run — keeping the construction here
+	// means Test fixtures that don't call Run still get audit-hook
+	// wiring (events queue up in memory; if the test never reads,
+	// they age out when the channel fills + are dropped via the
+	// "queue full" warning path).
+	h.publisher = webhooks.New(h.webhooks, nil)
+	h.audits.SetHook(h.publisher)
+
 	mux.HandleFunc("/auth/", h.routeAuth)
 	mux.HandleFunc("/auth/sign-out", h.handleSignOut)
 	mux.HandleFunc("/api/v1/admin/relays", h.routeAdminRelays)
@@ -296,8 +311,29 @@ func (h *HTTPServer) SetMailer(sender *mail.Sender, publicURL string) {
 	}
 }
 
+// StartPublisher launches the webhook delivery worker goroutine.
+// Exposed separately from Run so test fixtures that mount Handler()
+// directly (without ListenAndServe) can still drain the audit-hook
+// queue. The worker exits when ctx is canceled.
+//
+// Idempotent: calling twice spawns two workers, both draining the
+// same channel. Acceptable because the channel ordering still works
+// — Go's channel receive is multi-consumer safe — but production
+// only ever wants one. Tests typically call this exactly once.
+func (h *HTTPServer) StartPublisher(ctx context.Context) {
+	if h == nil || h.publisher == nil {
+		return
+	}
+	go h.publisher.Run(ctx)
+}
+
 // Run blocks until ctx is canceled or the listener errors.
 func (h *HTTPServer) Run(ctx context.Context) error {
+	// Start the webhook delivery worker so audit events fired during
+	// the server's lifetime get drained from the in-memory queue.
+	// Worker exits when ctx is canceled; the HTTP shutdown path
+	// below also waits for ctx cancellation so they unwind together.
+	h.StartPublisher(ctx)
 	errCh := make(chan error, 1)
 	go func() {
 		slog.Info("HTTP server listening", "addr", h.addr)

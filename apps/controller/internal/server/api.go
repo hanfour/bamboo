@@ -4,12 +4,15 @@ package server
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"net/netip"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -250,6 +253,40 @@ func (h *HTTPServer) routeAPI(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		http.NotFound(w, r)
+		return
+	}
+
+	// Tenant-scoped webhook subscriptions (§4 P2 commercial /
+	// SaaS integration). Same admin-write pattern as preauth-keys
+	// and invitations.
+	//   GET    /api/v1/webhooks         → list (admin; secret hidden)
+	//   POST   /api/v1/webhooks         → create (admin; secret returned once)
+	//   PATCH  /api/v1/webhooks/{id}    → update (admin)
+	//   DELETE /api/v1/webhooks/{id}    → delete (admin)
+	if r.URL.Path == "/api/v1/webhooks" {
+		switch r.Method {
+		case http.MethodGet:
+			h.apiListWebhooks(w, r, authn, tenant)
+		case http.MethodPost:
+			h.apiCreateWebhook(w, r, authn, tenant)
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+		return
+	}
+	if rest, ok := strings.CutPrefix(r.URL.Path, "/api/v1/webhooks/"); ok && rest != "" {
+		if !strings.Contains(rest, "/") {
+			switch r.Method {
+			case http.MethodPatch:
+				h.apiPatchWebhook(w, r, authn, tenant, rest)
+			case http.MethodDelete:
+				h.apiDeleteWebhook(w, r, authn, tenant, rest)
+			default:
+				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			}
+			return
+		}
+		writeRouteMissing(w)
 		return
 	}
 
@@ -2979,3 +3016,336 @@ func kindString(k recommend.Kind) string {
 // _ keeps uuid imported (used elsewhere if api.go grows). Removed once
 // uuid is referenced directly in this file.
 var _ uuid.UUID
+
+// --- webhook subscriptions (§4 P2) -----------------------------------
+
+// apiWebhookJSON is the list/get response shape. Secret is
+// deliberately NOT included; it's surfaced only by the create
+// response, matching the pre-auth-key "shown once" convention.
+type apiWebhookJSON struct {
+	ID          string    `json:"id"`
+	URL         string    `json:"url"`
+	EventTypes  []string  `json:"eventTypes"`
+	Description string    `json:"description,omitempty"`
+	Active      bool      `json:"active"`
+	CreatedAt   time.Time `json:"createdAt"`
+	UpdatedAt   time.Time `json:"updatedAt"`
+}
+
+// apiWebhookCreateResponse extends apiWebhookJSON with the
+// plaintext secret. Returned only from POST /api/v1/webhooks so
+// the operator can copy it into the receiver's verification
+// config — it never re-appears on subsequent list/get reads.
+type apiWebhookCreateResponse struct {
+	apiWebhookJSON
+	Secret string `json:"secret"`
+}
+
+func webhookToJSON(w *repo.WebhookSubscription) apiWebhookJSON {
+	types := w.EventTypes
+	if types == nil {
+		types = []string{}
+	}
+	return apiWebhookJSON{
+		ID:          w.ID.String(),
+		URL:         w.URL,
+		EventTypes:  types,
+		Description: w.Description,
+		Active:      w.Active,
+		CreatedAt:   w.CreatedAt,
+		UpdatedAt:   w.UpdatedAt,
+	}
+}
+
+// apiCreateWebhookReq is the wire shape for POST /api/v1/webhooks.
+// eventTypes is optional: empty / omitted ⇒ subscribe to every
+// audited event in the tenant. Each entry must be either an exact
+// action ("peer.register") or a prefix terminated with a dot
+// ("peer.") — the publisher's matching rule.
+type apiCreateWebhookReq struct {
+	URL         string   `json:"url"`
+	EventTypes  []string `json:"eventTypes,omitempty"`
+	Description string   `json:"description,omitempty"`
+}
+
+// apiCreateWebhook mints a fresh subscription. Generates a 32-byte
+// secret server-side and surfaces it in the response exactly once.
+// Admin-only.
+func (h *HTTPServer) apiCreateWebhook(w http.ResponseWriter, r *http.Request, authn *authnContext, tenant *repo.Tenant) {
+	if !h.requireAdmin(w, r, authn, tenant, "webhooks.create") {
+		return
+	}
+	var req apiCreateWebhookReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("decode body: %w", err))
+		return
+	}
+	if !isValidWebhookURL(req.URL) {
+		writeError(w, http.StatusBadRequest, errors.New("url must be a valid http or https URL"))
+		return
+	}
+	if err := validateEventTypes(req.EventTypes); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	secret, err := newWebhookSecret()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("mint secret: %w", err))
+		return
+	}
+	var createdBy *uuid.UUID
+	if authn != nil && authn.claims != nil {
+		uid := authn.claims.UserID
+		createdBy = &uid
+	}
+	created, err := h.webhooks.Create(r.Context(), &repo.WebhookSubscription{
+		TenantID:    tenant.ID,
+		URL:         req.URL,
+		Secret:      secret,
+		EventTypes:  req.EventTypes,
+		Description: req.Description,
+		Active:      true,
+		CreatedBy:   createdBy,
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("create webhook: %w", err))
+		return
+	}
+	insertAudit(r.Context(), h.audits, &repo.AuditEvent{
+		TenantID:     &tenant.ID,
+		ActorType:    authnActorType(authn),
+		ActorID:      authnActorID(authn),
+		Action:       "webhook.create",
+		ResourceType: "webhook",
+		ResourceID:   &created.ID,
+		Diff: marshalDiff(map[string]any{
+			"url":         created.URL,
+			"event_types": created.EventTypes,
+		}),
+	})
+	writeJSON(w, http.StatusCreated, apiWebhookCreateResponse{
+		apiWebhookJSON: webhookToJSON(created),
+		Secret:         secret,
+	})
+}
+
+// apiListWebhooks lists tenant subscriptions. Admin-only; the
+// response carries every column EXCEPT secret.
+func (h *HTTPServer) apiListWebhooks(w http.ResponseWriter, r *http.Request, authn *authnContext, tenant *repo.Tenant) {
+	if !h.requireAdmin(w, r, authn, tenant, "webhooks.list") {
+		return
+	}
+	subs, err := h.webhooks.ListByTenant(r.Context(), tenant.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	out := make([]apiWebhookJSON, 0, len(subs))
+	for _, s := range subs {
+		out = append(out, webhookToJSON(s))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"webhooks": out})
+}
+
+// apiPatchWebhookReq is the partial-update shape. Each pointer
+// field is optional; nil = leave that column unchanged.
+type apiPatchWebhookReq struct {
+	URL         *string   `json:"url,omitempty"`
+	EventTypes  *[]string `json:"eventTypes,omitempty"`
+	Description *string   `json:"description,omitempty"`
+	Active      *bool     `json:"active,omitempty"`
+}
+
+// apiPatchWebhook applies a partial update. Admin-only. Tenant-
+// scoped: a webhook owned by another tenant resolves to 404 before
+// any update runs.
+func (h *HTTPServer) apiPatchWebhook(w http.ResponseWriter, r *http.Request, authn *authnContext, tenant *repo.Tenant, idStr string) {
+	if !h.requireAdmin(w, r, authn, tenant, "webhooks.update") {
+		return
+	}
+	id, err := uuid.Parse(idStr)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	current, err := h.webhooks.GetByID(r.Context(), id)
+	if errors.Is(err, repo.ErrNotFound) || (current != nil && current.TenantID != tenant.ID) {
+		http.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	var req apiPatchWebhookReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("decode body: %w", err))
+		return
+	}
+	if req.URL != nil && !isValidWebhookURL(*req.URL) {
+		writeError(w, http.StatusBadRequest, errors.New("url must be a valid http or https URL"))
+		return
+	}
+	if req.EventTypes != nil {
+		if err := validateEventTypes(*req.EventTypes); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+	}
+	updated, err := h.webhooks.Update(r.Context(), id, repo.WebhookPatch{
+		URL:         req.URL,
+		EventTypes:  req.EventTypes,
+		Description: req.Description,
+		Active:      req.Active,
+	})
+	if errors.Is(err, repo.ErrNotFound) {
+		http.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	insertAudit(r.Context(), h.audits, &repo.AuditEvent{
+		TenantID:     &tenant.ID,
+		ActorType:    authnActorType(authn),
+		ActorID:      authnActorID(authn),
+		Action:       "webhook.update",
+		ResourceType: "webhook",
+		ResourceID:   &id,
+		Diff: marshalDiff(map[string]any{
+			"url":         updated.URL,
+			"event_types": updated.EventTypes,
+			"active":      updated.Active,
+		}),
+	})
+	writeJSON(w, http.StatusOK, webhookToJSON(updated))
+}
+
+// apiDeleteWebhook removes a subscription. Admin-only; idempotent
+// (404 surfaces only when the id was never present in this tenant).
+func (h *HTTPServer) apiDeleteWebhook(w http.ResponseWriter, r *http.Request, authn *authnContext, tenant *repo.Tenant, idStr string) {
+	if !h.requireAdmin(w, r, authn, tenant, "webhooks.delete") {
+		return
+	}
+	id, err := uuid.Parse(idStr)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	current, err := h.webhooks.GetByID(r.Context(), id)
+	if errors.Is(err, repo.ErrNotFound) {
+		// Already gone — DELETE is idempotent. Return 204.
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if current.TenantID != tenant.ID {
+		http.NotFound(w, r)
+		return
+	}
+	if err := h.webhooks.Delete(r.Context(), id); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	insertAudit(r.Context(), h.audits, &repo.AuditEvent{
+		TenantID:     &tenant.ID,
+		ActorType:    authnActorType(authn),
+		ActorID:      authnActorID(authn),
+		Action:       "webhook.delete",
+		ResourceType: "webhook",
+		ResourceID:   &id,
+		Diff:         marshalDiff(map[string]any{"url": current.URL}),
+	})
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// isValidWebhookURL is the URL gate — http:// or https://, host
+// present, no fragment. Webhook receivers are operator-controlled
+// endpoints; we don't restrict to public DNS (self-hosted may want
+// to POST to an internal hostname), but we do reject obvious typos
+// (no scheme, empty host) and non-http schemes.
+func isValidWebhookURL(raw string) bool {
+	if raw == "" {
+		return false
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return false
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return false
+	}
+	if u.Host == "" {
+		return false
+	}
+	return true
+}
+
+// validateEventTypes enforces the publisher's matching grammar:
+// each entry is either an exact action string ("peer.register")
+// or a prefix terminated with a dot ("peer."). Empty entries +
+// duplicates + whitespace-only entries are rejected loudly at the
+// API edge rather than silently dropped at the publisher.
+func validateEventTypes(types []string) error {
+	seen := make(map[string]bool, len(types))
+	for _, t := range types {
+		if t == "" || strings.TrimSpace(t) != t {
+			return fmt.Errorf("event_types: empty or whitespace-padded entry %q", t)
+		}
+		if seen[t] {
+			return fmt.Errorf("event_types: duplicate entry %q", t)
+		}
+		seen[t] = true
+	}
+	return nil
+}
+
+// newWebhookSecret mints a fresh 32-byte secret encoded as
+// base64-url-no-padding. The output length (43 chars) is short
+// enough to copy-paste into a receiver's config without
+// truncation surprises.
+func newWebhookSecret() (string, error) {
+	buf := make([]byte, 32)
+	if _, err := rand.Read(buf); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(buf), nil
+}
+
+// authnActorType returns the actor type to record on an audit
+// row. user when authn carries claims, system otherwise.
+func authnActorType(a *authnContext) string {
+	if a != nil && a.claims != nil {
+		return "user"
+	}
+	return "system"
+}
+
+// authnActorID returns the user UUID when authn carries claims,
+// nil otherwise — same shape AuditEvent.ActorID expects.
+func authnActorID(a *authnContext) *uuid.UUID {
+	if a != nil && a.claims != nil {
+		uid := a.claims.UserID
+		return &uid
+	}
+	return nil
+}
+
+// insertAudit is the fire-and-forget audit write used by handlers
+// in this file. Mirrors the handlers/audit.go helper but stays in
+// the server package so we don't reach across import boundaries
+// for a one-liner. Errors are logged via slog and swallowed —
+// audit-write failure must NOT fail the user-facing operation
+// (Phase 1 priority).
+func insertAudit(ctx context.Context, audits *repo.AuditLogs, ev *repo.AuditEvent) {
+	if audits == nil {
+		return
+	}
+	if err := audits.Insert(ctx, ev); err != nil {
+		slog.Warn("audit insert failed", "action", ev.Action, "err", err)
+	}
+}
