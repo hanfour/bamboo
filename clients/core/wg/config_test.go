@@ -151,7 +151,10 @@ func TestBuildDeviceConfig_NoPolicyFallsBackToFullMesh(t *testing.T) {
 				Id:                 "peer",
 				Ip:                 "100.64.0.2",
 				WireguardPublicKey: peerPriv.PublicKey().Base64(),
-				// AllowedIps deliberately left empty by the controller.
+				// AllowedIps deliberately left empty by the controller —
+				// simulates a legacy pre-#149 controller that omitted
+				// the field when policy_revision was zero. Modern
+				// controllers always populate it (see the test below).
 			},
 		},
 	}
@@ -164,6 +167,48 @@ func TestBuildDeviceConfig_NoPolicyFallsBackToFullMesh(t *testing.T) {
 	}
 	if cfg.Peers[0].AllowedIPs[0].String() != "100.64.0.2/32" {
 		t.Errorf("AllowedIPs[0] = %s, want 100.64.0.2/32 (derived from peer.IP)", cfg.Peers[0].AllowedIPs[0])
+	}
+}
+
+// Regression for the sprint-completion E2E (PR #167-#169): controller
+// merges admin-approved subnet routes (#136) into a peer's allowedIps
+// even when policy_revision is zero — those approvals are policy-
+// orthogonal admin sign-offs. The client must honor that list rather
+// than discard it for a /32-derived fallback. Without this fix, mac
+// mini advertises 192.168.86.0/24, admin approves, controller sends
+// allowedIps=["100.64.0.1/32","192.168.86.0/24"], and h4's WireGuard
+// silently configures only the /32 — the subnet route never lands.
+func TestBuildDeviceConfig_NoPolicyHonorsControllerAllowedIps(t *testing.T) {
+	priv, _ := wg.GeneratePrivateKey()
+	peerPriv, _ := wg.GeneratePrivateKey()
+
+	resp := &bamboov1.RegisterResponse{
+		// PolicyRevision: 0 — no authored ACL, but controller still
+		// emits AllowedIps because admin approved a subnet route.
+		Self: &bamboov1.Peer{Ip: "100.64.0.3"},
+		Peers: []*bamboov1.Peer{
+			{
+				Id:                 "mac-mini",
+				Ip:                 "100.64.0.1",
+				WireguardPublicKey: peerPriv.PublicKey().Base64(),
+				AllowedIps:         []string{"100.64.0.1/32", "192.168.86.0/24"},
+			},
+		},
+	}
+	cfg, err := wg.BuildDeviceConfig(priv, resp)
+	if err != nil {
+		t.Fatalf("BuildDeviceConfig: %v", err)
+	}
+	if len(cfg.Peers) != 1 {
+		t.Fatalf("len(Peers) = %d, want 1", len(cfg.Peers))
+	}
+	got := make([]string, 0, len(cfg.Peers[0].AllowedIPs))
+	for _, p := range cfg.Peers[0].AllowedIPs {
+		got = append(got, p.String())
+	}
+	want := []string{"100.64.0.1/32", "192.168.86.0/24"}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Errorf("AllowedIPs = %v, want %v (the controller-approved subnet route must survive)", got, want)
 	}
 }
 
