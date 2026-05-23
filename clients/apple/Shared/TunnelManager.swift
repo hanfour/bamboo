@@ -94,6 +94,33 @@ public final class TunnelManager: ObservableObject {
         self.manager = mgr
         attachObserver()
 
+        // If the tunnel is already running (typically because the
+        // SystemExt outlived a previous host app session — see
+        // cold-start handoff in ConnectionViewModel), startVPNTunnel
+        // is a no-op and the new config in providerConfiguration is
+        // never picked up by the running PacketTunnelProvider. The
+        // SystemExt then keeps running with whatever stale config
+        // it had — often that config has had wireguard-go's "device
+        // closed" failure clobber its peer set on a prior IPC apply
+        // (mesh-debug 2026-05-23, h4 ended up with 0 peers and no
+        // handshakes). Stop the tunnel first so startVPNTunnel
+        // actually fires PacketTunnelProvider.startTunnel(options:),
+        // which runs adapter.start with the fresh config.
+        let connStatus = mgr.connection.status
+        if connStatus == .connected || connStatus == .connecting || connStatus == .reasserting {
+            log.log("startTunnel: tunnel is \(connStatus.rawValue, privacy: .public); stopping first to force a fresh start with new config")
+            mgr.connection.stopVPNTunnel()
+            // Wait up to ~2s for the disconnect to land. Apple's
+            // status transitions are quick on loopback but can lag a
+            // few hundred ms when the SystemExt is busy.
+            for _ in 0..<40 {
+                if mgr.connection.status == .disconnected {
+                    break
+                }
+                try? await Task.sleep(nanoseconds: 50_000_000)
+            }
+        }
+
         try mgr.connection.startVPNTunnel()
         updateStatus()
     }
