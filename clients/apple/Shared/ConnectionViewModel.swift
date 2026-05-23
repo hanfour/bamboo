@@ -639,20 +639,26 @@ public final class ConnectionViewModel: ObservableObject {
     /// traffic to them, and listing the peer with no routes would
     /// still expose its public key for no benefit.
     ///
-    /// Decision tree:
-    ///   - enforcing == false (policyRevision == 0)           → ["<ip>/32"]
-    ///     Pre-enforcement default; preserves the legacy full-mesh
-    ///     behavior for tenants without an authored policy.
-    ///   - enforcing && cachedAllowedIPs[p.id] is non-empty   → use cache
-    ///   - enforcing && cached entry is empty / missing       → nil (deny)
+    /// Decision tree (modern controller always populates allowedIps;
+    /// the /32 fallback only triggers for legacy controllers pre-#149
+    /// that omitted the field):
+    ///   - enforcing && cachedAllowedIPs[p.id] empty/missing → nil (deny)
+    ///   - cachedAllowedIPs[p.id] non-empty                  → use cache
+    ///     (covers both enforcing and non-enforcing — under non-
+    ///     enforcing the controller still emits the /32 plus admin-
+    ///     approved subnet routes / exit-node defaults, see
+    ///     allowedIPsFor in apps/controller/internal/handlers/coordinator.go)
+    ///   - non-enforcing && cache empty (legacy pre-#149 controller) → ["<ip>/32"]
+    ///     Pre-enforcement full-mesh fallback; preserved so a current
+    ///     client still talks to a legacy controller.
     private func aclAllowedIPs(for p: BambooClient.PeerJSON, enforcing: Bool) -> [String]? {
-        if !enforcing {
-            return ["\(p.ip)/32"]
+        if let cached = cachedAllowedIPs[p.id], !cached.isEmpty {
+            return cached
         }
-        guard let cached = cachedAllowedIPs[p.id], !cached.isEmpty else {
+        if enforcing {
             return nil
         }
-        return cached
+        return ["\(p.ip)/32"]
     }
 
     /// allowedIPMap reduces a Register-response peer array into the

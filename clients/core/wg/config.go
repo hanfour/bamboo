@@ -55,10 +55,13 @@ type PeerConfig struct {
 // in WireGuard's peer set with no routes would still expose the public
 // key for no benefit.
 //
-// When resp.PolicyRevision == 0 the controller has no policy authored.
-// Each peer gets a single /32 (or /128) route to its tunnel IP — the
-// pre-enforcement default. This keeps tenants without a policy working
-// exactly as they did before this layer landed.
+// When resp.PolicyRevision == 0 the controller has no authored ACL.
+// peer.AllowedIps is still used when present, because the controller's
+// allowedIPsFor merges the peer's tunnel /32 with any admin-approved
+// subnet routes (#136) and exit-node defaults (#137) regardless of
+// ACL state — these are policy-orthogonal admin sign-offs. Only when
+// AllowedIps is absent (legacy controller pre-#149) do we fall back
+// to deriving a /32 from peer.IP.
 func BuildDeviceConfig(privKey PrivateKey, resp *bamboov1.RegisterResponse) (*DeviceConfig, error) {
 	if resp == nil || resp.GetSelf() == nil {
 		return nil, fmt.Errorf("register response missing self")
@@ -88,11 +91,16 @@ func BuildDeviceConfig(privKey PrivateKey, resp *bamboov1.RegisterResponse) (*De
 		}
 
 		var allowedIPs []netip.Prefix
-		if enforcing {
-			if len(p.GetAllowedIps()) == 0 {
-				// Policy denies traffic to this peer — drop it entirely.
-				continue
-			}
+		switch {
+		case enforcing && len(p.GetAllowedIps()) == 0:
+			// Policy denies traffic to this peer — drop it entirely.
+			continue
+		case len(p.GetAllowedIps()) > 0:
+			// Use controller-supplied list. Carries the peer's /32
+			// plus any admin-approved subnet routes (#136) and exit-
+			// node defaults (#137). Same parse path under both
+			// enforcing and non-enforcing modes — the policy gate
+			// already filtered above for the deny case.
 			for _, s := range p.GetAllowedIps() {
 				pre, err := netip.ParsePrefix(s)
 				if err != nil {
@@ -100,7 +108,11 @@ func BuildDeviceConfig(privKey PrivateKey, resp *bamboov1.RegisterResponse) (*De
 				}
 				allowedIPs = append(allowedIPs, pre)
 			}
-		} else {
+		default:
+			// Legacy controller pre-#149 omitted AllowedIps entirely
+			// when policy_revision was zero; derive a /32 (or /128)
+			// from the tunnel IP so this client keeps talking to those
+			// peers via direct mesh.
 			peerAddr, err := netip.ParseAddr(p.GetIp())
 			if err != nil {
 				return nil, fmt.Errorf("peer %s ip: %w", p.GetId(), err)
