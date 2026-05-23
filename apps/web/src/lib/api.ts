@@ -362,6 +362,38 @@ export async function fetchPeerConnectionEvents(
   return r.value.events ?? [];
 }
 
+// PeerRouteConflict is one (peer's CIDR ↔ other peer's CIDR) overlap
+// surfaced by the §3a route-conflict detector. The Web UI renders
+// these as inline warning badges next to the approved-routes
+// checkboxes in PeerDrawer's AdvertiseSection.
+export type PeerRouteConflictKind = 'duplicate' | 'contains' | 'contained_by';
+
+export type PeerRouteConflict = {
+  // The peer's own CIDR — matches one of peer.approvedRoutes.
+  cidr: string;
+  // Relationship from this peer's perspective.
+  kind: PeerRouteConflictKind;
+  // The other side of the overlap. otherHostname is what the badge
+  // surfaces in the UI; otherPeerId could become an anchor in a v2.
+  otherPeerId: string;
+  otherHostname: string;
+  otherCidr: string;
+};
+
+// fetchPeerRouteConflicts pulls the list of approved-route conflicts
+// affecting this peer (§3a follow-up). Side-channel from the drawer's
+// primary render: any error path (auth, network, controller outage)
+// collapses to [] so the warning row degrades to "no conflicts known"
+// without taking the drawer down. Operator can still see the route
+// list and click Approve / Rollback.
+export async function fetchPeerRouteConflicts(id: string): Promise<PeerRouteConflict[]> {
+  const r = await fetchResult<{ conflicts: PeerRouteConflict[] }>(
+    `/api/v1/peers/${encodeURIComponent(id)}/route-conflicts`,
+  );
+  if (r.kind !== 'ok') return [];
+  return r.value.conflicts ?? [];
+}
+
 export async function fetchPolicy(): Promise<FetchResult<AclPolicy>> {
   const r = await fetchResult<ApiPolicy>('/api/v1/policy');
   if (r.kind !== 'ok') return r;

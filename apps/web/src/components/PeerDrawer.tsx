@@ -14,7 +14,7 @@ import {
  setPeerTagsAction,
 } from '@/lib/actions';
 import { useDialogA11y } from '@/hooks/useDialogA11y';
-import type { PeerConnectionEvent, PeerConnectionPath } from '@/lib/api';
+import type { PeerConnectionEvent, PeerConnectionPath, PeerRouteConflict } from '@/lib/api';
 import type { FetchResult, Peer, PeerEvent } from '@/lib/types';
 
 type Props = {
@@ -34,6 +34,12 @@ type Props = {
  // a path-specific visual (⚡/🔄 glyph + arrow) rather than the
  // generic action labels of the audit timeline.
  connectionEvents: PeerConnectionEvent[];
+ // routeConflicts surfaces approved-CIDR overlaps with other peers
+ // in the same tenant (§3a route conflict detection). Side-channel
+ // — empty array on any fetch failure so the drawer renders normally
+ // even if the conflicts endpoint is offline. The AdvertiseSection
+ // filters by CIDR to render an inline badge per affected row.
+ routeConflicts: PeerRouteConflict[];
  open: boolean;
  onClose: () => void;
  // onDeleted fires after a successful delete so PeersView can clear
@@ -47,7 +53,7 @@ type Props = {
 // forward and link-sharing both work; `peer` is null when the id
 // resolved to 404 (deleted peer or stale link), and the drawer
 // renders a not-found state in that case.
-export function PeerDrawer({ peerResult, events, connectionEvents, open, onClose, onDeleted }: Props) {
+export function PeerDrawer({ peerResult, events, connectionEvents, routeConflicts, open, onClose, onDeleted }: Props) {
  const peer = peerResult?.kind === 'ok' ? peerResult.value : null;
  const t = useTranslations('peers.drawer');
  const tStatus = useTranslations('peers.status');
@@ -81,7 +87,7 @@ export function PeerDrawer({ peerResult, events, connectionEvents, open, onClose
  >
  <DrawerHeader peer={peer} statusLabel={peer ? tStatus(peer.status) : ''} onClose={onClose} closeLabel={t('close')} />
  <div className="flex-1 overflow-y-auto px-6 py-4">
- {renderBody(peerResult, events, connectionEvents, onDeleted, t)}
+ {renderBody(peerResult, events, connectionEvents, routeConflicts, onDeleted, t)}
  </div>
  </div>
  </div>
@@ -133,11 +139,13 @@ function DrawerBody({
  peer,
  events,
  connectionEvents,
+ routeConflicts,
  onDeleted,
 }: {
  peer: Peer;
  events: PeerEvent[];
  connectionEvents: PeerConnectionEvent[];
+ routeConflicts: PeerRouteConflict[];
  onDeleted: () => void;
 }) {
  const t = useTranslations('peers.drawer');
@@ -221,7 +229,7 @@ function DrawerBody({
  />
  </Section>
 
- <AdvertiseSection peer={peer} onError={setError} />
+ <AdvertiseSection peer={peer} routeConflicts={routeConflicts} onError={setError} />
 
  <Section title={t('sections.actions')}>
  <DisableToggle peer={peer} onError={setError} />
@@ -552,9 +560,11 @@ function DisableToggle({ peer, onError }: { peer: Peer; onError: (msg: string | 
 // state.
 function AdvertiseSection({
  peer,
+ routeConflicts,
  onError,
 }: {
  peer: Peer;
+ routeConflicts: PeerRouteConflict[];
  onError: (msg: string | null) => void;
 }) {
  const t = useTranslations('peers.drawer');
@@ -571,6 +581,7 @@ function AdvertiseSection({
  key={cidr}
  peer={peer}
  cidr={cidr}
+ conflicts={routeConflicts.filter((c) => c.cidr === cidr)}
  onError={onError}
  />
  ))}
@@ -590,20 +601,31 @@ function AdvertiseSection({
 // refreshes the canonical state from the controller, and the
 // consequence of losing a click is one missed approval, not a
 // security issue.
+//
+// When the row's CIDR collides with another peer's approved CIDR,
+// the per-conflict badges below the checkbox name the other peer
+// + the relationship (duplicate / contains / contained_by). The
+// detector runs against the current approved set, so the warning
+// disappears the instant the operator un-approves the row that
+// caused the overlap.
 function RouteApprovalRow({
  peer,
  cidr,
+ conflicts,
  onError,
 }: {
  peer: Peer;
  cidr: string;
+ conflicts: PeerRouteConflict[];
  onError: (msg: string | null) => void;
 }) {
  const t = useTranslations('peers.drawer');
  const [pending, startTransition] = useTransition();
  const approved = peer.approvedRoutes.includes(cidr);
+ const hasConflicts = approved && conflicts.length > 0;
  return (
- <label className="flex items-center gap-2 rounded-md border border-bamboo-200/20 px-3 py-1.5 text-sm text-bamboo-100">
+ <div className={`rounded-md border ${hasConflicts ? 'border-amber-500/40' : 'border-bamboo-200/20'} px-3 py-1.5 text-sm text-bamboo-100`}>
+ <label className="flex items-center gap-2">
  <input
  type="checkbox"
  checked={approved}
@@ -620,8 +642,30 @@ function RouteApprovalRow({
  }}
  />
  <code className="flex-1 font-mono text-xs">{cidr}</code>
+ {hasConflicts && (
+ <span
+ aria-hidden="true"
+ title={t('routeConflicts.summary', { count: conflicts.length })}
+ className="text-xs text-amber-300"
+ >
+ ⚠ {conflicts.length}
+ </span>
+ )}
  {pending && <span className="text-xs text-bamboo-200/60">{t('inline.working')}</span>}
  </label>
+ {hasConflicts && (
+ <ul className="mt-1.5 space-y-0.5 pl-7 text-[11px] text-amber-200/80">
+ {conflicts.map((c) => (
+ <li key={`${c.otherPeerId}:${c.otherCidr}:${c.kind}`}>
+ {t(`routeConflicts.kind.${c.kind}` as never, {
+ host: c.otherHostname,
+ cidr: c.otherCidr,
+ })}
+ </li>
+ ))}
+ </ul>
+ )}
+ </div>
  );
 }
 
@@ -933,6 +977,7 @@ function renderBody(
  peerResult: FetchResult<Peer> | null,
  events: PeerEvent[],
  connectionEvents: PeerConnectionEvent[],
+ routeConflicts: PeerRouteConflict[],
  onDeleted: () => void,
  t: ReturnType<typeof useTranslations>,
 ) {
@@ -947,6 +992,7 @@ function renderBody(
  peer={peerResult.value}
  events={events}
  connectionEvents={connectionEvents}
+ routeConflicts={routeConflicts}
  onDeleted={onDeleted}
  />
  );

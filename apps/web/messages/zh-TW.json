@@ -130,6 +130,14 @@
         "routesHint": "此節點宣告以下 CIDR 可由它轉發。請核可你信任的範圍 —— 只有核可的部分才會合併進其他節點的 allowed_ips。",
         "exitNode": "核可作為 exit-node"
       },
+      "routeConflicts": {
+        "summary": "{count, plural, other {與 # 個其他節點有路由衝突}}",
+        "kind": {
+          "duplicate": "相同 CIDR 也在 {host}（{cidr}）上被核可 —— WireGuard 會任選其中一邊，另一邊的流量會被丟棄。",
+          "contains": "與 {host} 較小的 {cidr} 重疊 —— 該範圍內的流量會走 {host}，不是這個節點。",
+          "contained_by": "落在 {host} 較大的 {cidr} 範圍內 —— 此範圍以外的流量會改走 {host}。"
+        }
+      },
       "fields": {
         "hostname": "主機名稱",
         "dnsName": "DNS 名稱",
