@@ -70,6 +70,22 @@ export type Peer = {
   connectionPath?: 'direct' | 'relay' | 'unknown';
   connectionPathAt?: string;
   connectionLatencyMs?: number;
+  // advertisedRoutes / approvedRoutes / exitNodeCapable /
+  // exitNodeApproved / usingExitNodePeerId implement subnet routing
+  // (issue #136) and exit nodes (issue #137). The peer reports what
+  // it wants to advertise via the register body; the admin approves
+  // a subset via POST /peers/{id}/routes (for routes) or POST
+  // /peers/{id}/exit-node (for exit-node). Pre-#136/#137 controllers
+  // omit these fields, in which case the mapper falls back to empty
+  // arrays + false so the UI uniformly hides the advertise section.
+  advertisedRoutes: string[];
+  approvedRoutes: string[];
+  exitNodeCapable: boolean;
+  exitNodeApproved: boolean;
+  // usingExitNodePeerId is the peer this row currently routes its
+  // default traffic through (the chosen exit node). Absent when the
+  // peer isn't using one — most common case.
+  usingExitNodePeerId?: string;
 };
 
 // FetchResult is a discriminated union for read paths so the UI can

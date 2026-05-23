@@ -72,6 +72,13 @@ type ApiPeer = {
   connectionPath?: 'direct' | 'relay' | 'unknown' | null;
   connectionPathAt?: string;
   connectionLatencyMs?: number;
+  // Issue #136 / #137 advertise fields. Optional/missing for pre-
+  // #149 controller deployments; the mapper backfills to []/false.
+  advertisedRoutes?: string[] | null;
+  approvedRoutes?: string[] | null;
+  exitNodeCapable?: boolean | null;
+  exitNodeApproved?: boolean | null;
+  usingExitNodePeerId?: string | null;
 };
 
 function apiPeerToPeer(p: ApiPeer): Peer {
@@ -107,6 +114,11 @@ function apiPeerToPeer(p: ApiPeer): Peer {
     connectionPath: p.connectionPath ?? undefined,
     connectionPathAt: p.connectionPathAt,
     connectionLatencyMs: p.connectionLatencyMs,
+    advertisedRoutes: p.advertisedRoutes ?? [],
+    approvedRoutes: p.approvedRoutes ?? [],
+    exitNodeCapable: p.exitNodeCapable ?? false,
+    exitNodeApproved: p.exitNodeApproved ?? false,
+    usingExitNodePeerId: p.usingExitNodePeerId ?? undefined,
   };
 }
 

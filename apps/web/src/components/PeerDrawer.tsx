@@ -8,6 +8,8 @@ import {
  deletePeerAction,
  renamePeerAction,
  renamePeerDnsNameAction,
+ setApprovedRoutesAction,
+ setExitNodeApprovedAction,
  setPeerStatusAction,
  setPeerTagsAction,
 } from '@/lib/actions';
@@ -209,6 +211,8 @@ function DrawerBody({
  value={peer.lastSeenAt ? formatTimestamp(peer.lastSeenAt) : '—'}
  />
  </Section>
+
+ <AdvertiseSection peer={peer} onError={setError} />
 
  <Section title={t('sections.actions')}>
  <DisableToggle peer={peer} onError={setError} />
@@ -522,6 +526,123 @@ function DisableToggle({ peer, onError }: { peer: Peer; onError: (msg: string | 
  >
  {pending ? t('inline.working') : label}
  </button>
+ );
+}
+
+// AdvertiseSection surfaces what the peer has asked to advertise
+// (subnet routes via #136, exit-node role via #137) and lets the
+// admin approve a subset row-by-row. Hidden when the peer has
+// advertised nothing AND isn't exit-node-capable — keeps the
+// common 90% case visually quiet. Reads fields off `peer` and
+// posts changes via setApprovedRoutesAction /
+// setExitNodeApprovedAction; revalidation refreshes the canonical
+// state.
+function AdvertiseSection({
+ peer,
+ onError,
+}: {
+ peer: Peer;
+ onError: (msg: string | null) => void;
+}) {
+ const t = useTranslations('peers.drawer');
+ if (peer.advertisedRoutes.length === 0 && !peer.exitNodeCapable) {
+ return null;
+ }
+ return (
+ <Section title={t('sections.advertise')}>
+ {peer.advertisedRoutes.length > 0 && (
+ <div className="space-y-2">
+ <p className="text-xs text-bamboo-200/60">{t('advertise.routesHint')}</p>
+ {peer.advertisedRoutes.map((cidr) => (
+ <RouteApprovalRow
+ key={cidr}
+ peer={peer}
+ cidr={cidr}
+ onError={onError}
+ />
+ ))}
+ </div>
+ )}
+ {peer.exitNodeCapable && (
+ <ExitNodeApprovalRow peer={peer} onError={onError} />
+ )}
+ </Section>
+ );
+}
+
+// RouteApprovalRow is one (CIDR, approved?) row. Clicking the
+// checkbox computes the new full approved set (current +/- this
+// CIDR) and posts it. The race window where two quick clicks both
+// read the pre-click approvedRoutes is acceptable: revalidatePath
+// refreshes the canonical state from the controller, and the
+// consequence of losing a click is one missed approval, not a
+// security issue.
+function RouteApprovalRow({
+ peer,
+ cidr,
+ onError,
+}: {
+ peer: Peer;
+ cidr: string;
+ onError: (msg: string | null) => void;
+}) {
+ const t = useTranslations('peers.drawer');
+ const [pending, startTransition] = useTransition();
+ const approved = peer.approvedRoutes.includes(cidr);
+ return (
+ <label className="flex items-center gap-2 rounded-md border border-bamboo-200/20 px-3 py-1.5 text-sm text-bamboo-100">
+ <input
+ type="checkbox"
+ checked={approved}
+ disabled={pending}
+ onChange={() => {
+ startTransition(async () => {
+ const next = approved
+ ? peer.approvedRoutes.filter((r) => r !== cidr)
+ : [...peer.approvedRoutes, cidr];
+ const res = await setApprovedRoutesAction(peer.id, next);
+ if (res.ok) onError(null);
+ else onError(res.error);
+ });
+ }}
+ />
+ <code className="flex-1 font-mono text-xs">{cidr}</code>
+ {pending && <span className="text-xs text-bamboo-200/60">{t('inline.working')}</span>}
+ </label>
+ );
+}
+
+// ExitNodeApprovalRow is the single-toggle equivalent of
+// RouteApprovalRow. Revoking (false) is always allowed regardless
+// of capable state; approving (true) requires the peer to remain
+// exit_node_capable, which the parent component already guards
+// (this row is only rendered when capable is true).
+function ExitNodeApprovalRow({
+ peer,
+ onError,
+}: {
+ peer: Peer;
+ onError: (msg: string | null) => void;
+}) {
+ const t = useTranslations('peers.drawer');
+ const [pending, startTransition] = useTransition();
+ return (
+ <label className="flex items-center gap-2 rounded-md border border-bamboo-200/20 px-3 py-1.5 text-sm text-bamboo-100">
+ <input
+ type="checkbox"
+ checked={peer.exitNodeApproved}
+ disabled={pending}
+ onChange={() => {
+ startTransition(async () => {
+ const res = await setExitNodeApprovedAction(peer.id, !peer.exitNodeApproved);
+ if (res.ok) onError(null);
+ else onError(res.error);
+ });
+ }}
+ />
+ <span className="flex-1">{t('advertise.exitNode')}</span>
+ {pending && <span className="text-xs text-bamboo-200/60">{t('inline.working')}</span>}
+ </label>
  );
 }
 

@@ -121,8 +121,13 @@
         "endpoints": "Reported endpoints",
         "connection": "Connection",
         "timestamps": "Timestamps",
+        "advertise": "Advertised",
         "actions": "Actions",
         "timeline": "Activity"
+      },
+      "advertise": {
+        "routesHint": "This peer is offering to route the following CIDRs. Approve the ones you trust — other peers' allowed_ips merge in only what you approve.",
+        "exitNode": "Approve as exit-node candidate"
       },
       "fields": {
         "hostname": "Hostname",
