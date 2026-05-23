@@ -35,17 +35,27 @@ settings:
 # ----- Swift Package dependencies --------------------------------------------
 #
 # WireGuardKit is the Swift wrapper around wireguard-go. We pin to a
-# patched fork (hanfour/wireguard-apple) because both upstream forks
-# ship a Package.swift that declares swift-tools-version:5.3 yet uses
-# .macOS(.v12) / .iOS(.v15) which require 5.5 — current Xcode rejects.
-# The fork bumps the tools-version line to 5.5; the rest of the package
-# is unchanged from canonical wireguard-apple HEAD (2fec12a). MIT-
-# licensed. See bamboo issue #105 for the upstream context. Once
-# upstream fixes its Package.swift, swap back.
+# patched fork (hanfour/wireguard-apple) carrying three patches on top
+# of canonical wireguard-apple HEAD (2fec12a):
+#
+#   1. bump swift-tools-version 5.3 → 5.5 (Package.swift declares 5.3
+#      but uses .macOS(.v12) / .iOS(.v15) which require 5.5)
+#   2. include <sys/types.h> for BSD u_int32_t / u_char / u_int16_t
+#      (the bridge headers reference these without the platform import)
+#   3. propagate wgSetConfig IpcSet errors via WireGuardAdapter.update —
+#      upstream discards the int64 return value from the Go bridge, so
+#      "IPC error -22: failed to create new peer: device closed" lands
+#      as a silent half-up state. See hanfour/bamboo#158 for the
+#      mailing-list-ready report and tracking; this patch is the
+#      defensive fix we ship while the upstream report sits.
+#
+# MIT-licensed. See bamboo issue #105 for the original upstream context.
+# Once any of these patches land in canonical wireguard-apple, repin
+# to the upstream HEAD and drop the corresponding patch from the fork.
 packages:
   WireGuardKit:
     url: https://github.com/hanfour/wireguard-apple
-    revision: 4d4eeef5a566d015254486d4d5b5e83d590edafe
+    revision: 12521585b0e4b8ad0aaf05b14458bf11c22fad1f
 
 # ----- macOS targets ---------------------------------------------------------
 

@@ -96,34 +96,19 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             }
             adapter.update(tunnelConfiguration: tunnelConfig) { [weak self] error in
                 if let error = error {
+                    // Now that adapter.update propagates wgSetConfig's
+                    // IpcSet return value (our hanfour/wireguard-apple
+                    // fork commit 1252158; see project.yml + #158),
+                    // "device closed" and other IPC failures land here
+                    // with a real WireGuardAdapterError.startWireGuardBackend
+                    // case rather than the silent half-up state PR #153
+                    // worked around by reading back the peer count.
                     self?.log.error("adapter.update: \(String(describing: error), privacy: .public)")
                     completionHandler?(self?.encodeError("update: \(error)"))
                     return
                 }
-                // WireGuardKit's wgSetConfig (the C bridge call inside
-                // adapter.update at WireGuardAdapter.swift:265) does
-                // NOT propagate IPC failures back to Swift — when
-                // wireguard-go logs e.g. "failed to create new peer:
-                // device closed", the Swift callback still fires with
-                // nil error. The tunnel then runs with the old (or
-                // empty) peer set and handshakes silently fail. Verify
-                // by reading back the runtime config; on mismatch
-                // return an error so the host app's tunnel.applyConfig
-                // returns false and falls back to a fresh startTunnel.
-                self?.adapter.getRuntimeConfiguration { runtimeConfig in
-                    let expectedPeers = appConfig.peers.count
-                    let actualPeers = runtimeConfig?
-                        .split(separator: "\n")
-                        .filter { $0.hasPrefix("public_key=") }
-                        .count ?? 0
-                    if actualPeers < expectedPeers {
-                        self?.log.error("applyConfig: peer count mismatch expected=\(expectedPeers, privacy: .public) actual=\(actualPeers, privacy: .public); update silently failed")
-                        completionHandler?(self?.encodeError("update silent fail; peers=\(actualPeers)"))
-                        return
-                    }
-                    self?.log.log("applyConfig ok peers=\(actualPeers, privacy: .public)")
-                    completionHandler?(self?.encodeOK())
-                }
+                self?.log.log("applyConfig ok peers=\(appConfig.peers.count, privacy: .public)")
+                completionHandler?(self?.encodeOK())
             }
 
         case .status:
