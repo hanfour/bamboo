@@ -604,6 +604,94 @@ func TestRESTPatchPeer_HappyPath(t *testing.T) {
 	}
 }
 
+// TestRESTRegister_OmitsDisabledPeer verifies that a peer whose
+// status was admin-flipped to "disabled" disappears from another
+// peer's Peers list on the next register cycle. Without this filter
+// the disabled peer's pubkey + endpoints would load into the
+// requester's WG config and the client would spend handshake
+// budget retrying a peer the admin has deactivated. Mesh-debug
+// 2026-05-23 side-finding.
+func TestRESTRegister_OmitsDisabledPeer(t *testing.T) {
+	f := startFixture(t)
+
+	// Two peers: A (the observer) and B (will be disabled).
+	regA := postJSON(t, f.httpURL+"/api/v1/peers/register", map[string]any{
+		"hostname":           "observer-a",
+		"wireguardPublicKey": randomPubKey(t),
+		"tenantSlug":         f.tenantSlug,
+	})
+	regB := postJSON(t, f.httpURL+"/api/v1/peers/register", map[string]any{
+		"hostname":           "soon-to-be-disabled-b",
+		"wireguardPublicKey": randomPubKey(t),
+		"tenantSlug":         f.tenantSlug,
+	})
+	if regA.status != http.StatusOK || regB.status != http.StatusOK {
+		t.Fatalf("initial register: A=%d B=%d", regA.status, regB.status)
+	}
+	var pubkeyA struct {
+		Self struct{ ID, WireguardPublicKey string } `json:"self"`
+	}
+	var pubkeyB struct {
+		Self struct{ ID, WireguardPublicKey string } `json:"self"`
+	}
+	_ = json.Unmarshal(regA.body, &pubkeyA)
+	_ = json.Unmarshal(regB.body, &pubkeyB)
+
+	// Sanity: in the baseline state, B IS visible to A.
+	rerunA := postJSON(t, f.httpURL+"/api/v1/peers/register", map[string]any{
+		"hostname":           "observer-a",
+		"wireguardPublicKey": pubkeyA.Self.WireguardPublicKey,
+		"tenantSlug":         f.tenantSlug,
+	})
+	if rerunA.status != http.StatusOK {
+		t.Fatalf("A re-register pre-disable: status=%d body=%s", rerunA.status, rerunA.body)
+	}
+	if !registerResponseContainsPeer(t, rerunA.body, pubkeyB.Self.ID) {
+		t.Fatalf("pre-disable: expected B in A's peers list; body=%s", rerunA.body)
+	}
+
+	// Admin flips B → disabled.
+	patch := sendJSONWithTenant(t, http.MethodPatch,
+		f.httpURL+"/api/v1/peers/"+pubkeyB.Self.ID, f.tenantSlug,
+		map[string]any{"status": "disabled"})
+	if patch.status != http.StatusOK {
+		t.Fatalf("PATCH B → disabled: status=%d body=%s", patch.status, patch.body)
+	}
+
+	// Re-register A; B must no longer appear.
+	rerun := postJSON(t, f.httpURL+"/api/v1/peers/register", map[string]any{
+		"hostname":           "observer-a",
+		"wireguardPublicKey": pubkeyA.Self.WireguardPublicKey,
+		"tenantSlug":         f.tenantSlug,
+	})
+	if rerun.status != http.StatusOK {
+		t.Fatalf("A re-register post-disable: status=%d body=%s", rerun.status, rerun.body)
+	}
+	if registerResponseContainsPeer(t, rerun.body, pubkeyB.Self.ID) {
+		t.Fatalf("post-disable: B should be absent from A's peers list; body=%s", rerun.body)
+	}
+}
+
+// registerResponseContainsPeer reports whether the given peer ID
+// appears in the `peers` array of a register response body.
+func registerResponseContainsPeer(t *testing.T, body []byte, peerID string) bool {
+	t.Helper()
+	var parsed struct {
+		Peers []struct {
+			ID string `json:"id"`
+		} `json:"peers"`
+	}
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		t.Fatalf("decode register response: %v; body=%s", err, body)
+	}
+	for _, p := range parsed.Peers {
+		if p.ID == peerID {
+			return true
+		}
+	}
+	return false
+}
+
 // TestRESTPatchPeer_RejectsInvalidStatus exercises the status enum
 // validation. A bad value must surface as 400 before any DB write.
 func TestRESTPatchPeer_RejectsInvalidStatus(t *testing.T) {

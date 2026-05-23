@@ -300,6 +300,15 @@ func (h *CoordinatorHandler) Register(ctx context.Context, req *bamboov1.Registe
 	//     tailnet's membership list. The empty list is fine for the
 	//     client: it will heartbeat + retry Register on its normal
 	//     cadence and pick up the populated list once approved.
+	//
+	// Liveness-status filter (mesh-debug 2026-05-23 side-finding):
+	// disabled peers are out-of-band suspended (admin set status via
+	// the API). Including them in another peer's Peers list would
+	// load their pubkey + endpoints into WireGuard config; the client
+	// would then spend cycles trying to handshake a peer the admin
+	// has deactivated. Treat disabled like rejected/pending —
+	// invisible to other peers and absent from the mesh until
+	// re-enabled.
 	selfApproved := self.ApprovalStatus == "approved"
 	for _, p := range allPeers {
 		if p.ID == self.ID {
@@ -309,6 +318,9 @@ func (h *CoordinatorHandler) Register(ctx context.Context, req *bamboov1.Registe
 			continue
 		}
 		if p.ApprovalStatus != "approved" {
+			continue
+		}
+		if p.Status == "disabled" {
 			continue
 		}
 		pp := toProtoPeer(p)
