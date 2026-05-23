@@ -95,6 +95,80 @@ func (h *CoordinatorHandler) RejectPeer(ctx context.Context, peerID uuid.UUID, a
 	return updated, rows > 0, nil
 }
 
+// SetPeerStatus writes the data-plane liveness column (online /
+// offline / disabled) and publishes a WatchPeers event so already-
+// subscribed peers react without waiting for the next Register cycle
+// (~30s heartbeat tick today). Mirrors the encapsulation pattern used
+// by ApprovePeer.
+//
+// Event mapping:
+//   - any → "disabled": PeerRemoved. Disabled is the only state that
+//     removes a peer from other peers' WG configs (Register filter is
+//     authoritative; see #161). Subscribers drop the peer immediately.
+//   - "disabled" → online/offline: PeerAdded. The peer was invisible
+//     to other peers while disabled; now it should be added back.
+//   - online ↔ offline: PeerUpdated. Cosmetic for the UI's reachability
+//     indicator; doesn't change anyone's WG config but the watch stream
+//     is the canonical notification path so we publish for parity with
+//     how heartbeat-driven last_seen ticks flow today.
+//
+// Idempotent: if old == new, no DB write, no event published. Returns
+// the post-update peer row (or pre-update row when no change happened
+// so the caller can still echo a stable response shape).
+func (h *CoordinatorHandler) SetPeerStatus(ctx context.Context, peerID uuid.UUID, newStatus string) (peer *repo.Peer, changed bool, err error) {
+	current, err := h.peers.GetByID(ctx, peerID)
+	if err != nil {
+		return nil, false, err
+	}
+	if current.Status == newStatus {
+		return current, false, nil
+	}
+	if _, err := h.peers.SetStatus(ctx, peerID, newStatus); err != nil {
+		return nil, false, err
+	}
+	updated, err := h.peers.GetByID(ctx, peerID)
+	if err != nil {
+		return nil, false, err
+	}
+
+	var event *bamboov1.WatchPeersEvent
+	switch {
+	case newStatus == "disabled":
+		event = &bamboov1.WatchPeersEvent{
+			Event: &bamboov1.WatchPeersEvent_PeerRemoved{
+				PeerRemoved: &bamboov1.PeerRemoved{PeerId: peerID.String()},
+			},
+		}
+	case current.Status == "disabled":
+		// Only publish if the peer is also approved — a pending peer
+		// being un-disabled stays invisible to other peers (Register's
+		// approval filter excludes it). PeerAdded for a pending peer
+		// would mislead subscribers into adding a peer the next
+		// register would filter back out.
+		if updated.ApprovalStatus == "approved" {
+			event = &bamboov1.WatchPeersEvent{
+				Event: &bamboov1.WatchPeersEvent_PeerAdded{
+					PeerAdded: &bamboov1.PeerAdded{Peer: toProtoPeer(updated)},
+				},
+			}
+		}
+	default:
+		// Cosmetic transition (online ↔ offline). Only publish for
+		// approved peers — pending/rejected aren't visible regardless.
+		if updated.ApprovalStatus == "approved" {
+			event = &bamboov1.WatchPeersEvent{
+				Event: &bamboov1.WatchPeersEvent_PeerUpdated{
+					PeerUpdated: &bamboov1.PeerUpdated{Peer: toProtoPeer(updated)},
+				},
+			}
+		}
+	}
+	if event != nil {
+		h.bus.Publish(updated.TenantID, event)
+	}
+	return updated, true, nil
+}
+
 // SetRequireAuth flips the handler into prod-mode credential checking.
 // Coordinator-specific because the REST adapter delegates here for
 // peer onboarding; HTTPServer.SetRequireAuth applies the same gate to
