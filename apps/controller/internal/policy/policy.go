@@ -26,6 +26,24 @@
 //	tag:staging:443         single port
 //	tag:db:5432,5433        comma-separated list
 //	cidr:0.0.0.0/0:*        wildcard ports
+//
+// Top-level (optional) blocks:
+//
+//	groups = {
+//	  "group:engineering" = ["alice@example.com", "bob@example.com"]
+//	}
+//	tagOwners = {
+//	  "tag:dev"  = ["group:engineering"]
+//	  "tag:prod" = ["group:engineering", "ceo@example.com"]
+//	  "tag:any"  = ["*"]
+//	}
+//
+// `groups` maps "group:NAME" → member emails. Referenced by name
+// inside tagOwners owner lists (or, in future, inside rule source /
+// destination matchers); flat — groups can't nest in v1. `tagOwners`
+// gates which OIDC identities may assign/remove a given tag on a
+// peer (issue #139). Both blocks are optional; their absence
+// preserves pre-#139 admin-only assignment semantics.
 package policy
 
 import (
@@ -133,13 +151,28 @@ type Rule struct {
 // .Rules is significant.
 type Policy struct {
 	Rules []Rule
-	// TagOwners maps a tag name (e.g. "tag:dev") to the email
-	// addresses authorized to assign/remove it on peers (issue #139).
+	// TagOwners maps a tag name (e.g. "tag:dev") to the owner
+	// entries authorized to assign/remove it on peers (issue #139).
+	// An entry is either a literal email, the "*" wildcard, or a
+	// "group:NAME" reference into Groups (§3a follow-up).
+	//
 	// Empty / nil ⇒ no tagOwners block, falling back to admin-only
-	// assignment for back-compat. A tag listed with "*" (wildcard)
-	// is owned by any tenant member; concrete email lists restrict
-	// assignment to those identities.
+	// assignment for back-compat. A tag listed with "*" is owned by
+	// any tenant member; concrete email lists restrict assignment
+	// to those identities. Group references expand at lookup time
+	// in CanAssignTag — we keep the raw entry here so the persisted
+	// policy preserves operator intent (the Versions tab + ACL diff
+	// view show "group:engineering" rather than the resolved member
+	// list, which is what an admin reads first).
 	TagOwners map[string][]string
+	// Groups maps a "group:NAME" key to its member emails. Used to
+	// expand "group:NAME" references inside TagOwners owner lists.
+	// Flat by design — a group may not reference another group in
+	// v1; keeps the expansion bounded and matches Tailscale's first-
+	// pass grammar. Validated at Parse time: undefined references
+	// inside tagOwners and missing "group:" prefix on a key both
+	// reject the policy revision.
+	Groups map[string][]string
 }
 
 // CanAssignTag reports whether `email` is allowed to assign tag
@@ -148,11 +181,18 @@ type Policy struct {
 //   - the policy has no tagOwners block (legacy / no opt-in);
 //   - the tag has no owner row (pre-#139 tag, falls back to admin);
 //   - the tag's owner list contains the wildcard "*";
-//   - the tag's owner list contains the caller's email.
+//   - the tag's owner list contains the caller's email directly;
+//   - the tag's owner list contains a "group:NAME" reference whose
+//     expansion in Policy.Groups includes the caller (§3a follow-
+//     up). Group expansion is one level deep — groups don't nest.
 //
 // Returns false only when the policy declares an explicit owner
-// list for the tag and the email isn't in it. Case-insensitive on
-// email compare because OIDC providers normalize differently.
+// list for the tag and neither the email nor any referenced group
+// matches. Case-insensitive on email compare because OIDC providers
+// normalize differently. An undefined group reference can't reach
+// here — Parse rejects those at policy-author time — but defensively
+// treat a missing group as "no members" so a stale in-memory Policy
+// degrades to deny rather than panic.
 func (p *Policy) CanAssignTag(name, email string) bool {
 	if p == nil || len(p.TagOwners) == 0 {
 		return true
@@ -165,6 +205,17 @@ func (p *Policy) CanAssignTag(name, email string) bool {
 	for _, o := range owners {
 		if o == "*" {
 			return true
+		}
+		if strings.HasPrefix(o, "group:") {
+			for _, member := range p.Groups[o] {
+				if member == "*" {
+					return true
+				}
+				if strings.ToLower(member) == lower {
+					return true
+				}
+			}
+			continue
 		}
 		if strings.ToLower(o) == lower {
 			return true
