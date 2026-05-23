@@ -42,14 +42,14 @@ public struct MagicDNSPeerStore {
 
     private let url: URL
 
-    public init?() {
+    public init() {
         self.url = URL(fileURLWithPath: Self.sharedPath)
     }
 
     /// Test-only constructor that points the store at an arbitrary
     /// file path. Used by AppleSharedTests to avoid colliding with
     /// the production /private/tmp file (or polluting it). Marked
-    /// internal — production code paths always use init?().
+    /// internal — production code paths always use init().
     internal init(path: String) {
         self.url = URL(fileURLWithPath: path)
     }

@@ -44,7 +44,7 @@ final class DNSProxyProvider: NEDNSProxyProvider {
 private final class DNSFlowHandler {
 
     private let flow: NEAppProxyUDPFlow
-    private let store: MagicDNSPeerStore?
+    private let store: MagicDNSPeerStore
 
     init(flow: NEAppProxyUDPFlow) {
         self.flow = flow
@@ -89,7 +89,7 @@ private final class DNSFlowHandler {
     }
 
     private func handleOne(query: Data, endpoint: NWHostEndpoint) {
-        let peers = store?.peers() ?? [:]
+        let peers = store.peers()
         switch MagicDNSResolver.handle(query: query, peers: peers) {
         case .answered(let response):
             flow.writeDatagrams([response], sentBy: [endpoint]) { error in
