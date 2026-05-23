@@ -20,6 +20,7 @@ import (
 	"github.com/hanfour/bamboo/apps/controller/internal/handlers"
 	"github.com/hanfour/bamboo/apps/controller/internal/policy"
 	"github.com/hanfour/bamboo/apps/controller/internal/policy/recommend"
+	"github.com/hanfour/bamboo/apps/controller/internal/routes"
 )
 
 // routeAPI dispatches /api/v1/* to JSON endpoints.
@@ -110,6 +111,19 @@ func (h *HTTPServer) routeAPI(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			h.apiPeerConnectionEvents(w, r, tenant, id)
+			return
+		}
+		// "{id}/route-conflicts" — informational warnings for
+		// approved CIDRs that overlap with another peer's approved
+		// CIDR in the same tenant (§3a follow-up). Pure read; the
+		// detector runs against the current peer list, no
+		// persistence. Empty list when nothing conflicts.
+		if id, found := strings.CutSuffix(rest, "/route-conflicts"); found && id != "" && !strings.Contains(id, "/") {
+			if r.Method != http.MethodGet {
+				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+				return
+			}
+			h.apiPeerRouteConflicts(w, r, tenant, id)
 			return
 		}
 		// "{id}/approve" — admin gates a pending peer into the mesh
@@ -1495,6 +1509,97 @@ func (h *HTTPServer) apiPeerConnectionEvents(w http.ResponseWriter, r *http.Requ
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"events": out})
+}
+
+// apiPeerRouteConflictJSON is one row from
+// /api/v1/peers/{id}/route-conflicts (§3a follow-up). One row per
+// (this-peer's CIDR ↔ other peer's CIDR) overlap. The Web UI renders
+// these as inline warning badges next to the approved-routes
+// checkboxes in PeerDrawer's AdvertiseSection.
+type apiPeerRouteConflictJSON struct {
+	// Cidr is THIS peer's CIDR — the row the warning attaches to in
+	// the UI. Matches one of the peer's approvedRoutes.
+	Cidr string `json:"cidr"`
+	// Kind is "duplicate" | "contains" | "contained_by" from this
+	// peer's perspective. See internal/routes.Kind for the exact
+	// semantics each value carries.
+	Kind string `json:"kind"`
+	// OtherPeerID + OtherHostname + OtherCidr describe the other side
+	// of the overlap. Hostname is what the operator reads first;
+	// PeerID is the URL anchor for "open the other peer's drawer".
+	OtherPeerID   string `json:"otherPeerId"`
+	OtherHostname string `json:"otherHostname"`
+	OtherCidr     string `json:"otherCidr"`
+}
+
+// apiPeerRouteConflicts implements GET /api/v1/peers/{id}/route-conflicts.
+//
+// Returns the list of conflicts that affect THIS peer's approved
+// routes — duplicates with another peer's exact CIDR, or pairs where
+// one prefix contains the other. The detector runs against the
+// current tenant peer list; no persistence layer. Conflicts are
+// informational: the controller does not block POST /routes, so an
+// admin can knowingly approve an overlap (e.g. for traffic-
+// engineering on a /16 + /24 pair).
+//
+// Tenant-scoped: a peer in another tenant collapses to 404 before
+// the detector runs. Empty array when no conflicts touch this peer.
+func (h *HTTPServer) apiPeerRouteConflicts(w http.ResponseWriter, r *http.Request, tenant *repo.Tenant, idStr string) {
+	id, err := uuid.Parse(idStr)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	self, err := h.peers.GetByID(r.Context(), id)
+	if errors.Is(err, repo.ErrNotFound) {
+		http.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if self.TenantID != tenant.ID {
+		http.NotFound(w, r)
+		return
+	}
+	tenantPeers, err := h.peers.ListByTenant(r.Context(), tenant.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	owners := make([]routes.Owner, 0, len(tenantPeers)*2)
+	for _, p := range tenantPeers {
+		for _, cidr := range p.ApprovedRoutes {
+			pre, perr := netip.ParsePrefix(cidr)
+			if perr != nil {
+				// Skip unparsable CIDRs rather than 500ing — they should
+				// have been rejected at approve time, but a corrupted row
+				// shouldn't take down the whole conflicts endpoint.
+				continue
+			}
+			owners = append(owners, routes.Owner{
+				PeerID:   p.ID,
+				Hostname: p.Hostname,
+				CIDR:     pre,
+			})
+		}
+	}
+	all := routes.Detect(owners)
+	out := make([]apiPeerRouteConflictJSON, 0)
+	for _, c := range all {
+		if c.Self.PeerID != id {
+			continue
+		}
+		out = append(out, apiPeerRouteConflictJSON{
+			Cidr:          c.Self.CIDR.String(),
+			Kind:          c.Kind.String(),
+			OtherPeerID:   c.Other.PeerID.String(),
+			OtherHostname: c.Other.Hostname,
+			OtherCidr:     c.Other.CIDR.String(),
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"conflicts": out})
 }
 
 // apiActivity implements GET /api/v1/activity?limit=N. Tenant-wide

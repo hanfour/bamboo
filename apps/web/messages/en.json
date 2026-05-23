@@ -130,6 +130,14 @@
         "routesHint": "This peer is offering to route the following CIDRs. Approve the ones you trust — other peers' allowed_ips merge in only what you approve.",
         "exitNode": "Approve as exit-node candidate"
       },
+      "routeConflicts": {
+        "summary": "{count, plural, one {# conflict with another peer} other {# conflicts with other peers}}",
+        "kind": {
+          "duplicate": "Same CIDR also approved on {host} ({cidr}) — WireGuard picks one peer arbitrarily; the other's traffic is dropped.",
+          "contains": "Overlaps {host}'s narrower {cidr} — traffic to that range routes through {host}, not this peer.",
+          "contained_by": "Inside {host}'s broader {cidr} — traffic outside this range routes through {host} instead."
+        }
+      },
       "fields": {
         "hostname": "Hostname",
         "dnsName": "DNS name",

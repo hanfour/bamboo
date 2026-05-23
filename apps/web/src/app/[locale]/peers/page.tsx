@@ -10,8 +10,10 @@ import {
  fetchPeer,
  fetchPeerConnectionEvents,
  fetchPeerEvents,
+ fetchPeerRouteConflicts,
  fetchPeers,
  type PeerConnectionEvent,
+ type PeerRouteConflict,
 } from '@/lib/api';
 import type { FetchResult, Peer, PeerEvent } from '@/lib/types';
 
@@ -24,11 +26,19 @@ export default async function PeersPage({
  searchParams: Promise<SearchParams>;
 }) {
  const { selected } = await searchParams;
- const [peers, selectedPeer, selectedEvents, selectedConnectionEvents, me] = await Promise.all([
+ const [
+ peers,
+ selectedPeer,
+ selectedEvents,
+ selectedConnectionEvents,
+ selectedRouteConflicts,
+ me,
+ ] = await Promise.all([
  fetchPeers(),
  selected ? fetchPeer(selected) : Promise.resolve(null),
  selected ? fetchPeerEvents(selected) : Promise.resolve([]),
  selected ? fetchPeerConnectionEvents(selected) : Promise.resolve([] as PeerConnectionEvent[]),
+ selected ? fetchPeerRouteConflicts(selected) : Promise.resolve([] as PeerRouteConflict[]),
  fetchMe(),
  ]);
 
@@ -46,6 +56,7 @@ export default async function PeersPage({
  selectedPeer={selectedPeer}
  selectedEvents={selectedEvents}
  selectedConnectionEvents={selectedConnectionEvents}
+ selectedRouteConflicts={selectedRouteConflicts}
  selectedId={selected}
  tenantSlug={me.tenantSlug}
  />
@@ -57,6 +68,7 @@ function Peers({
  selectedPeer,
  selectedEvents,
  selectedConnectionEvents,
+ selectedRouteConflicts,
  selectedId,
  tenantSlug,
 }: {
@@ -64,6 +76,7 @@ function Peers({
  selectedPeer: FetchResult<Peer> | null;
  selectedEvents: PeerEvent[];
  selectedConnectionEvents: PeerConnectionEvent[];
+ selectedRouteConflicts: PeerRouteConflict[];
  selectedId?: string;
  tenantSlug: string;
 }) {
@@ -96,6 +109,7 @@ function Peers({
  selectedPeer={selectedPeer}
  selectedEvents={selectedEvents}
  selectedConnectionEvents={selectedConnectionEvents}
+ selectedRouteConflicts={selectedRouteConflicts}
  selectedId={selectedId}
  />
  </div>
