@@ -37,8 +37,29 @@ public final class ConnectionViewModel: ObservableObject {
         UserDefaults.bambooStandard.string(forKey: "controllerURL") ?? "http://127.0.0.1:8081"
     @Published public var tenantSlug: String =
         UserDefaults.bambooStandard.string(forKey: "tenantSlug") ?? "default"
-    @Published public var preAuthKey: String = ""
-    @Published public var hostname: String = currentHostname()
+    /// Pre-auth key the device used to register / heartbeat. Persisted
+    /// to UserDefaults so a cold-start doesn't make the operator paste
+    /// it back in every time — the other Settings fields already do
+    /// this, leaving preAuthKey as the odd one out was the cold-start
+    /// papercut behind h4's recurring re-paste workflow.
+    ///
+    /// Storage choice: UserDefaults (plaintext on disk) over Keychain.
+    /// Pre-auth keys are issued for shared / headless / mass-rollout
+    /// scenarios and are typically multi-use within their TTL; the
+    /// threat model leans on the OS file ACL (~/Library/Preferences
+    /// on macOS, Group container on iOS) and the TTL bound on the key
+    /// itself rather than on Keychain ACLs. Mirrors how other clients
+    /// (Tailscale auth keys, WireGuard PSK files) treat similar
+    /// credentials.
+    @Published public var preAuthKey: String =
+        UserDefaults.bambooStandard.string(forKey: "preAuthKey") ?? ""
+    /// Hostname this device advertises to the controller. Defaults to
+    /// the device's name (UIDevice.current.name / Host.localizedName),
+    /// but a user who overrides it in Settings sees that override
+    /// survive a relaunch — without persistence, every cold-start
+    /// blew the custom value back to the OS-reported name.
+    @Published public var hostname: String =
+        UserDefaults.bambooStandard.string(forKey: "hostname") ?? currentHostname()
     @Published public var relayURL: String =
         UserDefaults.bambooStandard.string(forKey: "relayURL") ?? ""
     /// Comma-/whitespace-separated CIDR list for the "advertise as
@@ -353,6 +374,8 @@ public final class ConnectionViewModel: ObservableObject {
 
         persistSettingIfNonEmpty(controllerURL, forKey: "controllerURL")
         persistSettingIfNonEmpty(tenantSlug, forKey: "tenantSlug")
+        persistSettingIfNonEmpty(preAuthKey, forKey: "preAuthKey")
+        persistSettingIfNonEmpty(hostname, forKey: "hostname")
         persistSettingIfNonEmpty(relayURL, forKey: "relayURL")
         persistSettingIfNonEmpty(advertiseRoutes, forKey: "advertiseRoutes")
         // Unconditional set: the bool toggle has explicit on/off
