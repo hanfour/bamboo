@@ -326,6 +326,42 @@ export async function fetchPeerEvents(id: string): Promise<PeerEvent[]> {
   return r.value.events ?? [];
 }
 
+// PeerConnectionEvent is one path_change row from the #138 v2
+// timeline. Mirrors the controller's apiPeerConnectionEventJSON in
+// api.go — kept here so PeerDrawer doesn't need to reach into the
+// raw API shape.
+//
+// path / prevPath are narrowed to the three values the controller's
+// CHECK constraint on peers.connection_path permits. Kept as a named
+// type rather than an inline `| string` union so callers can switch
+// over it without TypeScript widening to plain string.
+export type PeerConnectionPath = 'direct' | 'relay' | 'unknown';
+
+export type PeerConnectionEvent = {
+  id: string;
+  occurredAt: string;
+  eventType: string;
+  path: PeerConnectionPath;
+  prevPath?: PeerConnectionPath;
+  rttMs?: number;
+};
+
+// fetchPeerConnectionEvents pulls the recent path-transition timeline
+// for a single peer (issue #138 v2). Side-channel from the drawer's
+// primary render: on any error path (auth, network, CH outage) we
+// return an empty list so the timeline section degrades to empty-
+// state without taking the whole drawer down with it.
+export async function fetchPeerConnectionEvents(
+  id: string,
+  limit = 50,
+): Promise<PeerConnectionEvent[]> {
+  const r = await fetchResult<{ events: PeerConnectionEvent[] }>(
+    `/api/v1/peers/${encodeURIComponent(id)}/connection-events?limit=${encodeURIComponent(String(limit))}`,
+  );
+  if (r.kind !== 'ok') return [];
+  return r.value.events ?? [];
+}
+
 export async function fetchPolicy(): Promise<FetchResult<AclPolicy>> {
   const r = await fetchResult<ApiPolicy>('/api/v1/policy');
   if (r.kind !== 'ok') return r;

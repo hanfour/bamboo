@@ -516,6 +516,83 @@ func TestPeers_SyncWGState_DisabledLock(t *testing.T) {
 	}
 }
 
+// TestPeers_SetConnectionPath_TransitionSemantics pins the contract
+// the #138 v2 timeline depends on: SetConnectionPath returns the
+// previous path string and a pathChanged flag that only flips when
+// the *path* string transitioned, NOT on latency-only updates.
+//
+// Without this guarantee a noisy RTT would generate a connection_event
+// row on every heartbeat and swamp the timeline.
+func TestPeers_SetConnectionPath_TransitionSemantics(t *testing.T) {
+	pool := requireDB(t)
+	tenants := repo.NewTenants(pool)
+	peers := repo.NewPeers(pool)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	slug := fmt.Sprintf("path-test-%s", uuid.NewString()[:8])
+	tenant, err := tenants.GetOrCreate(ctx, slug, "Path Test", "100.64.0.0/24")
+	if err != nil {
+		t.Fatalf("tenant: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, tenant.ID)
+	})
+
+	p, err := peers.Insert(ctx, &repo.Peer{
+		TenantID:           tenant.ID,
+		Hostname:           "path-peer",
+		WireGuardPublicKey: randomB64(t),
+		IP:                 "100.64.0.20",
+		Status:             "online",
+	})
+	if err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+
+	// First call: NULL → "direct" is a real transition. prev is empty.
+	prev, changed, err := peers.SetConnectionPath(ctx, p.ID, "direct", 12)
+	if err != nil {
+		t.Fatalf("first SetConnectionPath: %v", err)
+	}
+	if prev != "" || !changed {
+		t.Errorf("first SetConnectionPath: prev=%q changed=%v, want \"\" true", prev, changed)
+	}
+
+	// Same path, different latency: NOT a path transition.
+	prev, changed, err = peers.SetConnectionPath(ctx, p.ID, "direct", 25)
+	if err != nil {
+		t.Fatalf("latency-only SetConnectionPath: %v", err)
+	}
+	if changed {
+		t.Errorf("latency-only SetConnectionPath: pathChanged=true; want false")
+	}
+	// prev is still "direct" because the row was updated (latency
+	// changed) so the CTE captured the pre-update value.
+	if prev != "direct" {
+		t.Errorf("latency-only prev=%q, want \"direct\"", prev)
+	}
+
+	// Same path, same latency: full no-op.
+	prev, changed, err = peers.SetConnectionPath(ctx, p.ID, "direct", 25)
+	if err != nil {
+		t.Fatalf("no-op SetConnectionPath: %v", err)
+	}
+	if changed || prev != "" {
+		t.Errorf("no-op SetConnectionPath: prev=%q changed=%v, want \"\" false", prev, changed)
+	}
+
+	// Real flip: direct → relay.
+	prev, changed, err = peers.SetConnectionPath(ctx, p.ID, "relay", 0)
+	if err != nil {
+		t.Fatalf("direct→relay SetConnectionPath: %v", err)
+	}
+	if prev != "direct" || !changed {
+		t.Errorf("direct→relay: prev=%q changed=%v, want \"direct\" true", prev, changed)
+	}
+}
+
 func randomB64(t *testing.T) string {
 	t.Helper()
 	buf := make([]byte, 32)

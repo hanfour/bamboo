@@ -93,6 +93,23 @@ func (c *Conn) applySchema(ctx context.Context) error {
 		ORDER BY (tenant_id, occurred_at)
 		TTL toDate(occurred_at) + INTERVAL 90 DAY`,
 
+		// connection_events doubles as (a) the future
+		// TelemetryService.ReportConnectionEvents sink for client-
+		// reported byte/RTT samples, and (b) the #138 v2 path-change
+		// timeline. The schema spans both so we don't end up with two
+		// tables that need joining at read time.
+		//
+		// Per-column conventions:
+		//   * destination_peer_id is set to uuid.Nil for events that
+		//     are about the source peer as a whole (e.g. path_change)
+		//     rather than a specific peer-to-peer link. ListByPeer
+		//     filters on source_peer_id only, so the nil sentinel
+		//     doesn't interfere with peer-scoped queries.
+		//   * reason is the free-form human-readable column reserved
+		//     for explanations like "TCP RST" or "denied by rule".
+		//     Structured signals belong in their own columns —
+		//     prev_path is what powers the path-change "newPath ←
+		//     prevPath" rendering instead of stuffing it into reason.
 		`CREATE TABLE IF NOT EXISTS connection_events (
 		    id                   UUID,
 		    tenant_id            UUID,
@@ -101,6 +118,7 @@ func (c *Conn) applySchema(ctx context.Context) error {
 		    destination_peer_id  UUID,
 		    event_type           LowCardinality(String),
 		    path                 LowCardinality(String),
+		    prev_path            LowCardinality(String),
 		    bytes_sent           UInt64,
 		    bytes_received       UInt64,
 		    rtt_ms               UInt32,
@@ -109,6 +127,15 @@ func (c *Conn) applySchema(ctx context.Context) error {
 		) ENGINE = MergeTree
 		ORDER BY (tenant_id, occurred_at)
 		TTL toDate(occurred_at) + INTERVAL 90 DAY`,
+
+		// Upgrade path for clusters that created connection_events
+		// before the prev_path column existed. CREATE TABLE IF NOT
+		// EXISTS above doesn't ALTER an existing schema, so this
+		// explicit ADD COLUMN IF NOT EXISTS keeps the column in
+		// sync on already-deployed clusters. Safe to no-op on fresh
+		// installs (the CREATE above already includes the column).
+		`ALTER TABLE connection_events
+		   ADD COLUMN IF NOT EXISTS prev_path LowCardinality(String) AFTER path`,
 
 		// anomaly_findings is the Tier-2 ML pipeline's output. The Go
 		// controller never writes here; the bamboo-ai Python module

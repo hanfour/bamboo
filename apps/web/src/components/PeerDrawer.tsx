@@ -14,6 +14,7 @@ import {
  setPeerTagsAction,
 } from '@/lib/actions';
 import { useDialogA11y } from '@/hooks/useDialogA11y';
+import type { PeerConnectionEvent, PeerConnectionPath } from '@/lib/api';
 import type { FetchResult, Peer, PeerEvent } from '@/lib/types';
 
 type Props = {
@@ -27,6 +28,12 @@ type Props = {
  // when the real problem is a network outage.
  peerResult: FetchResult<Peer> | null;
  events: PeerEvent[];
+ // connectionEvents drives the #138 v2 Connection-path timeline
+ // section. Independent from `events` (audit log) because the data
+ // source is ClickHouse, the cardinality differs, and rendering uses
+ // a path-specific visual (⚡/🔄 glyph + arrow) rather than the
+ // generic action labels of the audit timeline.
+ connectionEvents: PeerConnectionEvent[];
  open: boolean;
  onClose: () => void;
  // onDeleted fires after a successful delete so PeersView can clear
@@ -40,7 +47,7 @@ type Props = {
 // forward and link-sharing both work; `peer` is null when the id
 // resolved to 404 (deleted peer or stale link), and the drawer
 // renders a not-found state in that case.
-export function PeerDrawer({ peerResult, events, open, onClose, onDeleted }: Props) {
+export function PeerDrawer({ peerResult, events, connectionEvents, open, onClose, onDeleted }: Props) {
  const peer = peerResult?.kind === 'ok' ? peerResult.value : null;
  const t = useTranslations('peers.drawer');
  const tStatus = useTranslations('peers.status');
@@ -74,7 +81,7 @@ export function PeerDrawer({ peerResult, events, open, onClose, onDeleted }: Pro
  >
  <DrawerHeader peer={peer} statusLabel={peer ? tStatus(peer.status) : ''} onClose={onClose} closeLabel={t('close')} />
  <div className="flex-1 overflow-y-auto px-6 py-4">
- {renderBody(peerResult, events, onDeleted, t)}
+ {renderBody(peerResult, events, connectionEvents, onDeleted, t)}
  </div>
  </div>
  </div>
@@ -125,10 +132,12 @@ function DrawerHeader({
 function DrawerBody({
  peer,
  events,
+ connectionEvents,
  onDeleted,
 }: {
  peer: Peer;
  events: PeerEvent[];
+ connectionEvents: PeerConnectionEvent[];
  onDeleted: () => void;
 }) {
  const t = useTranslations('peers.drawer');
@@ -217,6 +226,10 @@ function DrawerBody({
  <Section title={t('sections.actions')}>
  <DisableToggle peer={peer} onError={setError} />
  <DeleteButton peer={peer} onError={setError} onDeleted={onDeleted} />
+ </Section>
+
+ <Section title={t('sections.connectionTimeline')}>
+ <ConnectionTimeline events={connectionEvents} />
  </Section>
 
  <Section title={t('sections.timeline')}>
@@ -711,6 +724,77 @@ function DeleteButton({
  );
 }
 
+// ConnectionTimeline renders the per-peer path-transition log (issue
+// #138 v2). Newest-first list of "newPath ← prevPath at relative
+// time" entries, mirroring the ⚡/🔄 glyph the PeerTable status
+// column already uses so admins build one mental model across the
+// two surfaces.
+//
+// Empty state is the common case: a steady direct connection produces
+// zero rows. We render an explanatory line so the section doesn't
+// look broken — distinct from"no activity yet" of the audit timeline
+// because"no transitions" is a healthy state, not a missing-data
+// state.
+function ConnectionTimeline({ events }: { events: PeerConnectionEvent[] }) {
+ const t = useTranslations('peers.drawer');
+ if (events.length === 0) {
+ return <p className="text-sm text-bamboo-200/60">{t('empty.connectionTimeline')}</p>;
+ }
+ return (
+ <ol className="space-y-2" aria-label={t('sections.connectionTimeline')}>
+ {events.map((e) => (
+ <li
+ key={e.id}
+ className="flex items-baseline justify-between gap-3 rounded-md border border-ink-800 px-3 py-2 text-sm"
+ >
+ <span className="flex items-baseline gap-2 text-bamboo-50">
+ <PathGlyph path={e.path} />
+ <span>{t(`connectionTimeline.path.${pathKey(e.path)}` as never)}</span>
+ {e.prevPath && (
+ <>
+ <span className="text-bamboo-200/40" aria-hidden="true">←</span>
+ <PathGlyph path={e.prevPath} muted />
+ <span className="text-bamboo-200/60">
+ {t(`connectionTimeline.path.${pathKey(e.prevPath)}` as never)}
+ </span>
+ </>
+ )}
+ {e.rttMs ? (
+ <span className="text-xs text-bamboo-200/50">{e.rttMs}ms</span>
+ ) : null}
+ </span>
+ <span className="shrink-0 text-xs text-bamboo-200/60">
+ {formatRelative(e.occurredAt)}
+ </span>
+ </li>
+ ))}
+ </ol>
+ );
+}
+
+// PathGlyph is the inline ⚡/🔄/? icon shared between this timeline
+// section and the table column. Mirrors PeerTable.tsx so admins
+// build one mental model for the two surfaces.
+function PathGlyph({ path, muted = false }: { path: PeerConnectionPath; muted?: boolean }) {
+ const cls = muted ? 'text-bamboo-200/40' : 'text-bamboo-200/80';
+ const glyph = path === 'direct' ? '⚡' : path === 'relay' ? '🔄' : '?';
+ return (
+ <span aria-hidden="true" className={cls}>
+ {glyph}
+ </span>
+ );
+}
+
+// pathKey passes the controller's path through the i18n-key gate.
+// The wire type is already narrowed to PeerConnectionPath, but any
+// future widening at the type layer falls back to "unknown" here so
+// a new server-side value (e.g. quic-stream) doesn't crash the
+// timeline before the locales catch up.
+function pathKey(path: PeerConnectionPath): PeerConnectionPath {
+ if (path === 'direct' || path === 'relay') return path;
+ return 'unknown';
+}
+
 // Timeline renders the per-peer audit log newest-first. Each entry
 // shows action label + actor + relative time, with an inline diff
 // summary tuned to the action's diff shape:
@@ -848,6 +932,7 @@ function formatRelative(iso: string): string {
 function renderBody(
  peerResult: FetchResult<Peer> | null,
  events: PeerEvent[],
+ connectionEvents: PeerConnectionEvent[],
  onDeleted: () => void,
  t: ReturnType<typeof useTranslations>,
 ) {
@@ -856,7 +941,15 @@ function renderBody(
  case 'ok':
  // key forces the body to remount on peer-change so the
  // inline edit / confirm state resets between selections.
- return <DrawerBody key={peerResult.value.id} peer={peerResult.value} events={events} onDeleted={onDeleted} />;
+ return (
+ <DrawerBody
+ key={peerResult.value.id}
+ peer={peerResult.value}
+ events={events}
+ connectionEvents={connectionEvents}
+ onDeleted={onDeleted}
+ />
+ );
  case 'notFound':
  return <CenteredMessage tone="muted" message={t('notFound')} />;
  case 'error':
