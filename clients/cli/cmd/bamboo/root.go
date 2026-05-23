@@ -11,15 +11,15 @@ import (
 
 // Shared flags.
 var (
-	flagAddr               string
-	flagTenant             string
-	flagAuthKey            string
-	flagIface              string
-	flagHostname           string
-	flagLogJSON            bool
-	flagWGListenPort       uint16
-	flagAdvertiseRoutes    []string
-	flagAdvertiseExitNode  bool
+	flagAddr              string
+	flagTenant            string
+	flagAuthKey           string
+	flagIface             string
+	flagHostname          string
+	flagLogJSON           bool
+	flagWGListenPort      uint16
+	flagAdvertiseRoutes   []string
+	flagAdvertiseExitNode bool
 )
 
 var rootCmd = &cobra.Command{
