@@ -195,11 +195,13 @@ public final class ConnectionViewModel: ObservableObject {
         persistSettingIfNonEmpty(controllerURL, forKey: "controllerURL")
         persistSettingIfNonEmpty(tenantSlug, forKey: "tenantSlug")
 
-        // Trim same as the relay block (a29bdcb): macOS 26
-        // URL(string:) rejects strings with trailing whitespace or
-        // newlines, and pasted settings often carry one.
-        guard let url = URL(string: controllerURL.trimmingCharacters(in: .whitespacesAndNewlines)) else {
-            self.lastError = "controller URL is not a valid URL"
+        // parseControllerURL trims + requires http/https scheme.
+        // Without the scheme guard, a plain hostname like
+        // "controller.example.com" would parse into a URL with
+        // scheme==nil and only fail later inside URLSession with a
+        // confusing message far from the actual mistake.
+        guard let url = parseControllerURL(controllerURL) else {
+            self.lastError = "controller URL must start with http:// or https://"
             return
         }
         do {
@@ -343,7 +345,7 @@ public final class ConnectionViewModel: ObservableObject {
             let privateKey = try loadOrCreatePrivateKey()
             let publicKey = privateKey.publicKey.base64Key
 
-            guard let url = URL(string: controllerURL.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+            guard let url = parseControllerURL(controllerURL) else {
                 throw ConnectionError.invalidControllerURL
             }
 
@@ -646,8 +648,8 @@ public final class ConnectionViewModel: ObservableObject {
     /// controller blip. A subsequent heartbeat / watch tick will fire
     /// this again when the controller is reachable.
     private func refreshPolicyFromController() async {
-        guard let url = URL(string: controllerURL.trimmingCharacters(in: .whitespacesAndNewlines)) else {
-            log.warning("policy refresh: invalid controller URL; staying on prior config")
+        guard let url = parseControllerURL(controllerURL) else {
+            log.warning("policy refresh: invalid controller URL (need http or https scheme); staying on prior config")
             return
         }
         let privateKey: PrivateKey
