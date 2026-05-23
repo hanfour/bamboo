@@ -876,6 +876,21 @@ func (h *HTTPServer) apiPeerPatch(w http.ResponseWriter, r *http.Request, authn 
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
+
+	// Publish a WatchPeers event for non-status field changes
+	// (hostname / dnsName / tags) so subscribers refresh their view
+	// without waiting for the next heartbeat-driven register cycle.
+	// Status transitions are skipped here because SetPeerStatus above
+	// already published the appropriate event (PeerRemoved /
+	// PeerAdded / PeerUpdated) with the post-update state — a second
+	// PeerUpdated here would double-emit and, for the disabled
+	// transition, would even mislead subscribers into re-adding a
+	// peer the PeerRemoved just told them to drop.
+	statusChanged := req.Status != nil && *req.Status != current.Status
+	if len(diff) > 0 && !statusChanged {
+		h.coord.PublishPeerUpdatedIfVisible(tenant.ID, updated)
+	}
+
 	writeJSON(w, http.StatusOK, peerToJSON(updated))
 }
 

@@ -169,6 +169,30 @@ func (h *CoordinatorHandler) SetPeerStatus(ctx context.Context, peerID uuid.UUID
 	return updated, true, nil
 }
 
+// PublishPeerUpdatedIfVisible publishes a PeerUpdated event on the
+// WatchPeers stream IF the peer is currently visible to other peers
+// (approved + not disabled). No-op for invisible peers — they aren't
+// in any subscriber's WG config, and emitting PeerUpdated would
+// mislead clients into adding a peer the next Register response
+// would then filter out.
+//
+// Used by HTTP PATCH for hostname / dnsName / tags changes that
+// don't transition status (status transitions have their own event
+// via SetPeerStatus and shouldn't double-emit).
+func (h *CoordinatorHandler) PublishPeerUpdatedIfVisible(tenantID uuid.UUID, peer *repo.Peer) {
+	if peer.ApprovalStatus != "approved" {
+		return
+	}
+	if peer.Status == "disabled" {
+		return
+	}
+	h.bus.Publish(tenantID, &bamboov1.WatchPeersEvent{
+		Event: &bamboov1.WatchPeersEvent_PeerUpdated{
+			PeerUpdated: &bamboov1.PeerUpdated{Peer: toProtoPeer(peer)},
+		},
+	})
+}
+
 // SetRequireAuth flips the handler into prod-mode credential checking.
 // Coordinator-specific because the REST adapter delegates here for
 // peer onboarding; HTTPServer.SetRequireAuth applies the same gate to
@@ -691,6 +715,7 @@ func toProtoPeer(p *repo.Peer) *bamboov1.Peer {
 		Endpoints:          endpoints,
 		CreatedAt:          timestamppb.New(p.CreatedAt),
 		ApprovalStatus:     p.ApprovalStatus,
+		Tags:               p.Tags,
 	}
 	if p.PeerDNSName != nil {
 		out.PeerDnsName = *p.PeerDNSName
