@@ -303,6 +303,43 @@ targets:
           CODE_SIGN_IDENTITY: Developer ID Application
           PROVISIONING_PROFILE_SPECIFIER: bamboo dnsproxy DevID
 
+# ----- test targets ----------------------------------------------------------
+
+  AppleSharedTests:
+    # Unit tests for pure-Swift logic under Shared/ that doesn't need
+    # NetworkExtension (which can't be linked into a test bundle).
+    # MagicDNSPeerStore + MagicDNSResolver are the two files small
+    # enough + pure enough to test in isolation right now.
+    #
+    # The Shared/*.swift files are compiled directly into this test
+    # target (rather than imported from BambooApp-macOS). This avoids
+    # needing a separate framework target + @testable import for
+    # what would otherwise be a single-line API surface. Each target
+    # compiling its own copy of MagicDNSPeerStore.swift produces a
+    # distinct Swift module-qualified type, but for tests that's
+    # fine — we're testing logic, not module linkage.
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: Tests/AppleShared
+      - path: Shared/MagicDNSPeerStore.swift
+      - path: Shared/MagicDNSResolver.swift
+    settings:
+      base:
+        # Tests don't ship; sign locally with whatever the developer
+        # has. Skip the Developer ID dance the app + extensions use.
+        CODE_SIGN_STYLE: Automatic
+        PRODUCT_NAME: AppleSharedTests
+        PRODUCT_BUNDLE_IDENTIFIER: dev.hanfour.bamboo.tests.shared
+        # SWIFT_VERSION inherits from the project-level setting.
+        # GENERATE_INFOPLIST_FILE=YES so xcodegen doesn't need an
+        # Info.plist sidecar for the test bundle.
+        GENERATE_INFOPLIST_FILE: "YES"
+
+# xcodegen auto-generates a scheme per target. The AppleSharedTests
+# scheme will run the test target via `xcodebuild test -scheme
+# AppleSharedTests` without any explicit scheme declaration here.
+
 # ----- iOS targets -----------------------------------------------------------
 
   BambooApp-iOS:
