@@ -826,7 +826,13 @@ func (h *HTTPServer) apiPeerPatch(w http.ResponseWriter, r *http.Request, authn 
 		}
 	}
 	if req.Status != nil && *req.Status != current.Status {
-		if _, err := h.peers.SetStatus(r.Context(), id, *req.Status); err != nil {
+		// Delegate to the coordinator so the WatchPeers event for
+		// the status change is published alongside the DB write. The
+		// idempotency check inside SetPeerStatus duplicates the
+		// outer `*req.Status != current.Status` guard; both are
+		// cheap and keep the handlers honest if either side gets
+		// reordered later.
+		if _, _, err := h.coord.SetPeerStatus(r.Context(), id, *req.Status); err != nil {
 			writeError(w, http.StatusInternalServerError, fmt.Errorf("set status: %w", err))
 			return
 		}

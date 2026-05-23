@@ -604,6 +604,129 @@ func TestRESTPatchPeer_HappyPath(t *testing.T) {
 	}
 }
 
+// TestRESTPatchPeer_StatusDisabledEmitsPeerRemoved verifies that
+// flipping a peer to status=disabled via PATCH publishes a
+// peer_removed event on the WatchPeers stream. Without this,
+// existing peer subscribers would keep the disabled peer in their
+// WG config until the next heartbeat-driven register cycle
+// rebuilt their peer list (~30s) — a window where they keep
+// burning handshake budget on a deactivated peer.
+func TestRESTPatchPeer_StatusDisabledEmitsPeerRemoved(t *testing.T) {
+	f := startFixture(t)
+
+	// Watcher peer (subscribes to events).
+	watcher := postJSON(t, f.httpURL+"/api/v1/peers/register", map[string]any{
+		"hostname":           "watcher",
+		"wireguardPublicKey": randomPubKey(t),
+		"tenantSlug":         f.tenantSlug,
+	})
+	if watcher.status != http.StatusOK {
+		t.Fatalf("watcher register: %d %s", watcher.status, watcher.body)
+	}
+	var watcherOut struct {
+		Self struct{ ID string } `json:"self"`
+	}
+	_ = json.Unmarshal(watcher.body, &watcherOut)
+
+	// Target peer that we'll disable.
+	target := postJSON(t, f.httpURL+"/api/v1/peers/register", map[string]any{
+		"hostname":           "target",
+		"wireguardPublicKey": randomPubKey(t),
+		"tenantSlug":         f.tenantSlug,
+	})
+	if target.status != http.StatusOK {
+		t.Fatalf("target register: %d %s", target.status, target.body)
+	}
+	var targetOut struct {
+		Self struct{ ID string } `json:"self"`
+	}
+	_ = json.Unmarshal(target.body, &targetOut)
+
+	// Open watch stream as the watcher.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		f.httpURL+"/api/v1/peers/watch?peerId="+watcherOut.Self.ID, nil)
+	if err != nil {
+		t.Fatalf("build watch request: %v", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("watch: %v", err)
+	}
+	defer resp.Body.Close()
+
+	// Flip target to disabled — should emit peer_removed.
+	go patchPeerStatusBackground(f.httpURL+"/api/v1/peers/"+targetOut.Self.ID, f.tenantSlug, "disabled")
+
+	got, err := readSSEEvent(resp.Body, "peer_removed", 3*time.Second)
+	if err != nil {
+		t.Fatalf("waiting for peer_removed: %v", err)
+	}
+	if !strings.Contains(got, targetOut.Self.ID) {
+		t.Errorf("peer_removed didn't carry target's id; got %q", got)
+	}
+}
+
+// TestRESTPatchPeer_StatusEnableEmitsPeerAdded covers the reverse
+// transition: disabled → online should publish peer_added so other
+// peers add the (re-enabled) peer back to their WG config without
+// waiting for the next register cycle.
+func TestRESTPatchPeer_StatusEnableEmitsPeerAdded(t *testing.T) {
+	f := startFixture(t)
+
+	watcher := postJSON(t, f.httpURL+"/api/v1/peers/register", map[string]any{
+		"hostname":           "watcher-enable",
+		"wireguardPublicKey": randomPubKey(t),
+		"tenantSlug":         f.tenantSlug,
+	})
+	target := postJSON(t, f.httpURL+"/api/v1/peers/register", map[string]any{
+		"hostname":           "target-enable",
+		"wireguardPublicKey": randomPubKey(t),
+		"tenantSlug":         f.tenantSlug,
+	})
+	if watcher.status != http.StatusOK || target.status != http.StatusOK {
+		t.Fatalf("register: w=%d t=%d", watcher.status, target.status)
+	}
+	var watcherOut, targetOut struct {
+		Self struct{ ID string } `json:"self"`
+	}
+	_ = json.Unmarshal(watcher.body, &watcherOut)
+	_ = json.Unmarshal(target.body, &targetOut)
+
+	// Disable first (with no watch open — we don't care about this event).
+	patch := sendJSONWithTenant(t, http.MethodPatch,
+		f.httpURL+"/api/v1/peers/"+targetOut.Self.ID, f.tenantSlug,
+		map[string]any{"status": "disabled"})
+	if patch.status != http.StatusOK {
+		t.Fatalf("PATCH to disabled: %d %s", patch.status, patch.body)
+	}
+
+	// Now open watch + re-enable.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		f.httpURL+"/api/v1/peers/watch?peerId="+watcherOut.Self.ID, nil)
+	if err != nil {
+		t.Fatalf("build watch: %v", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("watch: %v", err)
+	}
+	defer resp.Body.Close()
+
+	go patchPeerStatusBackground(f.httpURL+"/api/v1/peers/"+targetOut.Self.ID, f.tenantSlug, "online")
+
+	got, err := readSSEEvent(resp.Body, "peer_added", 3*time.Second)
+	if err != nil {
+		t.Fatalf("waiting for peer_added: %v", err)
+	}
+	if !strings.Contains(got, targetOut.Self.ID) {
+		t.Errorf("peer_added didn't carry target's id; got %q", got)
+	}
+}
+
 // TestRESTRegister_OmitsDisabledPeer verifies that a peer whose
 // status was admin-flipped to "disabled" disappears from another
 // peer's Peers list on the next register cycle. Without this filter
@@ -670,6 +793,26 @@ func TestRESTRegister_OmitsDisabledPeer(t *testing.T) {
 	if registerResponseContainsPeer(t, rerun.body, pubkeyB.Self.ID) {
 		t.Fatalf("post-disable: B should be absent from A's peers list; body=%s", rerun.body)
 	}
+}
+
+// patchPeerStatusBackground sends a PATCH from a goroutine without
+// failing the test on transient errors — used in the watch-stream
+// tests where the PATCH is the side-effect-trigger and the test's
+// assertion is on the SSE event, not the PATCH response itself.
+func patchPeerStatusBackground(url, tenantSlug, status string) {
+	buf, _ := json.Marshal(map[string]any{"status": status})
+	req, err := http.NewRequest(http.MethodPatch, url, bytes.NewReader(buf))
+	if err != nil {
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Tenant-Slug", tenantSlug)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
 }
 
 // registerResponseContainsPeer reports whether the given peer ID
