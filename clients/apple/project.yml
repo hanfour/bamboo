@@ -272,7 +272,18 @@ targets:
     entitlements:
       path: DNSProxy-macOS/DNSProxy_macOS.entitlements
       properties:
-        com.apple.security.app-sandbox: true
+        # Sandbox disabled (mesh-debug 2026-05-23). The DNSProxy
+        # System Extension runs as root and needs to read the
+        # shared MagicDNS peer-map file written by the host app at
+        # /private/tmp/dev.hanfour.bamboo.magicdns-peers.v1.json.
+        # The original design used a shared App Group UserDefaults
+        # suite, but App Group containers on macOS are per-user, so
+        # a root-running SystemExt cannot see what the user-space
+        # host app writes. With sandbox=true, /private/tmp reads
+        # also return EPERM. Disabling sandbox is the simplest way
+        # to let the proxy read the shared file; the security
+        # envelope is similar (this is a root process anyway).
+        com.apple.security.app-sandbox: false
         com.apple.security.network.client: true
         com.apple.security.network.server: true
         com.apple.developer.networking.networkextension:
