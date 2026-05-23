@@ -67,11 +67,15 @@ public struct MagicDNSPeerStore {
         }
     }
 
-    /// Replace the entire peer map atomically. Write to a temp file
-    /// in the same directory then rename, so a concurrent reader
-    /// either sees the old map or the new map but never a partial
-    /// write. Callers (ConnectionViewModel) write the full snapshot
-    /// rather than incremental diffs to keep the IPC surface trivial.
+    /// Replace the entire peer map atomically. Writes a temp file
+    /// (chmoded 0644 so the root SystemExt can read), then uses
+    /// POSIX `rename(2)` to swap it onto the destination path in one
+    /// atomic kernel operation. A concurrent reader's `open(2)`
+    /// lands on either the old inode or the new one — never a
+    /// missing file. The earlier `removeItem` + `moveItem` pattern
+    /// (Foundation's `moveItem` throws if the destination exists)
+    /// left a microsecond window where the file didn't exist and a
+    /// reader saw `[:]` → NXDOMAIN.
     public func setPeers(_ peers: [String: PeerEntry]) {
         do {
             let data = try JSONEncoder().encode(peers)
@@ -84,10 +88,11 @@ public struct MagicDNSPeerStore {
                 [.posixPermissions: 0o644],
                 ofItemAtPath: tmp.path
             )
-            // rename() is atomic on POSIX filesystems; the reader's
-            // open(2) either lands on the old inode or the new one.
-            _ = try? FileManager.default.removeItem(at: url)
-            try FileManager.default.moveItem(at: tmp, to: url)
+            if Darwin.rename(tmp.path, url.path) != 0 {
+                let err = errno
+                _ = try? FileManager.default.removeItem(at: tmp)
+                NSLog("[MagicDNSPeerStore] rename(\(tmp.path) → \(url.path)) failed errno=\(err)")
+            }
         } catch {
             NSLog("[MagicDNSPeerStore] write failed at \(Self.sharedPath): \(error)")
         }
