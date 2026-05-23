@@ -93,6 +93,22 @@ type session struct {
 	key    sessionKey
 	pubkey [PubKeyLen]byte // shortcut for the pubkey portion of key
 	send   chan []byte
+	// peerGoneSent records destination pubkeys we've already
+	// emitted PEER_GONE for in this session. Without this, every
+	// WireGuard handshake retry to an offline peer (~every 5s)
+	// generates a fresh PEER_GONE frame — log spam on the receiver
+	// (mac mini in the mesh-debug 2026-05-22 session saw the same
+	// "relay reports peer gone <h4-prefix>" line every 5s for as
+	// long as h4 was offline). The PEER_GONE is informational only;
+	// WireGuard doesn't change its retry cadence based on it, so
+	// dedupe forever within the session. If the dst later joins,
+	// the sender will see its real packets routed and naturally
+	// learn dst is back; we don't need to re-arm to send another
+	// PEER_GONE on a subsequent leave.
+	//
+	// Only accessed from readLoop's goroutine (forward is called
+	// from there), so no mutex needed.
+	peerGoneSent map[[PubKeyLen]byte]struct{}
 }
 
 func (s *Server) runSession(ctx context.Context, c *websocket.Conn) error {
@@ -125,10 +141,11 @@ func (s *Server) runSession(ctx context.Context, c *websocket.Conn) error {
 	}
 
 	sess := &session{
-		conn:   c,
-		key:    sessionKey{tenant: tenantID, pubkey: ch.SrcKey},
-		pubkey: ch.SrcKey,
-		send:   make(chan []byte, 64),
+		conn:         c,
+		key:          sessionKey{tenant: tenantID, pubkey: ch.SrcKey},
+		pubkey:       ch.SrcKey,
+		send:         make(chan []byte, 64),
+		peerGoneSent: make(map[[PubKeyLen]byte]struct{}),
 	}
 	s.register(sess)
 	defer s.unregister(sess)
@@ -222,12 +239,22 @@ func (s *Server) forward(sender *session, pkt PacketFrame) {
 	)
 
 	if dst == nil {
+		// Dedupe PEER_GONE per (sender, dst) so retried packets
+		// (WireGuard handshake every ~5s) don't flood the sender
+		// with the same notification. See session.peerGoneSent.
+		if _, already := sender.peerGoneSent[pkt.DstKey]; already {
+			return
+		}
 		buf, err := Encode(Frame{Type: TypePeerGone, Payload: pkt.DstKey[:]})
 		if err != nil {
 			return
 		}
 		select {
 		case sender.send <- buf:
+			// Mark as sent only after the enqueue succeeds — a
+			// channel-full drop means the sender hasn't actually
+			// been notified, so let the next packet try again.
+			sender.peerGoneSent[pkt.DstKey] = struct{}{}
 		default:
 			// Sender's queue is full; drop. The sender will retry.
 		}
