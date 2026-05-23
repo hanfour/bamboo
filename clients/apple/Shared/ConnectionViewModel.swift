@@ -753,6 +753,13 @@ public final class ConnectionViewModel: ObservableObject {
                     persistentKeepalive: 25
                 )
             }
+            // Sort by id so the resulting Array has a stable order.
+            // peerCache.values iteration is Dictionary-defined
+            // (unspecified), so two semantically identical peer sets
+            // would otherwise produce arrays that disagree under
+            // BambooTunnelConfig's synthesized Equatable — making the
+            // no-op-skip below ineffective in the common case.
+            .sorted { $0.id < $1.id }
         let config = BambooTunnelConfig(
             privateKey: prevConfig.privateKey,
             address: "\(selfIPv4)/32",
