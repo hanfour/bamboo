@@ -84,6 +84,11 @@ struct ContentView: View {
 
                     LabelledField(label: "Pre-auth key (fallback)", text: $connection.preAuthKey)
                     LabelledField(label: "Relay URL (optional)", text: $connection.relayURL)
+                    LabelledField(label: "Advertise routes (CIDRs, comma-separated; admin must approve)",
+                                  text: $connection.advertiseRoutes)
+                    Toggle("Offer this device as an exit node (admin approval required)",
+                           isOn: $connection.advertiseExitNode)
+                        .controlSize(.small)
                 }
                 .textFieldStyle(.roundedBorder)
             }

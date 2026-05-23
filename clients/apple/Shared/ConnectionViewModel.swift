@@ -41,6 +41,20 @@ public final class ConnectionViewModel: ObservableObject {
     @Published public var hostname: String = currentHostname()
     @Published public var relayURL: String =
         UserDefaults.bambooStandard.string(forKey: "relayURL") ?? ""
+    /// Comma-/whitespace-separated CIDR list for the "advertise as
+    /// subnet router" field (issue #136). The string lives in the
+    /// `@Published` storage; parsed into `[String]` only at connect
+    /// time. Empty means "do not advertise anything"; admin must
+    /// approve any non-empty advertisement before it lands in other
+    /// peers' allowed_ips.
+    @Published public var advertiseRoutes: String =
+        UserDefaults.bambooStandard.string(forKey: "advertiseRoutes") ?? ""
+    /// Toggle for the "advertise as exit-node candidate" Settings
+    /// switch (issue #137). UserDefaults.bool defaults to false when
+    /// the key is absent, which is the right default for a fresh
+    /// install.
+    @Published public var advertiseExitNode: Bool =
+        UserDefaults.bambooStandard.bool(forKey: "advertiseExitNode")
     /// Email of the OIDC-authenticated user, or nil if the device is
     /// driving the controller via pre-auth key only. Persisted to
     /// UserDefaults so the UI's "Signed in as ..." banner survives an
@@ -340,6 +354,12 @@ public final class ConnectionViewModel: ObservableObject {
         persistSettingIfNonEmpty(controllerURL, forKey: "controllerURL")
         persistSettingIfNonEmpty(tenantSlug, forKey: "tenantSlug")
         persistSettingIfNonEmpty(relayURL, forKey: "relayURL")
+        persistSettingIfNonEmpty(advertiseRoutes, forKey: "advertiseRoutes")
+        // Unconditional set: the bool toggle has explicit on/off
+        // semantics (no "preserve previous value" concept like the
+        // string fields). UserDefaults treats absent-key as false,
+        // which matches the @Published initializer's default.
+        UserDefaults.bambooStandard.set(advertiseExitNode, forKey: "advertiseExitNode")
 
         do {
             let privateKey = try loadOrCreatePrivateKey()
@@ -347,6 +367,18 @@ public final class ConnectionViewModel: ObservableObject {
 
             guard let url = parseControllerURL(controllerURL) else {
                 throw ConnectionError.invalidControllerURL
+            }
+
+            // Parse advertise-routes early so a malformed CIDR fails
+            // with a clear error before any networking. parseAdvertise
+            // Routes returns [] for an empty / whitespace-only field;
+            // the RegisterRequest below omits the JSON field entirely
+            // when nil so legacy controllers see an unchanged shape.
+            let parsedAdvertisedRoutes: [String]
+            do {
+                parsedAdvertisedRoutes = try parseAdvertiseRoutes(advertiseRoutes)
+            } catch let err as AdvertiseRoutesError {
+                throw ConnectionError.invalidAdvertiseRoutes(String(describing: err))
             }
 
             // Pick the WireGuard listen port BEFORE STUN so STUN and
@@ -383,7 +415,9 @@ public final class ConnectionViewModel: ObservableObject {
                 clientVersion: "0.0.1",
                 preAuthKeySecret: preAuthKey.isEmpty ? nil : preAuthKey,
                 tenantSlug: tenantSlug,
-                endpoints: discoveredEndpoints.isEmpty ? nil : discoveredEndpoints
+                endpoints: discoveredEndpoints.isEmpty ? nil : discoveredEndpoints,
+                advertisedRoutes: parsedAdvertisedRoutes.isEmpty ? nil : parsedAdvertisedRoutes,
+                advertiseExitNode: advertiseExitNode ? true : nil
             ))
 
             // Once Register returns, prefer the peer-session bearer
@@ -839,11 +873,13 @@ public final class ConnectionViewModel: ObservableObject {
 private enum ConnectionError: Error, CustomStringConvertible {
     case invalidControllerURL
     case portPickFailed(String)
+    case invalidAdvertiseRoutes(String)
 
     var description: String {
         switch self {
         case .invalidControllerURL: return "controller URL is not a valid URL"
         case .portPickFailed(let reason): return "could not pick a free UDP port: \(reason)"
+        case .invalidAdvertiseRoutes(let reason): return reason
         }
     }
 }

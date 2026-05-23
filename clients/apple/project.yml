@@ -346,6 +346,7 @@ targets:
       - path: Shared/MagicDNSPeerStore.swift
       - path: Shared/MagicDNSResolver.swift
       - path: Shared/ControllerURLParser.swift
+      - path: Shared/AdvertiseRoutesParser.swift
     settings:
       base:
         # Tests don't ship; sign locally with whatever the developer
