@@ -136,6 +136,43 @@ func (r *Policies) Put(
 	return &rec, nil
 }
 
+// Bump increments the tenant's policy revision in place without
+// authoring a new HCL document. Returns the new revision.
+//
+// Used by admin actions that change the effective per-peer allowed_ips
+// without touching the ACL itself — e.g. approving subnet routes
+// (#136) or flipping the exit-node bit (#137). Bumping the revision is
+// what makes Heartbeat return PolicyChanged=true on the next tick so
+// peers re-pull their config (the missing piece behind issue #170).
+//
+// Does NOT append to acl_policy_history: the Versions tab tracks ACL
+// authoring events, and a phantom "no-op" rollback target there would
+// be misleading. The route/exit-node approval is already recorded in
+// the audit log by the caller.
+//
+// First-call behaviour: when no acl_policies row exists for the tenant
+// (no ACL ever authored), inserts revision=1 with empty hcl_source.
+// Empty HCL still parses to an empty Policy, and policy.Allow's
+// zero-rules path returns true — i.e. full-mesh stays the default,
+// matching the pre-bump semantics. The client-side enforcing branch
+// (revision > 0 + empty allowed_ips → drop peer) is also safe because
+// allowedIPsFor always emits at least the peer's tunnel /32.
+func (r *Policies) Bump(ctx context.Context, tenantID uuid.UUID) (int64, error) {
+	var newRev int64
+	err := r.pool.QueryRow(ctx, `
+		INSERT INTO acl_policies (tenant_id, revision, hcl_source, updated_by)
+		VALUES ($1, 1, '', NULL)
+		ON CONFLICT (tenant_id) DO UPDATE SET
+		    revision   = acl_policies.revision + 1,
+		    updated_at = now()
+		RETURNING revision
+	`, tenantID).Scan(&newRev)
+	if err != nil {
+		return 0, fmt.Errorf("bump policy revision: %w", err)
+	}
+	return newRev, nil
+}
+
 // ListHistory returns the most recent N revisions for a tenant,
 // newest first. Used by the Web UI's "Versions" tab (issue #134) to
 // render the rollback list with timestamps and the admin email who

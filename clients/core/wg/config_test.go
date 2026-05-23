@@ -212,6 +212,54 @@ func TestBuildDeviceConfig_NoPolicyHonorsControllerAllowedIps(t *testing.T) {
 	}
 }
 
+// Regression for the #170 bump path: after a fresh-tenant admin
+// approves the first route, `repo.Policies.Bump` inserts an empty-HCL
+// row at revision=1. The controller is now in "enforcing" mode from
+// the client's perspective (revision > 0). Empty HCL parses to a
+// zero-rule Policy, so `policy.Allow` returns true for every (src,
+// dst) pair → `allowedIPsFor` still emits the peer's /32 → the
+// "enforcing && len(AllowedIps)==0" drop branch never triggers and
+// full-mesh semantics survive.
+//
+// This test locks that invariant at the client side so a future
+// refactor of policy.Allow's zero-rule branch (or the controller's
+// allowedIPsFor /32 baseline) can't silently turn a route-approval
+// bump into a network-wide black hole.
+func TestBuildDeviceConfig_EnforcingWithBaselineAllowedIpsKeepsPeer(t *testing.T) {
+	priv, _ := wg.GeneratePrivateKey()
+	peerPriv, _ := wg.GeneratePrivateKey()
+
+	resp := &bamboov1.RegisterResponse{
+		// revision=1 mirrors what `policies.Bump` writes on the first
+		// admin approval of a fresh tenant — empty HCL, but a non-
+		// zero revision flips the client into enforcing mode.
+		PolicyRevision: 1,
+		Self:           &bamboov1.Peer{Ip: "100.64.0.1"},
+		Peers: []*bamboov1.Peer{
+			{
+				Id:                 "p",
+				Ip:                 "100.64.0.2",
+				WireguardPublicKey: peerPriv.PublicKey().Base64(),
+				// Just the /32 baseline `allowedIPsFor` always emits
+				// when `policy.Allow` returns true on a zero-rule
+				// policy. No approved subnet routes, no exit-node
+				// /0 — the minimum surface the bump path produces.
+				AllowedIps: []string{"100.64.0.2/32"},
+			},
+		},
+	}
+	cfg, err := wg.BuildDeviceConfig(priv, resp)
+	if err != nil {
+		t.Fatalf("BuildDeviceConfig: %v", err)
+	}
+	if len(cfg.Peers) != 1 {
+		t.Fatalf("len(Peers) = %d, want 1 (peer must NOT be dropped by the enforcing branch when controller emitted a non-empty AllowedIps baseline)", len(cfg.Peers))
+	}
+	if got := cfg.Peers[0].AllowedIPs[0].String(); got != "100.64.0.2/32" {
+		t.Errorf("AllowedIPs[0] = %s, want 100.64.0.2/32", got)
+	}
+}
+
 func TestBuildDeviceConfig_EnforcingRejectsMalformedAllowedIps(t *testing.T) {
 	priv, _ := wg.GeneratePrivateKey()
 	peerPriv, _ := wg.GeneratePrivateKey()

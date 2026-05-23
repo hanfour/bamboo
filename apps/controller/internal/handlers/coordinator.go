@@ -193,6 +193,38 @@ func (h *CoordinatorHandler) PublishPeerUpdatedIfVisible(tenantID uuid.UUID, pee
 	})
 }
 
+// BumpPolicyRevision increments the tenant's policy_revision and
+// publishes a PolicyChanged event so subscribed WatchPeers streams
+// re-pull their per-peer allowed_ips. Used by admin actions that
+// change the effective wire-layer view without touching ACL HCL —
+// approving subnet routes (#136), flipping the exit-node bit (#137),
+// and similar (closes #170).
+//
+// Both legs are needed:
+//   - The DB bump is what makes Heartbeat see CurrentPolicyRevision !=
+//     KnownPolicyRevision on the next tick, so peers that aren't
+//     currently subscribed to WatchPeers (cold-reconnect window) still
+//     pick up the change within one heartbeat interval.
+//   - The bus publish is what lets currently-subscribed peers refresh
+//     immediately without waiting for the heartbeat backstop.
+//
+// Bump failure is returned to the caller — the route/exit-node DB
+// write already committed, so the safe behaviour is to surface the
+// error and let the operator retry rather than silently leave peers
+// stale.
+func (h *CoordinatorHandler) BumpPolicyRevision(ctx context.Context, tenantID uuid.UUID) (int64, error) {
+	rev, err := h.policies.Bump(ctx, tenantID)
+	if err != nil {
+		return 0, err
+	}
+	h.bus.Publish(tenantID, &bamboov1.WatchPeersEvent{
+		Event: &bamboov1.WatchPeersEvent_PolicyChanged{
+			PolicyChanged: &bamboov1.PolicyChanged{PolicyRevision: rev},
+		},
+	})
+	return rev, nil
+}
+
 // SetRequireAuth flips the handler into prod-mode credential checking.
 // Coordinator-specific because the REST adapter delegates here for
 // peer onboarding; HTTPServer.SetRequireAuth applies the same gate to
