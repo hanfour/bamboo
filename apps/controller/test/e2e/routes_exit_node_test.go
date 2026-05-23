@@ -205,6 +205,139 @@ func TestExitNode_RejectsApprovalForUncapablePeer(t *testing.T) {
 	}
 }
 
+// TestApproveRoutes_BumpsPolicyRevision verifies #170: after admin
+// approves a subnet route, heartbeat returns policyChanged=true so
+// peers re-pull their allowed_ips without manual reconnect. Before the
+// fix, admin approvals were invisible to the policy-revision channel
+// and clients stayed pinned to the pre-approval routes until they
+// disconnected.
+func TestApproveRoutes_BumpsPolicyRevision(t *testing.T) {
+	f := startFixture(t)
+
+	// Peer A advertises a route.
+	gwReg := postJSON(t, f.httpURL+"/api/v1/peers/register", map[string]any{
+		"hostname":           "gw-bump",
+		"wireguardPublicKey": randomPubKey(t),
+		"tenantSlug":         f.tenantSlug,
+		"advertisedRoutes":   []string{"192.168.86.0/24"},
+	})
+	gwID := mustField(t, gwReg.body, "self.id")
+
+	// Peer B observes via heartbeat. Capture the baseline revision
+	// (zero in a fresh fixture with no policy authored).
+	bReg := postJSON(t, f.httpURL+"/api/v1/peers/register", map[string]any{
+		"hostname":           "laptop-bump",
+		"wireguardPublicKey": randomPubKey(t),
+		"tenantSlug":         f.tenantSlug,
+	})
+	bID := mustField(t, bReg.body, "self.id")
+
+	baseline := postJSON(t, f.httpURL+"/api/v1/peers/heartbeat", map[string]any{
+		"peerId":              bID,
+		"knownPolicyRevision": int64(0),
+	})
+	if baseline.status != http.StatusOK {
+		t.Fatalf("baseline heartbeat: %d body=%s", baseline.status, baseline.body)
+	}
+	var baseHB struct {
+		PolicyChanged         bool  `json:"policyChanged"`
+		CurrentPolicyRevision int64 `json:"currentPolicyRevision"`
+	}
+	if err := json.Unmarshal(baseline.body, &baseHB); err != nil {
+		t.Fatalf("decode baseline: %v", err)
+	}
+	if baseHB.PolicyChanged {
+		t.Errorf("baseline heartbeat: policyChanged=true before any approval, want false")
+	}
+	startRev := baseHB.CurrentPolicyRevision
+
+	// Admin approves the route.
+	approve := sendJSONWithTenant(t, http.MethodPost,
+		f.httpURL+"/api/v1/peers/"+gwID+"/routes", f.tenantSlug,
+		map[string]any{"routes": []string{"192.168.86.0/24"}})
+	if approve.status != http.StatusOK {
+		t.Fatalf("approve: %d body=%s", approve.status, approve.body)
+	}
+
+	// Peer B's next heartbeat (still reporting the pre-approval
+	// revision) must see policyChanged=true and a bumped current rev.
+	after := postJSON(t, f.httpURL+"/api/v1/peers/heartbeat", map[string]any{
+		"peerId":              bID,
+		"knownPolicyRevision": startRev,
+	})
+	if after.status != http.StatusOK {
+		t.Fatalf("post-approve heartbeat: %d body=%s", after.status, after.body)
+	}
+	var afterHB struct {
+		PolicyChanged         bool  `json:"policyChanged"`
+		CurrentPolicyRevision int64 `json:"currentPolicyRevision"`
+	}
+	if err := json.Unmarshal(after.body, &afterHB); err != nil {
+		t.Fatalf("decode after: %v", err)
+	}
+	if !afterHB.PolicyChanged {
+		t.Errorf("post-approve heartbeat: policyChanged=false, want true (issue #170 regression)")
+	}
+	if afterHB.CurrentPolicyRevision <= startRev {
+		t.Errorf("post-approve currentRev=%d, want > baseline %d", afterHB.CurrentPolicyRevision, startRev)
+	}
+}
+
+// TestApproveExitNode_BumpsPolicyRevision is the exit-node twin of
+// TestApproveRoutes_BumpsPolicyRevision. Same #170 contract: flipping
+// the exit-node bit must propagate through policy_revision.
+func TestApproveExitNode_BumpsPolicyRevision(t *testing.T) {
+	f := startFixture(t)
+
+	gwReg := postJSON(t, f.httpURL+"/api/v1/peers/register", map[string]any{
+		"hostname":           "exit-bump",
+		"wireguardPublicKey": randomPubKey(t),
+		"tenantSlug":         f.tenantSlug,
+		"advertiseExitNode":  true,
+	})
+	gwID := mustField(t, gwReg.body, "self.id")
+
+	bReg := postJSON(t, f.httpURL+"/api/v1/peers/register", map[string]any{
+		"hostname":           "laptop-exit",
+		"wireguardPublicKey": randomPubKey(t),
+		"tenantSlug":         f.tenantSlug,
+	})
+	bID := mustField(t, bReg.body, "self.id")
+
+	baseline := postJSON(t, f.httpURL+"/api/v1/peers/heartbeat", map[string]any{
+		"peerId":              bID,
+		"knownPolicyRevision": int64(0),
+	})
+	var baseHB struct {
+		CurrentPolicyRevision int64 `json:"currentPolicyRevision"`
+	}
+	_ = json.Unmarshal(baseline.body, &baseHB)
+	startRev := baseHB.CurrentPolicyRevision
+
+	approve := sendJSONWithTenant(t, http.MethodPost,
+		f.httpURL+"/api/v1/peers/"+gwID+"/exit-node", f.tenantSlug,
+		map[string]any{"approved": true})
+	if approve.status != http.StatusOK {
+		t.Fatalf("approve exit-node: %d body=%s", approve.status, approve.body)
+	}
+
+	after := postJSON(t, f.httpURL+"/api/v1/peers/heartbeat", map[string]any{
+		"peerId":              bID,
+		"knownPolicyRevision": startRev,
+	})
+	var afterHB struct {
+		PolicyChanged         bool  `json:"policyChanged"`
+		CurrentPolicyRevision int64 `json:"currentPolicyRevision"`
+	}
+	_ = json.Unmarshal(after.body, &afterHB)
+	if !afterHB.PolicyChanged {
+		t.Errorf("exit-node approve: policyChanged=false, want true")
+	}
+	if afterHB.CurrentPolicyRevision <= startRev {
+		t.Errorf("exit-node approve currentRev=%d, want > %d", afterHB.CurrentPolicyRevision, startRev)
+	}
+}
+
 // --- helpers ------------------------------------------------------
 
 type peerRouteShape struct {

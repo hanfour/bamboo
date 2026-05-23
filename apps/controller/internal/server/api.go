@@ -1178,6 +1178,12 @@ func (h *HTTPServer) apiPeerSetApprovedRoutes(w http.ResponseWriter, r *http.Req
 		writeError(w, http.StatusInternalServerError, fmt.Errorf("set approved_routes: %w", err))
 		return
 	}
+	// #170: bump policy_revision + publish PolicyChanged so peers
+	// re-pull allowed_ips without a manual reconnect.
+	if _, err := h.coord.BumpPolicyRevision(r.Context(), tenant.ID); err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("bump policy revision: %w", err))
+		return
+	}
 	writePeerAudit(r.Context(), h.audits, authn, tenant.ID, id, "peer.routes.approve", map[string]any{
 		"hostname": current.Hostname,
 		"approved_routes": map[string]any{
@@ -1237,6 +1243,12 @@ func (h *HTTPServer) apiPeerSetExitNodeApproved(w http.ResponseWriter, r *http.R
 	}
 	if err := h.peers.SetExitNodeApproved(r.Context(), id, req.Approved); err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Errorf("set exit_node_approved: %w", err))
+		return
+	}
+	// #170: bump policy_revision + publish PolicyChanged so peers
+	// re-pull allowed_ips without a manual reconnect.
+	if _, err := h.coord.BumpPolicyRevision(r.Context(), tenant.ID); err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("bump policy revision: %w", err))
 		return
 	}
 	writePeerAudit(r.Context(), h.audits, authn, tenant.ID, id, "peer.exit-node.approve", map[string]any{
