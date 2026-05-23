@@ -90,9 +90,9 @@ type restPeer struct {
 // getters without a refactor. Idempotent on wireguard_public_key on
 // the controller, so refresh() can call this repeatedly to rotate
 // the bearer without provisioning a new IP.
-func restRegister(ctx context.Context, hostname, wgPublicKey, osName, version, preAuthKey, tenantSlug string, endpoints []string) (*bamboov1.RegisterResponse, string, time.Time, error) {
+func restRegister(ctx context.Context, hostname, wgPublicKey, osName, version, preAuthKey, tenantSlug string, endpoints, advertisedRoutes []string, advertiseExitNode bool) (*bamboov1.RegisterResponse, string, time.Time, error) {
 	base := controllerHTTPBase()
-	body, err := json.Marshal(map[string]any{
+	reqBody := map[string]any{
 		"hostname":           hostname,
 		"wireguardPublicKey": wgPublicKey,
 		"os":                 osName,
@@ -100,7 +100,17 @@ func restRegister(ctx context.Context, hostname, wgPublicKey, osName, version, p
 		"preAuthKeySecret":   preAuthKey,
 		"tenantSlug":         tenantSlug,
 		"endpoints":          endpoints,
-	})
+	}
+	// Omit empty advertise fields so dev-fallback registers (no routes,
+	// no exit-node) keep the wire shape identical to pre-#136/#137
+	// deployments — keeps controller-side defaulting behaviour stable.
+	if len(advertisedRoutes) > 0 {
+		reqBody["advertisedRoutes"] = advertisedRoutes
+	}
+	if advertiseExitNode {
+		reqBody["advertiseExitNode"] = true
+	}
+	body, err := json.Marshal(reqBody)
 	if err != nil {
 		return nil, "", time.Time{}, err
 	}

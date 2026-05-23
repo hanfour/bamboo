@@ -43,6 +43,13 @@ Ctrl-C, at which point the interface is removed.`,
 }
 
 func runUp(cmd *cobra.Command, _ []string) error {
+	// Validate --advertise-routes before any network work — a typo
+	// in a CIDR should fail with a clear local error, not after the
+	// controller round trip rejects it.
+	if err := validateAdvertisedRoutes(flagAdvertiseRoutes); err != nil {
+		return err
+	}
+
 	priv, err := state.LoadOrCreatePrivateKey()
 	if err != nil {
 		return fmt.Errorf("load private key: %w", err)
@@ -202,6 +209,8 @@ func registerWithController(ctx context.Context, priv wg.PrivateKey, session *pe
 		flagAuthKey,
 		flagTenant,
 		discoverEndpoints(wgPort),
+		flagAdvertiseRoutes,
+		flagAdvertiseExitNode,
 	)
 	if err != nil {
 		return nil, err
