@@ -121,8 +121,13 @@
         "endpoints": "回報的端點",
         "connection": "連線狀態",
         "timestamps": "時間",
+        "advertise": "宣告路由",
         "actions": "操作",
         "timeline": "活動時間軸"
+      },
+      "advertise": {
+        "routesHint": "此節點宣告以下 CIDR 可由它轉發。請核可你信任的範圍 —— 只有核可的部分才會合併進其他節點的 allowed_ips。",
+        "exitNode": "核可作為 exit-node"
       },
       "fields": {
         "hostname": "主機名稱",

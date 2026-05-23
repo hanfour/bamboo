@@ -426,6 +426,67 @@ export async function rejectPeerAction(id: string): Promise<ActionResult> {
   return peerApprovalAction(id, 'reject');
 }
 
+// setApprovedRoutesAction is the admin sign-off side of subnet
+// routing (issue #136). Body is the full approved subset — the
+// controller validates that every CIDR in `routes` is a subset of
+// the peer's current advertised_routes (api.go:1163), so passing
+// an empty array effectively revokes all previously-approved routes.
+// Returns the updated apiPeerJSON, but the action just reports ok.
+export async function setApprovedRoutesAction(
+  id: string,
+  routes: string[],
+): Promise<ActionResult> {
+  try {
+    const res = await fetch(
+      `${BASE}/api/v1/peers/${encodeURIComponent(id)}/routes`,
+      {
+        method: 'POST',
+        headers: await buildHeaders(),
+        body: JSON.stringify({ routes }),
+        cache: 'no-store',
+      },
+    );
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      return { ok: false, error: `${res.status} ${text || res.statusText}` };
+    }
+    revalidatePath('/[locale]/peers', 'page');
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: (e as Error).message };
+  }
+}
+
+// setExitNodeApprovedAction is the admin sign-off side of exit
+// nodes (issue #137). Approving requires the peer to already be
+// exit_node_capable (api.go:1234) — the controller returns 409
+// otherwise, which the UI surfaces verbatim. Revoking (false) is
+// always allowed regardless of capable state.
+export async function setExitNodeApprovedAction(
+  id: string,
+  approved: boolean,
+): Promise<ActionResult> {
+  try {
+    const res = await fetch(
+      `${BASE}/api/v1/peers/${encodeURIComponent(id)}/exit-node`,
+      {
+        method: 'POST',
+        headers: await buildHeaders(),
+        body: JSON.stringify({ approved }),
+        cache: 'no-store',
+      },
+    );
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      return { ok: false, error: `${res.status} ${text || res.statusText}` };
+    }
+    revalidatePath('/[locale]/peers', 'page');
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: (e as Error).message };
+  }
+}
+
 async function peerApprovalAction(
   id: string,
   verb: 'approve' | 'reject',
