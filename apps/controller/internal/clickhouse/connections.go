@@ -14,6 +14,11 @@ import (
 // ConnectionEvent is one row in connection_events. The fields mirror
 // bamboov1.ConnectionEvent but use plain Go types so the package does
 // not depend on generated proto code.
+//
+// PrevPath is the structured "path before this row" signal that
+// powers the #138 v2 path-change timeline — kept separate from
+// Reason (free-form human-readable explanations like "TCP RST")
+// so the two semantics don't collide on a single column.
 type ConnectionEvent struct {
 	ID                uuid.UUID
 	TenantID          uuid.UUID
@@ -22,6 +27,7 @@ type ConnectionEvent struct {
 	DestinationPeerID uuid.UUID
 	EventType         string
 	Path              string
+	PrevPath          string
 	BytesSent         uint64
 	BytesReceived     uint64
 	RTTMs             uint32
@@ -57,12 +63,12 @@ func (r *ConnectionEvents) Insert(ctx context.Context, e *ConnectionEvent) error
 	return r.c.driver().Exec(ctx, `
 		INSERT INTO connection_events (
 		    id, tenant_id, occurred_at, source_peer_id, destination_peer_id,
-		    event_type, path, bytes_sent, bytes_received, rtt_ms,
+		    event_type, path, prev_path, bytes_sent, bytes_received, rtt_ms,
 		    reason, matched_rule_id
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		e.ID, e.TenantID, e.OccurredAt, e.SourcePeerID, e.DestinationPeerID,
-		e.EventType, e.Path, e.BytesSent, e.BytesReceived, e.RTTMs,
+		e.EventType, e.Path, e.PrevPath, e.BytesSent, e.BytesReceived, e.RTTMs,
 		e.Reason, e.MatchedRuleID,
 	)
 }
@@ -76,7 +82,7 @@ func (r *ConnectionEvents) InsertBatch(ctx context.Context, events []*Connection
 	batch, err := r.c.driver().PrepareBatch(ctx, `
 		INSERT INTO connection_events (
 		    id, tenant_id, occurred_at, source_peer_id, destination_peer_id,
-		    event_type, path, bytes_sent, bytes_received, rtt_ms,
+		    event_type, path, prev_path, bytes_sent, bytes_received, rtt_ms,
 		    reason, matched_rule_id
 		)`)
 	if err != nil {
@@ -93,7 +99,7 @@ func (r *ConnectionEvents) InsertBatch(ctx context.Context, events []*Connection
 		}
 		if err := batch.Append(
 			e.ID, e.TenantID, e.OccurredAt, e.SourcePeerID, e.DestinationPeerID,
-			e.EventType, e.Path, e.BytesSent, e.BytesReceived, e.RTTMs,
+			e.EventType, e.Path, e.PrevPath, e.BytesSent, e.BytesReceived, e.RTTMs,
 			e.Reason, e.MatchedRuleID,
 		); err != nil {
 			return fmt.Errorf("append: %w", err)
@@ -126,7 +132,7 @@ func (r *ConnectionEvents) ListByPeer(
 	}
 	rows, err := r.c.driver().Query(ctx, `
 		SELECT id, tenant_id, occurred_at, source_peer_id, destination_peer_id,
-		       event_type, path, bytes_sent, bytes_received, rtt_ms,
+		       event_type, path, prev_path, bytes_sent, bytes_received, rtt_ms,
 		       reason, matched_rule_id
 		  FROM connection_events
 		 WHERE tenant_id = ? AND source_peer_id = ? AND occurred_at >= ?
@@ -136,13 +142,13 @@ func (r *ConnectionEvents) ListByPeer(
 	if err != nil {
 		return nil, fmt.Errorf("query connection_events: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []*ConnectionEvent
 	for rows.Next() {
 		var e ConnectionEvent
 		if err := rows.Scan(
 			&e.ID, &e.TenantID, &e.OccurredAt, &e.SourcePeerID, &e.DestinationPeerID,
-			&e.EventType, &e.Path, &e.BytesSent, &e.BytesReceived, &e.RTTMs,
+			&e.EventType, &e.Path, &e.PrevPath, &e.BytesSent, &e.BytesReceived, &e.RTTMs,
 			&e.Reason, &e.MatchedRuleID,
 		); err != nil {
 			return nil, fmt.Errorf("scan: %w", err)

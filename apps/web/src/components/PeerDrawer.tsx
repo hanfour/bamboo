@@ -14,7 +14,7 @@ import {
  setPeerTagsAction,
 } from '@/lib/actions';
 import { useDialogA11y } from '@/hooks/useDialogA11y';
-import type { PeerConnectionEvent } from '@/lib/api';
+import type { PeerConnectionEvent, PeerConnectionPath } from '@/lib/api';
 import type { FetchResult, Peer, PeerEvent } from '@/lib/types';
 
 type Props = {
@@ -741,7 +741,7 @@ function ConnectionTimeline({ events }: { events: PeerConnectionEvent[] }) {
  return <p className="text-sm text-bamboo-200/60">{t('empty.connectionTimeline')}</p>;
  }
  return (
- <ol className="space-y-2">
+ <ol className="space-y-2" aria-label={t('sections.connectionTimeline')}>
  {events.map((e) => (
  <li
  key={e.id}
@@ -775,7 +775,7 @@ function ConnectionTimeline({ events }: { events: PeerConnectionEvent[] }) {
 // PathGlyph is the inline ⚡/🔄/? icon shared between this timeline
 // section and the table column. Mirrors PeerTable.tsx so admins
 // build one mental model for the two surfaces.
-function PathGlyph({ path, muted = false }: { path: string; muted?: boolean }) {
+function PathGlyph({ path, muted = false }: { path: PeerConnectionPath; muted?: boolean }) {
  const cls = muted ? 'text-bamboo-200/40' : 'text-bamboo-200/80';
  const glyph = path === 'direct' ? '⚡' : path === 'relay' ? '🔄' : '?';
  return (
@@ -785,10 +785,12 @@ function PathGlyph({ path, muted = false }: { path: string; muted?: boolean }) {
  );
 }
 
-// pathKey maps the controller's path string to a messages-JSON key.
-// Unknown values fall back to"unknown" so a future controller path
-// (e.g. quic-stream) doesn't crash the timeline before locale catches up.
-function pathKey(path: string): 'direct' | 'relay' | 'unknown' {
+// pathKey passes the controller's path through the i18n-key gate.
+// The wire type is already narrowed to PeerConnectionPath, but any
+// future widening at the type layer falls back to "unknown" here so
+// a new server-side value (e.g. quic-stream) doesn't crash the
+// timeline before the locales catch up.
+function pathKey(path: PeerConnectionPath): PeerConnectionPath {
  if (path === 'direct' || path === 'relay') return path;
  return 'unknown';
 }

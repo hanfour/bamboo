@@ -330,12 +330,19 @@ export async function fetchPeerEvents(id: string): Promise<PeerEvent[]> {
 // timeline. Mirrors the controller's apiPeerConnectionEventJSON in
 // api.go — kept here so PeerDrawer doesn't need to reach into the
 // raw API shape.
+//
+// path / prevPath are narrowed to the three values the controller's
+// CHECK constraint on peers.connection_path permits. Kept as a named
+// type rather than an inline `| string` union so callers can switch
+// over it without TypeScript widening to plain string.
+export type PeerConnectionPath = 'direct' | 'relay' | 'unknown';
+
 export type PeerConnectionEvent = {
   id: string;
   occurredAt: string;
   eventType: string;
-  path: 'direct' | 'relay' | 'unknown' | string;
-  prevPath?: 'direct' | 'relay' | 'unknown' | string;
+  path: PeerConnectionPath;
+  prevPath?: PeerConnectionPath;
   rttMs?: number;
 };
 

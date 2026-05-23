@@ -50,13 +50,13 @@ func TestConnectionEvents_ListByPeer(t *testing.T) {
 
 	now := time.Now().UTC().Truncate(time.Second)
 	rows := []*clickhouse.ConnectionEvent{
-		{TenantID: tenantID, OccurredAt: now.Add(-3 * time.Hour), SourcePeerID: peerA, EventType: "path_change", Path: "direct", Reason: ""},
-		{TenantID: tenantID, OccurredAt: now.Add(-2 * time.Hour), SourcePeerID: peerA, EventType: "path_change", Path: "relay", Reason: "direct"},
-		{TenantID: tenantID, OccurredAt: now.Add(-1 * time.Hour), SourcePeerID: peerA, EventType: "path_change", Path: "direct", Reason: "relay"},
+		{TenantID: tenantID, OccurredAt: now.Add(-3 * time.Hour), SourcePeerID: peerA, EventType: "path_change", Path: "direct", PrevPath: ""},
+		{TenantID: tenantID, OccurredAt: now.Add(-2 * time.Hour), SourcePeerID: peerA, EventType: "path_change", Path: "relay", PrevPath: "direct"},
+		{TenantID: tenantID, OccurredAt: now.Add(-1 * time.Hour), SourcePeerID: peerA, EventType: "path_change", Path: "direct", PrevPath: "relay"},
 		// Peer B's event — must not show up in peerA's timeline.
-		{TenantID: tenantID, OccurredAt: now.Add(-90 * time.Minute), SourcePeerID: peerB, EventType: "path_change", Path: "relay", Reason: "direct"},
+		{TenantID: tenantID, OccurredAt: now.Add(-90 * time.Minute), SourcePeerID: peerB, EventType: "path_change", Path: "relay", PrevPath: "direct"},
 		// Older-than-window peerA event — must be filtered by since.
-		{TenantID: tenantID, OccurredAt: now.Add(-48 * time.Hour), SourcePeerID: peerA, EventType: "path_change", Path: "unknown", Reason: ""},
+		{TenantID: tenantID, OccurredAt: now.Add(-48 * time.Hour), SourcePeerID: peerA, EventType: "path_change", Path: "unknown", PrevPath: ""},
 	}
 	if err := events.InsertBatch(ctx, rows); err != nil {
 		t.Fatalf("InsertBatch: %v", err)
@@ -69,11 +69,16 @@ func TestConnectionEvents_ListByPeer(t *testing.T) {
 	if len(got) != 3 {
 		t.Fatalf("got %d events, want 3 (peerB filtered out, 48h-old row outside since window)", len(got))
 	}
-	// Newest-first ordering: paths should arrive direct, relay, direct.
+	// Newest-first ordering: path / prev_path should arrive in the
+	// inverse insert order — third, second, first.
 	wantPaths := []string{"direct", "relay", "direct"}
+	wantPrev := []string{"relay", "direct", ""}
 	for i, e := range got {
 		if e.Path != wantPaths[i] {
 			t.Errorf("got[%d].Path = %q, want %q", i, e.Path, wantPaths[i])
+		}
+		if e.PrevPath != wantPrev[i] {
+			t.Errorf("got[%d].PrevPath = %q, want %q (must round-trip through the prev_path column, not reason)", i, e.PrevPath, wantPrev[i])
 		}
 		if e.SourcePeerID != peerA {
 			t.Errorf("got[%d].SourcePeerID = %v, want peerA", i, e.SourcePeerID)

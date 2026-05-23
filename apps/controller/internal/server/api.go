@@ -1470,7 +1470,7 @@ func (h *HTTPServer) apiPeerConnectionEvents(w http.ResponseWriter, r *http.Requ
 			OccurredAt: e.OccurredAt,
 			EventType:  e.EventType,
 			Path:       e.Path,
-			PrevPath:   e.Reason,
+			PrevPath:   e.PrevPath,
 			RTTMs:      e.RTTMs,
 		})
 	}

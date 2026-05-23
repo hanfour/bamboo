@@ -234,15 +234,19 @@ func (h *HTTPServer) apiPeersRegister(w http.ResponseWriter, r *http.Request) {
 //
 //   - source_peer_id      = the peer that transitioned
 //   - destination_peer_id = uuid.Nil — path is a peer-wide property,
-//                           not per-link, so we don't synthesize a
-//                           specific destination
+//     not per-link, so we don't synthesize a
+//     specific destination
 //   - event_type          = "path_change"
 //   - path                = the new path string
-//   - reason              = the prior path string (empty when this
-//                           is the first observation), letting the
-//                           UI render "direct ← relay" style labels
+//   - prev_path           = the prior path string (empty when this
+//     is the first observation), letting the
+//     UI render "direct ← relay" style labels.
+//     Kept as its own column rather than packed
+//     into `reason` so future event_types that
+//     write free-form explanations (e.g.
+//     "TCP RST") to reason don't collide.
 //   - rtt_ms              = the latency reported alongside the new
-//                           path (0 ⇒ unknown)
+//     path (0 ⇒ unknown)
 //
 // Failures are logged but do not propagate to the heartbeat
 // response — admin-visibility data must not knock real clients
@@ -254,6 +258,10 @@ func (h *HTTPServer) apiPeersRegister(w http.ResponseWriter, r *http.Request) {
 // Idempotency: the caller already filtered out latency-only updates
 // at the repo layer (SetConnectionPath returns pathChanged=false
 // for those), so every row reaching this helper is a real flip.
+//
+// latencyMs is clamped to >=0 before the unsigned cast: a buggy
+// client reporting a negative RTT must not wrap into ~4 billion ms
+// in CH and pollute the timeline.
 func (h *HTTPServer) logPathTransition(ctx context.Context, peerID uuid.UUID, prevPath, newPath string, latencyMs int32) {
 	if h.connEvents == nil {
 		return
@@ -263,14 +271,18 @@ func (h *HTTPServer) logPathTransition(ctx context.Context, peerID uuid.UUID, pr
 		slog.Warn("path transition: peer lookup failed", "peer_id", peerID, "err", err)
 		return
 	}
+	rtt := uint32(0)
+	if latencyMs > 0 {
+		rtt = uint32(latencyMs) //nolint:gosec // positive int32 always fits in uint32
+	}
 	if err := h.connEvents.Insert(ctx, &clickhouse.ConnectionEvent{
 		TenantID:          peer.TenantID,
 		SourcePeerID:      peerID,
 		DestinationPeerID: uuid.Nil,
 		EventType:         "path_change",
 		Path:              newPath,
-		Reason:            prevPath,
-		RTTMs:             uint32(latencyMs), //nolint:gosec // bounded by repo CHECK constraint
+		PrevPath:          prevPath,
+		RTTMs:             rtt,
 	}); err != nil {
 		slog.Warn("path transition: clickhouse insert failed", "peer_id", peerID, "err", err)
 	}
