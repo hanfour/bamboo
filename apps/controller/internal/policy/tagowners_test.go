@@ -3,6 +3,7 @@
 package policy_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/hanfour/bamboo/apps/controller/internal/policy"
@@ -120,6 +121,209 @@ rule "open" {
 }`)
 	if !p.CanAssignTag("tag:dev", "Alice@Example.COM") {
 		t.Error("email compare should be case-insensitive")
+	}
+}
+
+// TestParse_GroupsBlock verifies that the optional `groups`
+// block decodes into Policy.Groups with the raw "group:NAME" keys
+// preserved (the lookup path expects them in that form).
+func TestParse_GroupsBlock(t *testing.T) {
+	src := `
+groups = {
+  "group:engineering" = ["alice@example.com", "bob@example.com"]
+  "group:ops"         = ["carol@example.com"]
+}
+
+tagOwners = {
+  "tag:prod" = ["group:engineering", "group:ops"]
+}
+
+rule "open" {
+  action       = "allow"
+  sources      = ["*"]
+  destinations = ["*:*"]
+}`
+	p, err := policy.Parse("test.hcl", src)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if got := len(p.Groups); got != 2 {
+		t.Errorf("len(Groups) = %d, want 2; got map = %v", got, p.Groups)
+	}
+	if got := p.Groups["group:engineering"]; len(got) != 2 || got[0] != "alice@example.com" {
+		t.Errorf("group:engineering members = %v, want [alice bob]", got)
+	}
+}
+
+// TestCanAssignTag_GroupExpansion is the happy path for §3a group
+// references: tagOwners lists "group:engineering" and alice is a
+// member of that group, so she may assign the tag even though her
+// email never appears in tagOwners directly.
+func TestCanAssignTag_GroupExpansion(t *testing.T) {
+	p := mustParse(t, `
+groups = {
+  "group:engineering" = ["alice@example.com", "bob@example.com"]
+}
+tagOwners = {
+  "tag:dev" = ["group:engineering"]
+}
+rule "open" {
+  action       = "allow"
+  sources      = ["*"]
+  destinations = ["*:*"]
+}`)
+	if !p.CanAssignTag("tag:dev", "alice@example.com") {
+		t.Error("alice (group:engineering member) should be allowed")
+	}
+	if !p.CanAssignTag("tag:dev", "bob@example.com") {
+		t.Error("bob (group:engineering member) should be allowed")
+	}
+	if p.CanAssignTag("tag:dev", "outsider@example.com") {
+		t.Error("non-member should NOT be allowed via the group reference")
+	}
+}
+
+// TestCanAssignTag_GroupAndLiteralMix verifies that a tagOwners
+// row carrying both a group reference AND a literal email is
+// permissive in either lane: the literal admin still passes even
+// though they're not in any group.
+func TestCanAssignTag_GroupAndLiteralMix(t *testing.T) {
+	p := mustParse(t, `
+groups = {
+  "group:engineering" = ["alice@example.com"]
+}
+tagOwners = {
+  "tag:prod" = ["group:engineering", "ceo@example.com"]
+}
+rule "open" {
+  action       = "allow"
+  sources      = ["*"]
+  destinations = ["*:*"]
+}`)
+	if !p.CanAssignTag("tag:prod", "alice@example.com") {
+		t.Error("alice (engineering) should be allowed via group")
+	}
+	if !p.CanAssignTag("tag:prod", "ceo@example.com") {
+		t.Error("ceo (literal entry) should be allowed alongside groups")
+	}
+	if p.CanAssignTag("tag:prod", "intern@example.com") {
+		t.Error("non-member, non-literal should NOT be allowed")
+	}
+}
+
+// TestCanAssignTag_GroupExpansionCaseInsensitive carries the
+// case-insensitive email-compare contract through the group
+// expansion path. Same rationale as TestCanAssignTag_CaseInsensitive
+// Email above.
+func TestCanAssignTag_GroupExpansionCaseInsensitive(t *testing.T) {
+	p := mustParse(t, `
+groups = {
+  "group:engineering" = ["alice@example.com"]
+}
+tagOwners = {
+  "tag:dev" = ["group:engineering"]
+}
+rule "open" {
+  action       = "allow"
+  sources      = ["*"]
+  destinations = ["*:*"]
+}`)
+	if !p.CanAssignTag("tag:dev", "Alice@Example.COM") {
+		t.Error("group expansion must remain case-insensitive on email compare")
+	}
+}
+
+// TestCanAssignTag_GroupWildcardMember verifies that a "*" entry
+// inside a group's member list keeps the wildcard semantics — the
+// group becomes "any authenticated tenant member" at expansion
+// time. Niche but consistent with how "*" works at the tagOwners
+// top level.
+func TestCanAssignTag_GroupWildcardMember(t *testing.T) {
+	p := mustParse(t, `
+groups = {
+  "group:any" = ["*"]
+}
+tagOwners = {
+  "tag:open" = ["group:any"]
+}
+rule "open" {
+  action       = "allow"
+  sources      = ["*"]
+  destinations = ["*:*"]
+}`)
+	if !p.CanAssignTag("tag:open", "anyone@example.com") {
+		t.Error("group member \"*\" should open the tag to any caller")
+	}
+}
+
+// TestParse_RejectsUndefinedGroupReference verifies the cross-
+// document validator: a tagOwners entry referencing a group that
+// isn't defined in the groups map fails Parse so the bad policy
+// never lands as a new revision. The diagnostic message names both
+// sides so the operator can fix the typo.
+func TestParse_RejectsUndefinedGroupReference(t *testing.T) {
+	src := `
+groups = {
+  "group:engineering" = ["alice@example.com"]
+}
+tagOwners = {
+  "tag:dev" = ["group:nonexistent"]
+}
+rule "open" {
+  action       = "allow"
+  sources      = ["*"]
+  destinations = ["*:*"]
+}`
+	_, err := policy.Parse("test.hcl", src)
+	if err == nil {
+		t.Fatal("expected Parse to reject undefined group reference, got nil")
+	}
+	if msg := err.Error(); !strings.Contains(msg, "group:nonexistent") {
+		t.Errorf("error %q should name the missing group; got: %s", msg, msg)
+	}
+}
+
+// TestParse_RejectsGroupKeyMissingPrefix verifies the parser
+// rejects a groups map key that doesn't start with "group:" —
+// without the prefix the lookup-time expansion can't tell apart
+// group references from raw emails. Loud at parse time beats a
+// silent-mismatch at policy-eval time.
+func TestParse_RejectsGroupKeyMissingPrefix(t *testing.T) {
+	src := `
+groups = {
+  "engineering" = ["alice@example.com"]
+}
+rule "open" {
+  action       = "allow"
+  sources      = ["*"]
+  destinations = ["*:*"]
+}`
+	_, err := policy.Parse("test.hcl", src)
+	if err == nil {
+		t.Fatal("expected Parse to reject group key without prefix, got nil")
+	}
+	if msg := err.Error(); !strings.Contains(msg, "group:") {
+		t.Errorf("error %q should mention the required group: prefix", msg)
+	}
+}
+
+// TestCanAssignTag_UndefinedGroupAtLookupTimeDenies pins the
+// defensive lookup-time behaviour: if Parse-time validation is
+// somehow bypassed (e.g. an older serialized Policy is wired up
+// in tests without going through Parse), an undefined group at
+// lookup time degrades to "zero members" rather than panicking
+// or accidentally allowing.
+func TestCanAssignTag_UndefinedGroupAtLookupTimeDenies(t *testing.T) {
+	p := &policy.Policy{
+		TagOwners: map[string][]string{
+			"tag:dev": {"group:phantom"},
+		},
+		// Groups deliberately left nil — Parse would reject this
+		// shape, but this test exercises CanAssignTag's defensive
+		// path directly.
+	}
+	if p.CanAssignTag("tag:dev", "alice@example.com") {
+		t.Error("CanAssignTag must NOT allow when the only owner is an undefined group")
 	}
 }
 

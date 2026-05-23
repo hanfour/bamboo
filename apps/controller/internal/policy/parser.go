@@ -17,6 +17,14 @@ import (
 type rawDocument struct {
 	Rules     []rawRule           `hcl:"rule,block"`
 	TagOwners map[string][]string `hcl:"tagOwners,optional"`
+	// Groups maps a "group:NAME" key to the email list of its
+	// members (issue #139 follow-up, §3a roadmap). Used to expand
+	// "group:NAME" references inside tagOwners owner lists at
+	// lookup time. Flat by design — a group may not reference
+	// another group in v1. Optional; absent ⇒ TagOwners owner
+	// lists must list emails (or "*") directly, matching pre-
+	// #139-follow-up behaviour.
+	Groups map[string][]string `hcl:"groups,optional"`
 }
 
 type rawRule struct {
@@ -47,6 +55,7 @@ func Parse(filename string, source string) (*Policy, error) {
 	out := &Policy{
 		Rules:     make([]Rule, 0, len(doc.Rules)),
 		TagOwners: doc.TagOwners,
+		Groups:    doc.Groups,
 	}
 	var errs hcl.Diagnostics
 
@@ -58,10 +67,56 @@ func Parse(filename string, source string) (*Policy, error) {
 		}
 	}
 
+	// groups + tagOwners cross-validation. Two classes of issue we
+	// surface as Parse errors (rather than ignoring at lookup time)
+	// because a policy with a typo'd group reference is almost
+	// certainly a mistake the operator wants to know about before
+	// PutPolicy commits the revision:
+	//
+	//  1. A "group:NAME" entry in tagOwners that doesn't have a
+	//     matching definition in the groups map.
+	//  2. A groups map key that doesn't start with the "group:"
+	//     prefix (e.g. just "engineering"). Without the prefix the
+	//     parser can't tell apart group references from raw emails
+	//     in owner lists, so reject loudly at parse time.
+	errs = append(errs, validateGroupsAndTagOwners(out.Groups, out.TagOwners)...)
+
 	if errs.HasErrors() {
 		return nil, errs
 	}
 	return out, nil
+}
+
+// validateGroupsAndTagOwners runs the cross-document checks that
+// rawDocument's decoder can't express on its own.
+func validateGroupsAndTagOwners(groups, tagOwners map[string][]string) hcl.Diagnostics {
+	var diags hcl.Diagnostics
+	for k := range groups {
+		if !strings.HasPrefix(k, "group:") || strings.TrimPrefix(k, "group:") == "" {
+			diags = append(diags, &hcl.Diagnostic{
+				Severity: hcl.DiagError,
+				Summary:  "invalid group key",
+				Detail: fmt.Sprintf("groups[%q]: keys must start with the \"group:\" "+
+					"prefix and have a non-empty name (e.g. \"group:engineering\")", k),
+			})
+		}
+	}
+	for tag, owners := range tagOwners {
+		for _, o := range owners {
+			if !strings.HasPrefix(o, "group:") {
+				continue
+			}
+			if _, ok := groups[o]; !ok {
+				diags = append(diags, &hcl.Diagnostic{
+					Severity: hcl.DiagError,
+					Summary:  "undefined group in tagOwners",
+					Detail: fmt.Sprintf("tagOwners[%q] references %q, but no such "+
+						"group is defined in the groups block", tag, o),
+				})
+			}
+		}
+	}
+	return diags
 }
 
 // parseRule converts a rawRule into a Rule, returning diagnostics for
