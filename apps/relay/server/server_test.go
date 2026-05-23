@@ -114,6 +114,60 @@ func TestRelay_PeerGoneWhenDestUnknown(t *testing.T) {
 	}
 }
 
+// TestRelay_PeerGoneDedupesPerSession asserts that repeated PACKET
+// frames addressed to the same offline dst produce only ONE PEER_GONE
+// — every subsequent packet to the same offline dst is silently
+// dropped. Without this dedupe, every WireGuard handshake retry
+// (~every 5s) to an offline peer floods the sender with the same
+// notification frame; the receiver's log fills with "relay reports
+// peer gone <prefix>" lines that all carry no new information.
+func TestRelay_PeerGoneDedupesPerSession(t *testing.T) {
+	srv := server.New(server.Options{AllowNoAuth: true})
+	ts := httptest.NewServer(http.HandlerFunc(srv.HandleRelay))
+	defer ts.Close()
+
+	wsURL := strings.Replace(ts.URL, "http://", "ws://", 1) + "/relay"
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var keyA, keyMissing [server.PubKeyLen]byte
+	for i := range keyA {
+		keyA[i] = 0xA0 | byte(i)
+		keyMissing[i] = byte(i)
+	}
+
+	conn := dial(t, ctx, wsURL, keyA)
+	defer conn.Close(websocket.StatusNormalClosure, "test done")
+
+	// Send 3 PACKETs to the missing dst.
+	for i := 0; i < 3; i++ {
+		frame, _ := server.Encode(server.EncodePacket(keyMissing, []byte("ignored")))
+		if err := conn.Write(ctx, websocket.MessageBinary, frame); err != nil {
+			t.Fatalf("write %d: %v", i, err)
+		}
+	}
+
+	// Expect exactly ONE PEER_GONE back. The simplest "exactly one"
+	// assertion: read one PEER_GONE, then try a short read for a
+	// second one and expect a timeout (no extra frames).
+	_, raw, err := conn.Read(ctx)
+	if err != nil {
+		t.Fatalf("read first peer_gone: %v", err)
+	}
+	got, err := server.Decode(raw)
+	if err != nil || got.Type != server.TypePeerGone {
+		t.Fatalf("got type 0x%02x err=%v; want PEER_GONE", got.Type, err)
+	}
+
+	shortCtx, shortCancel := context.WithTimeout(ctx, 200*time.Millisecond)
+	defer shortCancel()
+	if _, raw2, err := conn.Read(shortCtx); err == nil {
+		t.Errorf("expected no second frame (deduped); got %d bytes type=0x%02x",
+			len(raw2), raw2[4])
+	}
+}
+
 // dial opens a websocket to the relay, sends CLIENT_HELLO, waits for
 // SERVER_HELLO, and returns the live connection ready for app frames.
 func dial(t *testing.T, ctx context.Context, url string, key [server.PubKeyLen]byte) *websocket.Conn {
