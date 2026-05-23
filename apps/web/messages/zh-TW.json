@@ -278,6 +278,11 @@
       "current": "目前",
       "viewSource": "檢視原始碼",
       "hideSource": "收合",
+      "viewDiff": "與目前版本比對",
+      "hideDiff": "收合比對",
+      "diffOldLabel": "r{revision}",
+      "diffNewLabel": "r{revision}（目前）",
+      "diffEmpty": "兩個版本皆為空。",
       "rollback": "Rollback",
       "rollingBack": "處理中…",
       "rollbackSameAsCurrent": "與目前版本內容相同，無需 rollback"

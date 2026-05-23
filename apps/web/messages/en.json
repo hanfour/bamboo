@@ -278,6 +278,11 @@
       "current": "Current",
       "viewSource": "View source",
       "hideSource": "Hide",
+      "viewDiff": "Diff vs current",
+      "hideDiff": "Hide diff",
+      "diffOldLabel": "r{revision}",
+      "diffNewLabel": "r{revision} (current)",
+      "diffEmpty": "Both revisions are empty.",
       "rollback": "Rollback",
       "rollingBack": "Rolling back…",
       "rollbackSameAsCurrent": "Same content as current — nothing to roll back"
