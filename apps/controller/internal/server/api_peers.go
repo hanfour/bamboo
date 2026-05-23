@@ -86,6 +86,12 @@ type peerJSON struct {
 	// learn if they are queued. Empty in legacy responses pre-#133;
 	// clients should treat empty as approved for back-compat.
 	ApprovalStatus string `json:"approvalStatus,omitempty"`
+	// Tags are the peer's labels from the peer_tags join table.
+	// Surfaced here so SSE peer_updated events carry tag changes
+	// without forcing subscribers into a follow-up re-register;
+	// also makes the Register response's peers[].tags symmetric
+	// with the REST GET /api/v1/peers/{id} shape.
+	Tags []string `json:"tags,omitempty"`
 }
 
 type peerRegisterResponse struct {
@@ -488,6 +494,7 @@ func protoPeerToJSON(p *bamboov1.Peer) peerJSON {
 		PeerDNSName:        p.GetPeerDnsName(),
 		AllowedIps:         p.GetAllowedIps(),
 		ApprovalStatus:     p.GetApprovalStatus(),
+		Tags:               p.GetTags(),
 	}
 }
 
