@@ -57,6 +57,18 @@ public struct BambooClient {
         public var preAuthKeySecret: String?
         public var tenantSlug: String?
         public var endpoints: [String]?
+        /// CIDRs the peer wants to expose to the tailnet (issue #136
+        /// subnet router). Omitted when nil so legacy deployments
+        /// without #136 columns see the unchanged wire shape; the
+        /// admin still must approve a subset before they merge into
+        /// other peers' allowed_ips.
+        public var advertisedRoutes: [String]?
+        /// True when the peer wants to be considered as an exit-node
+        /// candidate (issue #137). Omitted when nil — same legacy
+        /// argument as advertisedRoutes; the admin still has to flip
+        /// `exit_node_approved` server-side before any peer routes
+        /// its default through this one.
+        public var advertiseExitNode: Bool?
     }
 
     public struct PeerJSON: Codable, Equatable {

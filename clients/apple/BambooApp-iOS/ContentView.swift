@@ -126,6 +126,16 @@ private struct SettingsView: View {
                         .autocorrectionDisabled()
                         .keyboardType(.URL)
                 }
+                Section {
+                    TextField("10.0.0.0/24, 192.168.86.0/24", text: $connection.advertiseRoutes)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                    Toggle("Offer this device as an exit node", isOn: $connection.advertiseExitNode)
+                } header: {
+                    Text("Advertise")
+                } footer: {
+                    Text("Subnet routes + exit-node still require admin approval before traffic reaches them.")
+                }
                 Section("Device") {
                     TextField("Hostname", text: $connection.hostname)
                         .textInputAutocapitalization(.never)
