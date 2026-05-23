@@ -99,6 +99,19 @@ func (h *HTTPServer) routeAPI(w http.ResponseWriter, r *http.Request) {
 			h.apiPeerEvents(w, r, tenant, id)
 			return
 		}
+		// "{id}/connection-events" — per-peer connection-path
+		// transition timeline (issue #138 v2). Backed by ClickHouse
+		// connection_events rolled-window storage. Read-only; the
+		// rows are written by the heartbeat handler when a peer
+		// reports a path different from its prior persisted value.
+		if id, found := strings.CutSuffix(rest, "/connection-events"); found && id != "" && !strings.Contains(id, "/") {
+			if r.Method != http.MethodGet {
+				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+				return
+			}
+			h.apiPeerConnectionEvents(w, r, tenant, id)
+			return
+		}
 		// "{id}/approve" — admin gates a pending peer into the mesh
 		// (issue #133). POST-only; requireAdmin is enforced inside the
 		// handler. Idempotent: re-approving an already-approved peer
@@ -1381,6 +1394,85 @@ func (h *HTTPServer) apiPeerEvents(w http.ResponseWriter, r *http.Request, tenan
 	out := make([]apiAuditEventJSON, 0, len(events))
 	for _, e := range events {
 		out = append(out, auditEventToJSON(e))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"events": out})
+}
+
+// apiPeerConnectionEventJSON is one row from
+// /api/v1/peers/{id}/connection-events (issue #138 v2). Mirrors the
+// ClickHouse connection_events row but stripped to the fields the
+// timeline UI consumes — bytes / matched_rule_id are reserved for
+// future event_type values and currently always zero / empty.
+type apiPeerConnectionEventJSON struct {
+	ID         string    `json:"id"`
+	OccurredAt time.Time `json:"occurredAt"`
+	EventType  string    `json:"eventType"`
+	Path       string    `json:"path"`
+	PrevPath   string    `json:"prevPath,omitempty"`
+	RTTMs      uint32    `json:"rttMs,omitempty"`
+}
+
+// apiPeerConnectionEvents implements
+// GET /api/v1/peers/{id}/connection-events?since=...&limit=...
+//
+// Returns the rolling-window timeline of path_change events for the
+// peer (issue #138 v2). Newest-first. since defaults to 24h ago when
+// omitted, limit defaults to 50 and caps at 200. ClickHouse may not
+// be configured (dev / self-hosted small deploys); in that case the
+// endpoint returns an empty list rather than a 5xx, matching how
+// /api/v1/logs degrades.
+//
+// Tenant scoping mirrors apiPeerEvents — the peer row is fetched
+// first so cross-tenant probing returns 404 before the ClickHouse
+// query runs.
+func (h *HTTPServer) apiPeerConnectionEvents(w http.ResponseWriter, r *http.Request, tenant *repo.Tenant, idStr string) {
+	id, err := uuid.Parse(idStr)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	p, err := h.peers.GetByID(r.Context(), id)
+	if errors.Is(err, repo.ErrNotFound) {
+		http.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if p.TenantID != tenant.ID {
+		http.NotFound(w, r)
+		return
+	}
+
+	since := time.Now().Add(-24 * time.Hour)
+	if v := r.URL.Query().Get("since"); v != "" {
+		if t, perr := time.Parse(time.RFC3339, v); perr == nil {
+			since = t
+		}
+	}
+	limit := 50
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, perr := strconv.Atoi(v); perr == nil && n > 0 {
+			limit = n
+		}
+	}
+
+	events, err := h.connEvents.ListByPeer(r.Context(), tenant.ID, id, since, limit)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	out := make([]apiPeerConnectionEventJSON, 0, len(events))
+	for _, e := range events {
+		out = append(out, apiPeerConnectionEventJSON{
+			ID:         e.ID.String(),
+			OccurredAt: e.OccurredAt,
+			EventType:  e.EventType,
+			Path:       e.Path,
+			PrevPath:   e.Reason,
+			RTTMs:      e.RTTMs,
+		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"events": out})
 }

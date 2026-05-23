@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/hanfour/bamboo/apps/controller/internal/auth"
+	"github.com/hanfour/bamboo/apps/controller/internal/clickhouse"
 	bamboov1 "github.com/hanfour/bamboo/proto/gen/go/bamboo/v1"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
@@ -227,6 +228,54 @@ func (h *HTTPServer) apiPeersRegister(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
+// logPathTransition writes a path_change row to connection_events
+// when a heartbeat reports a connection path different from the one
+// persisted on the peer row (issue #138 v2). The row carries:
+//
+//   - source_peer_id      = the peer that transitioned
+//   - destination_peer_id = uuid.Nil — path is a peer-wide property,
+//                           not per-link, so we don't synthesize a
+//                           specific destination
+//   - event_type          = "path_change"
+//   - path                = the new path string
+//   - reason              = the prior path string (empty when this
+//                           is the first observation), letting the
+//                           UI render "direct ← relay" style labels
+//   - rtt_ms              = the latency reported alongside the new
+//                           path (0 ⇒ unknown)
+//
+// Failures are logged but do not propagate to the heartbeat
+// response — admin-visibility data must not knock real clients
+// offline. The tenant_id lookup goes through peers.GetByID rather
+// than re-using the heartbeat request, since the request body
+// doesn't carry it; clients are not required to know their tenant
+// UUID at heartbeat time.
+//
+// Idempotency: the caller already filtered out latency-only updates
+// at the repo layer (SetConnectionPath returns pathChanged=false
+// for those), so every row reaching this helper is a real flip.
+func (h *HTTPServer) logPathTransition(ctx context.Context, peerID uuid.UUID, prevPath, newPath string, latencyMs int32) {
+	if h.connEvents == nil {
+		return
+	}
+	peer, err := h.peers.GetByID(ctx, peerID)
+	if err != nil {
+		slog.Warn("path transition: peer lookup failed", "peer_id", peerID, "err", err)
+		return
+	}
+	if err := h.connEvents.Insert(ctx, &clickhouse.ConnectionEvent{
+		TenantID:          peer.TenantID,
+		SourcePeerID:      peerID,
+		DestinationPeerID: uuid.Nil,
+		EventType:         "path_change",
+		Path:              newPath,
+		Reason:            prevPath,
+		RTTMs:             uint32(latencyMs), //nolint:gosec // bounded by repo CHECK constraint
+	}); err != nil {
+		slog.Warn("path transition: clickhouse insert failed", "peer_id", peerID, "err", err)
+	}
+}
+
 // mintPeerSession issues a peer-bound bearer token derived from the
 // Register response. Pulls tenant_id + peer_id from the response (the
 // authoritative source after IP allocation) and the wireguard pubkey
@@ -312,7 +361,17 @@ func (h *HTTPServer) apiPeersHeartbeat(w http.ResponseWriter, r *http.Request) {
 		case "direct", "relay", "unknown":
 			peerID, perr := uuid.Parse(body.PeerID)
 			if perr == nil {
-				_, _ = h.peers.SetConnectionPath(r.Context(), peerID, body.ConnectionPath, body.LatencyMs)
+				prevPath, pathChanged, _ := h.peers.SetConnectionPath(
+					r.Context(), peerID, body.ConnectionPath, body.LatencyMs,
+				)
+				// Log a path_change row to connection_events ONLY on
+				// real path transitions (issue #138 v2 timeline).
+				// Latency-only updates are filtered out at the repo
+				// layer so the timeline doesn't get drowned out by
+				// RTT flicker.
+				if pathChanged {
+					h.logPathTransition(r.Context(), peerID, prevPath, body.ConnectionPath, body.LatencyMs)
+				}
 			}
 		}
 	}

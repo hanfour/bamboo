@@ -5,7 +5,14 @@ import { NewPeerButton } from '@/components/NewPeerButton';
 import { PeersView } from '@/components/PeersView';
 import { FetchErrorState } from '@/components/FetchErrorState';
 import { Link } from '@/i18n/routing';
-import { fetchMe, fetchPeer, fetchPeerEvents, fetchPeers } from '@/lib/api';
+import {
+ fetchMe,
+ fetchPeer,
+ fetchPeerConnectionEvents,
+ fetchPeerEvents,
+ fetchPeers,
+ type PeerConnectionEvent,
+} from '@/lib/api';
 import type { FetchResult, Peer, PeerEvent } from '@/lib/types';
 
 type SearchParams = { selected?: string };
@@ -17,10 +24,11 @@ export default async function PeersPage({
  searchParams: Promise<SearchParams>;
 }) {
  const { selected } = await searchParams;
- const [peers, selectedPeer, selectedEvents, me] = await Promise.all([
+ const [peers, selectedPeer, selectedEvents, selectedConnectionEvents, me] = await Promise.all([
  fetchPeers(),
  selected ? fetchPeer(selected) : Promise.resolve(null),
  selected ? fetchPeerEvents(selected) : Promise.resolve([]),
+ selected ? fetchPeerConnectionEvents(selected) : Promise.resolve([] as PeerConnectionEvent[]),
  fetchMe(),
  ]);
 
@@ -37,6 +45,7 @@ export default async function PeersPage({
  peers={peers.value}
  selectedPeer={selectedPeer}
  selectedEvents={selectedEvents}
+ selectedConnectionEvents={selectedConnectionEvents}
  selectedId={selected}
  tenantSlug={me.tenantSlug}
  />
@@ -47,12 +56,14 @@ function Peers({
  peers,
  selectedPeer,
  selectedEvents,
+ selectedConnectionEvents,
  selectedId,
  tenantSlug,
 }: {
  peers: Peer[];
  selectedPeer: FetchResult<Peer> | null;
  selectedEvents: PeerEvent[];
+ selectedConnectionEvents: PeerConnectionEvent[];
  selectedId?: string;
  tenantSlug: string;
 }) {
@@ -84,6 +95,7 @@ function Peers({
  peers={peers}
  selectedPeer={selectedPeer}
  selectedEvents={selectedEvents}
+ selectedConnectionEvents={selectedConnectionEvents}
  selectedId={selectedId}
  />
  </div>

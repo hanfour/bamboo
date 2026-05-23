@@ -4,12 +4,14 @@ package repo
 
 import (
 	"context"
+	"errors"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/hanfour/bamboo/apps/controller/internal/db"
+	"github.com/jackc/pgx/v5"
 )
 
 // Peers is the repository for peers table.
@@ -643,31 +645,58 @@ func (r *Peers) SetUsingExitNode(ctx context.Context, id uuid.UUID, targetID *uu
 // is optional — pass 0 to leave the column NULL (clients without
 // a measurement do this on every heartbeat).
 //
-// Returns true when the path or latency actually changed (so the
-// caller can decide whether to publish a watch event); a no-op
-// update where both columns matched the prior row returns (false,
-// nil) without an error.
-func (r *Peers) SetConnectionPath(ctx context.Context, id uuid.UUID, path string, latencyMs int32) (bool, error) {
+// Returns the *previous* path string (empty when no prior value
+// existed, or when the row didn't move because nothing changed) and
+// whether the *path* value transitioned to something different. The
+// previous-path signal is what powers the #138 v2 connection-event
+// timeline — a latency-only update keeps the path the same and so
+// must NOT log a timeline row, otherwise normal RTT flicker would
+// drown out real direct↔relay flips.
+//
+// "pathChanged" is true iff the path string is now different from
+// what was persisted before. A latency-only update returns false; a
+// no-op update where both columns matched also returns false.
+func (r *Peers) SetConnectionPath(ctx context.Context, id uuid.UUID, path string, latencyMs int32) (prevPath string, pathChanged bool, err error) {
 	var latencyArg any
 	if latencyMs > 0 {
 		latencyArg = latencyMs
 	}
-	tag, err := r.pool.Exec(ctx, `
+	// CTE captures the pre-update value (NULL → empty string via
+	// COALESCE) before the UPDATE runs, then RETURNING surfaces both
+	// the old value and the changed flag in one round-trip. The
+	// FROM-clause join is how we pull the CTE row into the UPDATE
+	// scope so RETURNING can reference it.
+	var prev string
+	var changed bool
+	err = r.pool.QueryRow(ctx, `
+		WITH old AS (
+		    SELECT COALESCE(connection_path, '') AS prev_path
+		      FROM peers
+		     WHERE id = $1
+		)
 		UPDATE peers
 		   SET connection_path        = $2,
 		       connection_path_at     = now(),
 		       connection_latency_ms  = $3,
 		       updated_at             = now()
-		 WHERE id = $1
+		  FROM old
+		 WHERE peers.id = $1
 		   AND (
-		     connection_path IS DISTINCT FROM $2
-		     OR connection_latency_ms IS DISTINCT FROM $3
+		       connection_path IS DISTINCT FROM $2
+		    OR connection_latency_ms IS DISTINCT FROM $3
 		   )
-	`, id, path, latencyArg)
-	if err != nil {
-		return false, err
+		RETURNING old.prev_path, (old.prev_path IS DISTINCT FROM $2)
+	`, id, path, latencyArg).Scan(&prev, &changed)
+	if errors.Is(err, pgx.ErrNoRows) {
+		// Either the peer row is missing, or nothing changed at all
+		// (the WHERE clause filtered out the UPDATE). Both shapes
+		// surface as the same "nothing to log" signal to the caller.
+		return "", false, nil
 	}
-	return tag.RowsAffected() > 0, nil
+	if err != nil {
+		return "", false, err
+	}
+	return prev, changed, nil
 }
 
 // Approve flips a peer from approval_status='pending' to 'approved'

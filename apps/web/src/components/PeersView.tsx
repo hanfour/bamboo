@@ -4,6 +4,7 @@
 
 import { useCallback } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
+import type { PeerConnectionEvent } from '@/lib/api';
 import type { FetchResult, Peer, PeerEvent } from '@/lib/types';
 import { PeerTable } from './PeerTable';
 import { PeerDrawer } from './PeerDrawer';
@@ -13,6 +14,7 @@ type Props = {
   peers: Peer[];
   selectedPeer: FetchResult<Peer> | null;
   selectedEvents: PeerEvent[];
+  selectedConnectionEvents: PeerConnectionEvent[];
   selectedId?: string;
 };
 
@@ -25,7 +27,13 @@ type Props = {
 // are pulled out into PendingPeersList above the main table. Rejected
 // peers are filtered out of the active table — the audit trail keeps
 // the row, but it doesn't belong in the active-membership view.
-export function PeersView({ peers, selectedPeer, selectedEvents, selectedId }: Props) {
+export function PeersView({
+  peers,
+  selectedPeer,
+  selectedEvents,
+  selectedConnectionEvents,
+  selectedId,
+}: Props) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -56,6 +64,7 @@ export function PeersView({ peers, selectedPeer, selectedEvents, selectedId }: P
       <PeerDrawer
         peerResult={selectedPeer}
         events={selectedEvents}
+        connectionEvents={selectedConnectionEvents}
         open={open}
         onClose={() => setSelected(null)}
         onDeleted={() => setSelected(null)}

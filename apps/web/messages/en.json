@@ -123,6 +123,7 @@
         "timestamps": "Timestamps",
         "advertise": "Advertised",
         "actions": "Actions",
+        "connectionTimeline": "Connection path",
         "timeline": "Activity"
       },
       "advertise": {
@@ -170,7 +171,15 @@
         "endpoints": "No endpoints reported yet",
         "tags": "No tags",
         "noHandshake": "No handshake yet",
-        "timeline": "No activity yet"
+        "timeline": "No activity yet",
+        "connectionTimeline": "No path transitions in the last 24 hours — connection has been steady."
+      },
+      "connectionTimeline": {
+        "path": {
+          "direct": "direct",
+          "relay": "relay",
+          "unknown": "unknown"
+        }
       },
       "timeline": {
         "actor": {

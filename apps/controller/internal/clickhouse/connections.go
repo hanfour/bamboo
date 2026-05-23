@@ -102,6 +102,56 @@ func (r *ConnectionEvents) InsertBatch(ctx context.Context, events []*Connection
 	return batch.Send()
 }
 
+// ListByPeer returns the recent connection_events for a peer (as
+// the source side), newest first. Powers the Web PeerDrawer
+// connection-path timeline section (issue #138 v2).
+//
+// limit caps the response row count; callers should pass a small
+// number (≤200). since restricts the time window so an idle
+// drawer doesn't pull the full 90-day TTL window across the wire.
+// CH is not configured ⇒ returns an empty slice without an error,
+// matching the same graceful-degrade behaviour the writer uses.
+func (r *ConnectionEvents) ListByPeer(
+	ctx context.Context,
+	tenantID uuid.UUID,
+	peerID uuid.UUID,
+	since time.Time,
+	limit int,
+) ([]*ConnectionEvent, error) {
+	if !r.c.IsConfigured() {
+		return nil, nil
+	}
+	if limit <= 0 || limit > 500 {
+		limit = 200
+	}
+	rows, err := r.c.driver().Query(ctx, `
+		SELECT id, tenant_id, occurred_at, source_peer_id, destination_peer_id,
+		       event_type, path, bytes_sent, bytes_received, rtt_ms,
+		       reason, matched_rule_id
+		  FROM connection_events
+		 WHERE tenant_id = ? AND source_peer_id = ? AND occurred_at >= ?
+		 ORDER BY occurred_at DESC
+		 LIMIT ?
+	`, tenantID, peerID, since, uint64(limit))
+	if err != nil {
+		return nil, fmt.Errorf("query connection_events: %w", err)
+	}
+	defer rows.Close()
+	var out []*ConnectionEvent
+	for rows.Next() {
+		var e ConnectionEvent
+		if err := rows.Scan(
+			&e.ID, &e.TenantID, &e.OccurredAt, &e.SourcePeerID, &e.DestinationPeerID,
+			&e.EventType, &e.Path, &e.BytesSent, &e.BytesReceived, &e.RTTMs,
+			&e.Reason, &e.MatchedRuleID,
+		); err != nil {
+			return nil, fmt.Errorf("scan: %w", err)
+		}
+		out = append(out, &e)
+	}
+	return out, rows.Err()
+}
+
 // CountByTenant returns the count of events for a tenant since `since`.
 // Used by tests + future overview widgets.
 func (r *ConnectionEvents) CountByTenant(ctx context.Context, tenantID uuid.UUID, since time.Time) (uint64, error) {

@@ -123,6 +123,7 @@
         "timestamps": "時間",
         "advertise": "宣告路由",
         "actions": "操作",
+        "connectionTimeline": "連線路徑變化",
         "timeline": "活動時間軸"
       },
       "advertise": {
@@ -170,7 +171,15 @@
         "endpoints": "尚未回報端點",
         "tags": "無標籤",
         "noHandshake": "尚未握手",
-        "timeline": "尚無活動紀錄"
+        "timeline": "尚無活動紀錄",
+        "connectionTimeline": "近 24 小時內沒有路徑切換 —— 連線穩定。"
+      },
+      "connectionTimeline": {
+        "path": {
+          "direct": "直連",
+          "relay": "Relay 中繼",
+          "unknown": "未知"
+        }
       },
       "timeline": {
         "actor": {

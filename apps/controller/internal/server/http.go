@@ -44,6 +44,7 @@ type HTTPServer struct {
 	publicURL   string // for /invite links in invitation email; falls back to baseURL
 	traces      *clickhouse.Traces
 	anomalies   *clickhouse.Anomalies
+	connEvents  *clickhouse.ConnectionEvents
 	coord       *handlers.CoordinatorHandler
 	secret      []byte
 	baseURL     string
@@ -82,9 +83,10 @@ func NewHTTPServer(
 		// Default mailer is the no-op sender — server boot calls
 		// SetMailer to wire in the real SMTP relay when configured.
 		mailer:    mail.New(config.SMTPConfig{}),
-		traces:    clickhouse.NewTraces(ch),
-		anomalies: clickhouse.NewAnomalies(ch),
-		coord:     coord,
+		traces:     clickhouse.NewTraces(ch),
+		anomalies:  clickhouse.NewAnomalies(ch),
+		connEvents: clickhouse.NewConnectionEvents(ch),
+		coord:      coord,
 		secret:    secret,
 		baseURL:   baseURL,
 		ttl:       ttl,
