@@ -35,19 +35,44 @@ final class DNSProxyProvider: NEDNSProxyProvider {
         guard let udp = flow as? NEAppProxyUDPFlow else {
             return false
         }
-        DNSFlowHandler(flow: udp).start()
+        // Retain the handler explicitly. The closures captured for
+        // flow.open / readDatagrams capture self, so in normal
+        // operation the handler stays alive while the flow has
+        // outstanding I/O. Holding an explicit reference here
+        // hardens against any future framework change that might
+        // release the closures synchronously before the first
+        // read completes; the handler self-releases via `release()`
+        // when the flow closes.
+        let handler = DNSFlowHandler(flow: udp)
+        Self.handlersLock.lock()
+        Self.handlers.insert(handler)
+        Self.handlersLock.unlock()
+        handler.start()
         return true
     }
+
+    fileprivate static let handlersLock = NSLock()
+    fileprivate static var handlers: Set<DNSFlowHandler> = []
 }
 
-private final class DNSFlowHandler {
+fileprivate final class DNSFlowHandler: Hashable {
 
     private let flow: NEAppProxyUDPFlow
     private let store: MagicDNSPeerStore?
+    private let id = UUID()
 
     init(flow: NEAppProxyUDPFlow) {
         self.flow = flow
         self.store = MagicDNSPeerStore()
+    }
+
+    static func == (lhs: DNSFlowHandler, rhs: DNSFlowHandler) -> Bool { lhs.id == rhs.id }
+    func hash(into hasher: inout Hasher) { hasher.combine(id) }
+
+    private func release() {
+        DNSProxyProvider.handlersLock.lock()
+        DNSProxyProvider.handlers.remove(self)
+        DNSProxyProvider.handlersLock.unlock()
     }
 
     func start() {
@@ -58,6 +83,7 @@ private final class DNSFlowHandler {
                        String(describing: error))
                 self.flow.closeReadWithError(error)
                 self.flow.closeWriteWithError(error)
+                self.release()
                 return
             }
             self.readLoop()
@@ -65,17 +91,17 @@ private final class DNSFlowHandler {
     }
 
     private func readLoop() {
-        // We use the parallel-array form. See macOS sibling for
-        // rationale.
         flow.readDatagrams { [self] datagrams, endpoints, error in
             if let error = error {
                 self.flow.closeReadWithError(error)
                 self.flow.closeWriteWithError(error)
+                self.release()
                 return
             }
             guard let datagrams = datagrams, !datagrams.isEmpty else {
                 self.flow.closeReadWithError(nil)
                 self.flow.closeWriteWithError(nil)
+                self.release()
                 return
             }
             let endpoints = endpoints ?? []

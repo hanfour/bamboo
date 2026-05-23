@@ -3,41 +3,47 @@
 import Foundation
 
 /// MagicDNSPeerStore is the IPC channel between the host bamboo app
-/// and the DNSProxy extension process. Both targets carry the
-/// `group.dev.hanfour.bamboo` App Group entitlement so this shared
-/// UserDefaults suite is the only sanctioned way to ferry the peer
-/// name→IP map across the sandbox boundary at the OS-blessed rate
-/// (UserDefaults reads from the App Group suite are coherent, atomic,
-/// and KVO-observable).
+/// and the DNSProxy extension process. The host app writes the peer
+/// name→IP snapshot; the DNSProxy extension reads it on every query.
 ///
-/// The data is small (~kilobytes for typical tenants), changes
-/// infrequently (peer add/remove on the order of minutes), and is
-/// non-confidential within the device — UserDefaults is the right
-/// granularity. Migrating to a CFMessagePort or XPC channel would
-/// only be justified if the resolver needed sub-millisecond fresh-
-/// ness or cryptographic isolation between processes.
+/// **macOS quirk (mesh-debug 2026-05-23)**: the original design used
+/// a shared App Group UserDefaults suite (sanctioned by Apple for
+/// App Extensions). That works for sandboxed App Extensions because
+/// the OS maps the App Group container into both the host app and
+/// extension's sandbox. **It does NOT work for macOS System
+/// Extensions running as root** — App Group containers are
+/// per-user, so the host app (uid hanfourmini) writes to
+/// `/Users/hanfourmini/Library/Group Containers/<group>/…` while
+/// the SystemExt (uid 0) reads from `/var/root/Library/Group Containers/…`
+/// (or nothing at all). Result: every *.bamboo query NXDOMAINs.
+///
+/// Switching to a shared filesystem path that both processes can
+/// reach. `/private/tmp` is world-readable + world-writable + sticky-
+/// bit so only the writer can rewrite — adequate for non-confidential
+/// peer metadata. Cleared on reboot; the host app rewrites the file
+/// on every connect, so the post-reboot empty-window is bounded by
+/// host-app launch latency.
+///
+/// Future hardening: move to a system-wide location like
+/// `/Library/Application Support/bamboo/`, which would require a one-
+/// time admin-elevated `mkdir` (e.g. via SMAppService or a separate
+/// installer helper). For v1 the /private/tmp path matches the security
+/// envelope of the existing UserDefaults App Group (process-level
+/// only; no cryptographic separation).
 public struct MagicDNSPeerStore {
 
-    /// The App Group identifier. Must match the
-    /// `com.apple.security.application-groups` entitlement value on
-    /// both the host app and the DNSProxy extension. Drift here
-    /// silently breaks resolution — host writes succeed, extension
-    /// reads return empty, every *.bamboo lookup NXDOMAINs.
-    public static let appGroup = "group.dev.hanfour.bamboo"
+    /// Shared file path. Both the host app and the root-running
+    /// DNSProxy SystemExt read/write here. The host app's writes
+    /// land owner=hanfourmini mode 0644; the SystemExt only reads.
+    /// If the file is missing the reader returns an empty map, and
+    /// the resolver NXDOMAINs every *.bamboo query (expected when
+    /// bamboo isn't running or just launched).
+    public static let sharedPath = "/private/tmp/dev.hanfour.bamboo.magicdns-peers.v1.json"
 
-    /// Stored value is a JSON-encoded `[String: PeerEntry]` keyed by
-    /// the DNS-safe label (e.g. "mac-mini" → entry for 100.64.0.1).
-    /// JSON instead of a plist-encoded dict because Codable→JSON is
-    /// the path of least drift between Swift versions on iOS/macOS.
-    private static let peersKey = "magicdns.peers.v1"
-
-    private let defaults: UserDefaults
+    private let url: URL
 
     public init?() {
-        guard let d = UserDefaults(suiteName: Self.appGroup) else {
-            return nil
-        }
-        self.defaults = d
+        self.url = URL(fileURLWithPath: Self.sharedPath)
     }
 
     /// PeerEntry is the per-peer DNS record. ipv4 is always set for
@@ -61,36 +67,50 @@ public struct MagicDNSPeerStore {
         }
     }
 
-    /// Replace the entire peer map atomically. The extension reads
-    /// the suite on every flow, so a write here is effective on the
-    /// next DNS query. Callers (ConnectionViewModel) write the full
-    /// snapshot rather than incremental diffs to keep the IPC
-    /// surface trivial — at 5-50 peers the JSON is well under a
-    /// page and re-encoding cost is negligible.
+    /// Replace the entire peer map atomically. Writes a temp file
+    /// (chmoded 0644 so the root SystemExt can read), then uses
+    /// POSIX `rename(2)` to swap it onto the destination path in one
+    /// atomic kernel operation. A concurrent reader's `open(2)`
+    /// lands on either the old inode or the new one — never a
+    /// missing file. The earlier `removeItem` + `moveItem` pattern
+    /// (Foundation's `moveItem` throws if the destination exists)
+    /// left a microsecond window where the file didn't exist and a
+    /// reader saw `[:]` → NXDOMAIN.
     public func setPeers(_ peers: [String: PeerEntry]) {
         do {
             let data = try JSONEncoder().encode(peers)
-            defaults.set(data, forKey: Self.peersKey)
+            let tmp = url.deletingLastPathComponent()
+                .appendingPathComponent(".magicdns-peers.\(UUID().uuidString).tmp")
+            try data.write(to: tmp, options: [.atomic])
+            // Permissions 0644 so the root-running SystemExt can read
+            // (FileManager .write defaults to 0600 on macOS).
+            try FileManager.default.setAttributes(
+                [.posixPermissions: 0o644],
+                ofItemAtPath: tmp.path
+            )
+            if Darwin.rename(tmp.path, url.path) != 0 {
+                let err = errno
+                _ = try? FileManager.default.removeItem(at: tmp)
+                NSLog("[MagicDNSPeerStore] rename(\(tmp.path) → \(url.path)) failed errno=\(err)")
+            }
         } catch {
-            // Encoding a `[String: Codable]` is essentially
-            // infallible; if it ever fails we'd rather log + skip
-            // than crash the host app.
-            NSLog("[MagicDNSPeerStore] encode failed: \(error)")
+            NSLog("[MagicDNSPeerStore] write failed at \(Self.sharedPath): \(error)")
         }
     }
 
-    /// Read the current peer map. Returns empty when nothing has
-    /// been written yet (fresh install, host app hasn't connected
-    /// in this OS session) — the extension then NXDOMAINs every
-    /// `*.bamboo` query.
+    /// Read the current peer map. Returns empty when the file is
+    /// missing (fresh boot before host app launched) or malformed —
+    /// in either case the resolver NXDOMAINs every *.bamboo query
+    /// until the host app writes a fresh snapshot.
     public func peers() -> [String: PeerEntry] {
-        guard let data = defaults.data(forKey: Self.peersKey) else {
+        guard FileManager.default.fileExists(atPath: url.path) else {
             return [:]
         }
         do {
+            let data = try Data(contentsOf: url)
             return try JSONDecoder().decode([String: PeerEntry].self, from: data)
         } catch {
-            NSLog("[MagicDNSPeerStore] decode failed: \(error)")
+            NSLog("[MagicDNSPeerStore] read failed at \(Self.sharedPath): \(error)")
             return [:]
         }
     }
@@ -106,6 +126,6 @@ public struct MagicDNSPeerStore {
     /// user opts out of MagicDNS so the extension stops answering
     /// stale entries.
     public func clear() {
-        defaults.removeObject(forKey: Self.peersKey)
+        _ = try? FileManager.default.removeItem(at: url)
     }
 }

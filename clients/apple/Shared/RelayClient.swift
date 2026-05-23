@@ -148,12 +148,22 @@ public actor RelayClient {
         }
         conn.start(queue: queue)
 
-        // Wait for ready so .currentPath has the assigned local port.
-        for _ in 0..<50 {
-            if case .ready = conn.state { break }
+        // Wait for BOTH .ready state AND currentPath.localEndpoint
+        // populated. NWConnection occasionally reaches .ready a tick
+        // before currentPath is populated, and the fallback in
+        // endpointString() silently returns port 0 → WireGuard then
+        // tries to handshake "127.0.0.1:0" and the proxy never
+        // receives anything. Mesh-debug 2026-05-23.
+        for _ in 0..<100 {
+            if case .ready = conn.state,
+               conn.currentPath?.localEndpoint != nil {
+                break
+            }
             try await Task.sleep(nanoseconds: 20_000_000)
         }
-        return ps.endpointString()
+        let endpoint = ps.endpointString()
+        log.log("relay.addPeer: peer=\(peerKey.prefix(6).map { String(format: "%02x", $0) }.joined(), privacy: .public) endpoint=\(endpoint, privacy: .public) state=\(String(describing: conn.state), privacy: .public)")
+        return endpoint
     }
 
     public func removePeer(_ peerKey: Data) {
@@ -175,6 +185,7 @@ public actor RelayClient {
     // MARK: - private
 
     private func peerReady(_ ps: PeerSocket) {
+        log.log("relay.peerReady peer=\(ps.pubkey.prefix(6).map { String(format: "%02x", $0) }.joined(), privacy: .public); starting receiveOutbound")
         // Kick off the per-peer outbound reader.
         receiveOutbound(ps: ps)
     }
@@ -182,6 +193,9 @@ public actor RelayClient {
     private func receiveOutbound(ps: PeerSocket) {
         ps.conn.receiveMessage { [weak self] data, _, _, error in
             guard let self = self else { return }
+            if let err = error {
+                Task { await self.logReceiveError(ps: ps, err: err) }
+            }
             if let data = data, !data.isEmpty {
                 Task { await self.forwardOutbound(ps: ps, body: data) }
             }
@@ -189,6 +203,10 @@ public actor RelayClient {
                 self.receiveOutbound(ps: ps)
             }
         }
+    }
+
+    private func logReceiveError(ps: PeerSocket, err: NWError) {
+        log.warning("relay.receiveOutbound error peer=\(ps.pubkey.prefix(6).map { String(format: "%02x", $0) }.joined(), privacy: .public) err=\(String(describing: err), privacy: .public)")
     }
 
     private func forwardOutbound(ps: PeerSocket, body: Data) async {

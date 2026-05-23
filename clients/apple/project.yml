@@ -69,6 +69,10 @@ targets:
         LSMinimumSystemVersion: "13.0"
         LSUIElement: true
         NSHumanReadableCopyright: "Apache-2.0 — see LICENSE-APACHE"
+        # Shown to the user in the System Extension activation prompt
+        # ("'bamboo' wants to install a system extension"). Required —
+        # macOS rejects the activation request without it.
+        NSSystemExtensionUsageDescription: "bamboo MagicDNS resolves *.bamboo hostnames to your tailnet peers."
         # Register bamboo:// so ASWebAuthenticationSession can capture
         # the OIDC callback the controller redirects to after sign-in.
         # `callbackURLScheme: "bamboo"` on the session must match the
@@ -87,31 +91,31 @@ targets:
     entitlements:
       path: BambooApp-macOS/BambooApp.entitlements
       properties:
-        com.apple.security.app-sandbox: true
+        # Apple's System Extension host requirement: the app that
+        # submits OSSystemExtensionRequest cannot be sandboxed.
+        # Tailscale's macOS app follows this same rule. sysextd will
+        # silently refuse to even prompt the user otherwise (returns
+        # OSSystemExtensionErrorDomain Code=4 "Extension not found
+        # in App bundle" — the error message is misleading).
+        com.apple.security.app-sandbox: false
         com.apple.security.network.client: true
         # network.server allows binding listening sockets — required
         # because pickFreeUDPPort() binds a UDP socket to discover a
-        # free ephemeral port to share with WireGuard / STUN. Sandbox
-        # EPERM (errno=1) otherwise.
+        # free ephemeral port to share with WireGuard / STUN.
         com.apple.security.network.server: true
         com.apple.developer.networking.networkextension:
-          - packet-tunnel-provider
-          # macOS NEDNSProxyProvider implemented as a System
-          # Extension (separate target below). The entitlement
-          # value is plain `dns-proxy` — same as the iOS App
-          # Extension form. The System Extension distinction is
-          # determined by (a) the target's type:system-extension
-          # (xcodegen places the bundle under
-          # Contents/Library/SystemExtensions/), (b) the Info.plist
-          # NetworkExtension dict + NEProviderClasses keying off
-          # com.apple.networkextension.dns-proxy, and (c) the host
-          # app's com.apple.developer.system-extension.install
-          # entitlement. The `-systemextension` suffix used to live
-          # here was a misread of Apple docs that doesn't appear in
-          # any SDK header — Apple's auto-minted profile always
-          # listed plain `dns-proxy`, which is why xcodebuild was
-          # rejecting the mismatch.
-          - dns-proxy
+          # macOS targets are signed with Developer ID Application;
+          # the matching provisioning profile only grants the
+          # `-systemextension` form of these entitlement values
+          # (Apple Development cert previously got the plain
+          # versions, but Apple stopped minting those for new
+          # network-extension setups on macOS 15+). Both the
+          # packet-tunnel and dns-proxy targets are System
+          # Extensions sitting under Contents/Library/SystemExtensions/;
+          # the host app activates each via OSSystemExtensionRequest
+          # before NETunnelProviderManager / NEDNSProxyManager save.
+          - packet-tunnel-provider-systemextension
+          - dns-proxy-systemextension
         # Submitted via OSSystemExtensionRequest from the host app
         # — requires this entitlement so the activation request is
         # accepted by sysextd.
@@ -122,6 +126,17 @@ targets:
       base:
         PRODUCT_NAME: bamboo
         PRODUCT_BUNDLE_IDENTIFIER: dev.hanfour.bamboo.app
+      configs:
+        Release:
+          # Developer ID Application signing for build-mac-dist.sh.
+          # Manual style + explicit per-target profile name — the
+          # Developer ID profile flow can't be auto-minted by
+          # xcodebuild, so we install matching profiles ahead of
+          # time under ~/Library/MobileDevice/Provisioning Profiles/
+          # and reference them by their portal name here.
+          CODE_SIGN_STYLE: Manual
+          CODE_SIGN_IDENTITY: Developer ID Application
+          PROVISIONING_PROFILE_SPECIFIER: bamboo app DevID
     preBuildScripts:
       - path: scripts/build-wireguardkitgo.sh
         name: Build WireGuardKitGo
@@ -132,7 +147,15 @@ targets:
         product: WireGuardKit
 
   PacketTunnelProvider-macOS:
-    type: app-extension
+    # macOS PacketTunnelProvider runs as a System Extension on
+    # macOS 15+. The App Extension form (.appex) is rejected by
+    # the OS for the packet-tunnel extension point, and Apple's
+    # Developer ID provisioning profile only grants the
+    # `packet-tunnel-provider-systemextension` entitlement value.
+    # Mirrors DNSProxy-macOS — both extensions live under
+    # Contents/Library/SystemExtensions/ and are activated by
+    # the host app via OSSystemExtensionRequest at launch.
+    type: system-extension
     platform: macOS
     # The Network Extension target needs only the files used by the
     # PacketTunnelProvider — NOT the app-only SwiftUI / OIDC / heartbeat
@@ -144,20 +167,33 @@ targets:
       - path: Shared/BambooTunnelError.swift
       - path: Shared/TunnelConfigurationBuilder.swift
       - path: Shared/TunnelIPC.swift
-    # NSExtension declared inline so xcodegen can't wipe it on regen.
-    # Without NSExtensionPointIdentifier + NSExtensionPrincipalClass,
-    # macOS treats the extension as unknown and `neagent` refuses to
-    # instantiate the provider (NEAgentErrorDomain Code=2), which makes
-    # System Settings show the VPN row but the toggle silently fails.
+    # System Extensions use the NetworkExtension dict (not the
+    # NSExtension dict the App Extension form uses). SYSX is the
+    # required CFBundlePackageType — without it sysextd refuses to
+    # discover the extension inside the host .app and the
+    # OSSystemExtensionRequest fails with "Extension not found in
+    # App bundle." See DNSProxy-macOS for the parallel setup.
     info:
       path: PacketTunnelProvider-macOS/Info.plist
       properties:
         CFBundleDisplayName: bamboo Tunnel
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
-        NSExtension:
-          NSExtensionPointIdentifier: com.apple.networkextension.packet-tunnel
-          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).PacketTunnelProvider
+        CFBundlePackageType: SYSX
+        # Apple requires NSSystemExtensionUsageDescription on
+        # network_extension-category System Extensions; sysextd
+        # rejects activation otherwise (Code=9).
+        NSSystemExtensionUsageDescription: "bamboo VPN tunnel for connecting to your tailnet peers."
+        # Sandboxed System Extensions require NEMachServiceName to
+        # start with one of the App Group identifiers — NOT the
+        # TeamIdentifierPrefix used by un-sandboxed Network
+        # Extensions (Tailscale style). sysextd rejects activation
+        # otherwise: "NEMachServiceName's value must be prefixed
+        # with an App Group entry."
+        NetworkExtension:
+          NEMachServiceName: group.dev.hanfour.bamboo.tunnel
+          NEProviderClasses:
+            com.apple.networkextension.packet-tunnel: $(PRODUCT_MODULE_NAME).PacketTunnelProvider
     entitlements:
       path: PacketTunnelProvider-macOS/PacketTunnelProvider.entitlements
       properties:
@@ -165,11 +201,29 @@ targets:
         com.apple.security.network.client: true
         com.apple.security.network.server: true
         com.apple.developer.networking.networkextension:
-          - packet-tunnel-provider
+          - packet-tunnel-provider-systemextension
+        # Required so NEMachServiceName (group.dev.hanfour.bamboo.tunnel)
+        # is valid — sandboxed extensions need the mach service name
+        # to start with an entry in application-groups.
+        com.apple.security.application-groups:
+          - group.dev.hanfour.bamboo
     settings:
       base:
-        PRODUCT_NAME: bamboo-tunnel
+        # PRODUCT_NAME must equal the bundle identifier so xcodegen
+        # places the System Extension at
+        # Contents/Library/SystemExtensions/<identifier>.systemextension/
+        # — sysextd looks for the extension by ${identifier}.systemextension
+        # under that directory, not by the .app's PRODUCT_NAME. Mismatch
+        # → "Extension not found in App bundle" rejection (the error
+        # message is misleading — the bundle is there, just not under
+        # the path sysextd searches).
+        PRODUCT_NAME: dev.hanfour.bamboo.app.tunnel
         PRODUCT_BUNDLE_IDENTIFIER: dev.hanfour.bamboo.app.tunnel
+      configs:
+        Release:
+          CODE_SIGN_STYLE: Manual
+          CODE_SIGN_IDENTITY: Developer ID Application
+          PROVISIONING_PROFILE_SPECIFIER: bamboo tunnel DevID
     preBuildScripts:
       - path: scripts/build-wireguardkitgo.sh
         name: Build WireGuardKitGo
@@ -197,32 +251,57 @@ targets:
         CFBundleDisplayName: bamboo MagicDNS
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        # SYSX is the macOS system-extension bundle package type.
+        # Without it sysextd refuses to discover the extension inside
+        # the host .app and OSSystemExtensionRequest fails with
+        # OSSystemExtensionErrorDomain Code=4 "Extension not found
+        # in App bundle." xcodegen's type:system-extension does NOT
+        # set this automatically, so we declare it inline.
+        CFBundlePackageType: SYSX
+        # Required on the extension itself for network_extension
+        # category System Extensions (Code=9 rejection otherwise).
+        NSSystemExtensionUsageDescription: "bamboo MagicDNS resolves *.bamboo hostnames to your tailnet peers."
         # System Extensions use the NetworkExtension dict — NOT the
         # NSExtension dict App Extensions use. NEMachServiceName
         # binds the IPC channel; NEProviderClasses maps the
         # extension point to our subclass.
         NetworkExtension:
-          NEMachServiceName: $(TeamIdentifierPrefix)dev.hanfour.bamboo.app.dnsproxy
+          NEMachServiceName: group.dev.hanfour.bamboo.dnsproxy
           NEProviderClasses:
             com.apple.networkextension.dns-proxy: $(PRODUCT_MODULE_NAME).DNSProxyProvider
     entitlements:
       path: DNSProxy-macOS/DNSProxy_macOS.entitlements
       properties:
-        com.apple.security.app-sandbox: true
+        # Sandbox disabled (mesh-debug 2026-05-23). The DNSProxy
+        # System Extension runs as root and needs to read the
+        # shared MagicDNS peer-map file written by the host app at
+        # /private/tmp/dev.hanfour.bamboo.magicdns-peers.v1.json.
+        # The original design used a shared App Group UserDefaults
+        # suite, but App Group containers on macOS are per-user, so
+        # a root-running SystemExt cannot see what the user-space
+        # host app writes. With sandbox=true, /private/tmp reads
+        # also return EPERM. Disabling sandbox is the simplest way
+        # to let the proxy read the shared file; the security
+        # envelope is similar (this is a root process anyway).
+        com.apple.security.app-sandbox: false
         com.apple.security.network.client: true
         com.apple.security.network.server: true
         com.apple.developer.networking.networkextension:
-          # Plain `dns-proxy` — same as the iOS App Extension form.
-          # See the host app's entitlements section for the long-
-          # form explanation of why the `-systemextension` suffix
-          # isn't a real Apple entitlement value.
-          - dns-proxy
+          - dns-proxy-systemextension
         com.apple.security.application-groups:
           - group.dev.hanfour.bamboo
     settings:
       base:
-        PRODUCT_NAME: bamboo-dnsproxy
+        # See PacketTunnelProvider-macOS notes — PRODUCT_NAME must
+        # equal the bundle identifier for sysextd to find this
+        # extension inside the host .app.
+        PRODUCT_NAME: dev.hanfour.bamboo.app.dnsproxy
         PRODUCT_BUNDLE_IDENTIFIER: dev.hanfour.bamboo.app.dnsproxy
+      configs:
+        Release:
+          CODE_SIGN_STYLE: Manual
+          CODE_SIGN_IDENTITY: Developer ID Application
+          PROVISIONING_PROFILE_SPECIFIER: bamboo dnsproxy DevID
 
 # ----- iOS targets -----------------------------------------------------------
 

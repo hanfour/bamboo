@@ -37,6 +37,17 @@ public final class TunnelManager: ObservableObject {
     private var manager: NETunnelProviderManager?
     private var statusObserver: NSObjectProtocol?
 
+    #if os(macOS)
+    // macOS PacketTunnelProvider is a System Extension. Activated
+    // lazily on the first startTunnel() call so the user only sees
+    // the Privacy & Security prompt when they actually try to
+    // connect — not at app launch.
+    private let installer = SystemExtensionInstaller(
+        bundleIdentifier: extensionBundleID
+    )
+    private var systemExtensionActivated = false
+    #endif
+
     public init() {}
 
     /// Reload the saved tunnel manager (or no-op if none exists).
@@ -54,6 +65,13 @@ public final class TunnelManager: ObservableObject {
 
     /// Install (or update) the bamboo profile and start the tunnel.
     public func startTunnel(with config: BambooTunnelConfig) async throws {
+        #if os(macOS)
+        if !systemExtensionActivated {
+            try await installer.activate()
+            systemExtensionActivated = true
+        }
+        #endif
+
         let mgr = manager ?? NETunnelProviderManager()
         let proto = (mgr.protocolConfiguration as? NETunnelProviderProtocol) ?? NETunnelProviderProtocol()
         proto.providerBundleIdentifier = extensionBundleID
@@ -75,6 +93,33 @@ public final class TunnelManager: ObservableObject {
 
         self.manager = mgr
         attachObserver()
+
+        // If the tunnel is already running (typically because the
+        // SystemExt outlived a previous host app session — see
+        // cold-start handoff in ConnectionViewModel), startVPNTunnel
+        // is a no-op and the new config in providerConfiguration is
+        // never picked up by the running PacketTunnelProvider. The
+        // SystemExt then keeps running with whatever stale config
+        // it had — often that config has had wireguard-go's "device
+        // closed" failure clobber its peer set on a prior IPC apply
+        // (mesh-debug 2026-05-23, h4 ended up with 0 peers and no
+        // handshakes). Stop the tunnel first so startVPNTunnel
+        // actually fires PacketTunnelProvider.startTunnel(options:),
+        // which runs adapter.start with the fresh config.
+        let connStatus = mgr.connection.status
+        if connStatus == .connected || connStatus == .connecting || connStatus == .reasserting {
+            log.log("startTunnel: tunnel is \(connStatus.rawValue, privacy: .public); stopping first to force a fresh start with new config")
+            mgr.connection.stopVPNTunnel()
+            // Wait up to ~2s for the disconnect to land. Apple's
+            // status transitions are quick on loopback but can lag a
+            // few hundred ms when the SystemExt is busy.
+            for _ in 0..<40 {
+                if mgr.connection.status == .disconnected {
+                    break
+                }
+                try? await Task.sleep(nanoseconds: 50_000_000)
+            }
+        }
 
         try mgr.connection.startVPNTunnel()
         updateStatus()

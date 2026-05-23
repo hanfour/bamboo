@@ -98,6 +98,37 @@ public final class ConnectionViewModel: ObservableObject {
         statusTask = Task { @MainActor [weak self] in
             guard let self = self else { return }
             await self.tunnel.refresh()
+            // Cold-start handoff: if the tunnel System Extension
+            // survived the host app exit, the kernel tunnel is still
+            // carrying packets but our in-process state (peerCache,
+            // peerSessionBearer, heartbeat / watch / relay tasks) is
+            // empty. The user then sees a "Connected" UI but the
+            // device never reports a heartbeat, never receives
+            // peer_updated events, and never refreshes ACL policy —
+            // mesh debug 2026-05-22.
+            //
+            // Rerun connectAsync() to register again, restart the
+            // background loops, and reapply the tunnel config.
+            // connectAsync is idempotent: register is a read for an
+            // existing peer (FindByPubKey), the keychain still has
+            // the WG private key, and tunnel.startTunnel for an
+            // already-running SystemExt is a save-and-start that the
+            // VPN subsystem applies in place. The brief UI flicker
+            // (Connected → Connecting → Connected) is preferable to
+            // sitting in a stale half-alive state forever.
+            //
+            // Race note: while connectAsync runs, tunnel.$status
+            // transitions are NOT observed (the for-await below
+            // hasn't subscribed yet). connectAsync sets
+            // self.status itself (.connecting at entry, .failing on
+            // throw via the catch), so the UI sees the high-level
+            // result; intermediate tunnel-level flaps are
+            // intentionally dropped here to avoid duplicating work
+            // applyTunnelStatus does once we settle.
+            if case .connected = self.tunnel.status {
+                self.log.log("cold-start: tunnel already up; rerunning connect cycle to restart heartbeat/watch/relay")
+                await self.connectAsync()
+            }
             for await _ in self.tunnel.$status.values {
                 self.applyTunnelStatus()
             }
@@ -137,6 +168,12 @@ public final class ConnectionViewModel: ObservableObject {
     }
 
     public func connect() {
+        // Mesh-debug 2026-05-22: h4 reportedly never runs the full
+        // register/relay/heartbeat after Connect press. Log
+        // unconditionally so we can tell whether the button handler
+        // fires at all and what tunnel.status looked like at the
+        // moment. Cheap; safe to leave in.
+        log.log("Connect button pressed; viewModel.status=\(self.status.rawValue, privacy: .public) tunnel.status=\(String(describing: self.tunnel.status), privacy: .public)")
         Task { await self.connectAsync() }
     }
 
@@ -155,8 +192,8 @@ public final class ConnectionViewModel: ObservableObject {
         defer { isSigningIn = false }
         lastError = nil
 
-        UserDefaults.bambooStandard.set(controllerURL, forKey: "controllerURL")
-        UserDefaults.bambooStandard.set(tenantSlug, forKey: "tenantSlug")
+        persistSettingIfNonEmpty(controllerURL, forKey: "controllerURL")
+        persistSettingIfNonEmpty(tenantSlug, forKey: "tenantSlug")
 
         guard let url = URL(string: controllerURL) else {
             self.lastError = "controller URL is not a valid URL"
@@ -200,6 +237,10 @@ public final class ConnectionViewModel: ObservableObject {
     }
 
     public func disconnect() {
+        // Symmetric breadcrumb for the disconnect path so a button
+        // mis-binding (UI shows "Disconnect" because status was
+        // misread as .connected at cold-start) is obvious in the log.
+        log.log("Disconnect button pressed; viewModel.status=\(self.status.rawValue, privacy: .public) tunnel.status=\(String(describing: self.tunnel.status), privacy: .public)")
         let r = relay
         relay = nil
         Task { [heartbeat, watcher] in
@@ -269,13 +310,31 @@ public final class ConnectionViewModel: ObservableObject {
         return UInt16(bigEndian: bound.sin_port)
     }
 
+    /// Persist a user-typed setting back to UserDefaults so the next
+    /// launch's @Published init picks it up. Empty @Published values
+    /// (typically because the un-sandboxed prefs store after PR #153
+    /// started empty and the user never re-typed this field) are
+    /// NOT written, so they don't clobber whatever a future migration
+    /// or other code path might restore. A user who wants to *clear*
+    /// a stored value should use an explicit Settings action that
+    /// calls removeObject(forKey:) directly — silently erasing on
+    /// every connect was the destructive-overwrite bug this fixes.
+    /// As a side effect, trims surrounding whitespace; macOS 26
+    /// URL(string:) rejects trailing newline / space, and pasted
+    /// settings often carry one.
+    private func persistSettingIfNonEmpty(_ value: String, forKey key: String) {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        UserDefaults.bambooStandard.set(trimmed, forKey: key)
+    }
+
     private func connectAsync() async {
         status = .connecting
         lastError = nil
 
-        UserDefaults.bambooStandard.set(controllerURL, forKey: "controllerURL")
-        UserDefaults.bambooStandard.set(tenantSlug, forKey: "tenantSlug")
-        UserDefaults.bambooStandard.set(relayURL, forKey: "relayURL")
+        persistSettingIfNonEmpty(controllerURL, forKey: "controllerURL")
+        persistSettingIfNonEmpty(tenantSlug, forKey: "tenantSlug")
+        persistSettingIfNonEmpty(relayURL, forKey: "relayURL")
 
         do {
             let privateKey = try loadOrCreatePrivateKey()
@@ -337,8 +396,26 @@ public final class ConnectionViewModel: ObservableObject {
             // through the relay server. Useful on networks where
             // direct STUN endpoints fail (symmetric NAT, restrictive
             // egress firewalls).
+            //
+            // Each non-relay-enabled exit path logs explicitly: the
+            // earlier silent skip masked a destructive UserDefaults
+            // overwrite (the @Published relayURL was unexpectedly
+            // empty post un-sandbox migration, and the relay block
+            // skipped without saying so), so this fix splits the
+            // three failure shapes into named log lines.
             var peerEndpoints: [String: String] = [:] // peer.id -> endpoint
-            if !relayURL.isEmpty, let url = URL(string: relayURL) {
+            let trimmedRelayURL = relayURL.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmedRelayURL.isEmpty {
+                log.log("relay: skipped (relayURL is empty; type one in Settings to enable)")
+            } else if let url = URL(string: trimmedRelayURL),
+                      let scheme = url.scheme?.lowercased(),
+                      scheme == "ws" || scheme == "wss" {
+                // URL(string:) on macOS 26 rejects strings with
+                // trailing whitespace or newlines (verified via
+                // `swift -e`), so we trim first. The scheme guard
+                // catches strings like "abc" — URL(string:) returns
+                // a non-nil URL with scheme==nil that would otherwise
+                // pass through to RelayClient.dial and hang there.
                 do {
                     let r = try await ensureRelay(client: client,
                                                    selfId: resp.self_.id,
@@ -356,6 +433,8 @@ public final class ConnectionViewModel: ObservableObject {
                 } catch {
                     log.warning("relay init failed; falling back to direct: \(String(describing: error), privacy: .public)")
                 }
+            } else {
+                log.warning("relay: not a valid ws/wss URL — relayURL=\(trimmedRelayURL, privacy: .public); fix in Settings")
             }
 
             // ACL enforcement (issue #132): when the controller is
@@ -674,6 +753,13 @@ public final class ConnectionViewModel: ObservableObject {
                     persistentKeepalive: 25
                 )
             }
+            // Sort by id so the resulting Array has a stable order.
+            // peerCache.values iteration is Dictionary-defined
+            // (unspecified), so two semantically identical peer sets
+            // would otherwise produce arrays that disagree under
+            // BambooTunnelConfig's synthesized Equatable — making the
+            // no-op-skip below ineffective in the common case.
+            .sorted { $0.id < $1.id }
         let config = BambooTunnelConfig(
             privateKey: prevConfig.privateKey,
             address: "\(selfIPv4)/32",
@@ -682,6 +768,19 @@ public final class ConnectionViewModel: ObservableObject {
             wgListenPort: prevConfig.wgListenPort,
             peers: peers
         )
+
+        // Heartbeat-driven watch events fire every ~30s and re-trigger
+        // rebuildAndReapply even when nothing relevant changed (the
+        // peer's last_seen ticked, the peer's STUN endpoint didn't,
+        // and we use relay-proxy endpoints anyway). Each WG apply has
+        // a real cost: wireguard-go's UAPI sometimes silently drops
+        // the new peer set with "device closed" (mesh-debug 2026-05-23,
+        // h4 ended up with 0 peers after a watch tick), and even a
+        // successful apply burns CPU. Skip the apply when the
+        // computed config equals what we already pushed.
+        if config == self.lastConfig {
+            return
+        }
         self.lastConfig = config
 
         Task {
@@ -689,7 +788,9 @@ public final class ConnectionViewModel: ObservableObject {
             // can apply the new config without dropping the tunnel.
             // Fall back to the heavy saveToPreferences + startVPNTunnel
             // path only when IPC fails (typically: extension hasn't
-            // started yet, or the IPC channel is wedged).
+            // started yet, the IPC channel is wedged, or
+            // PacketTunnelProvider's post-update peer-count check
+            // detected wireguard-go silently dropped the peer set).
             if await self.tunnel.applyConfig(config) {
                 self.log.log("rebuild applied via IPC (no restart)")
                 return

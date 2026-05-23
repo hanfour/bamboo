@@ -35,5 +35,7 @@
 	<true/>
 	<key>NSHumanReadableCopyright</key>
 	<string>Apache-2.0 — see LICENSE-APACHE</string>
+	<key>NSSystemExtensionUsageDescription</key>
+	<string>bamboo MagicDNS resolves *.bamboo hostnames to your tailnet peers.</string>
 </dict>
 </plist>
