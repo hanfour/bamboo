@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"testing"
+	"time"
 )
 
 // TestRESTPeerBandwidth_HeartbeatWritesSampleAndEndpointReturnsIt
@@ -29,6 +30,14 @@ func TestRESTPeerBandwidth_HeartbeatWritesSampleAndEndpointReturnsIt(t *testing.
 	// monotonically — the typical wg-counter pattern. The
 	// controller's job is to persist them as-is; delta
 	// computation is the reader's responsibility.
+	//
+	// We sleep 2ms between heartbeats so the three CH rows get
+	// distinct occurred_at values. CH's column is DateTime64(3)
+	// (millisecond resolution); without the sleep three back-to-
+	// back inserts can collapse onto the same ms and the ORDER BY
+	// returns them in granule order, not insert order. In prod
+	// heartbeats are 30s apart so this is purely a fast-fixture
+	// concern.
 	for _, hb := range []map[string]any{
 		{"peerId": peerID, "knownPolicyRevision": int64(0), "connectionPath": "direct", "bytesSent": 1000, "bytesReceived": 500},
 		{"peerId": peerID, "knownPolicyRevision": int64(0), "connectionPath": "direct", "bytesSent": 2500, "bytesReceived": 1200},
@@ -38,6 +47,7 @@ func TestRESTPeerBandwidth_HeartbeatWritesSampleAndEndpointReturnsIt(t *testing.
 		if r.status != http.StatusOK {
 			t.Fatalf("heartbeat: status=%d body=%s", r.status, r.body)
 		}
+		time.Sleep(2 * time.Millisecond)
 	}
 
 	resp := getJSON(t, f.httpURL+"/api/v1/peers/"+peerID+"/bandwidth", f.tenantSlug)
