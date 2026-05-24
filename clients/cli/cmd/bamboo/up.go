@@ -281,18 +281,40 @@ func pickFreeUDPPort() (uint16, error) {
 	return uint16(port), nil
 }
 
-// maybeOpenRelay opens a relay client when BAMBOO_RELAY_URL is set
-// and pre-registers every peer so per-peer proxy ports exist. It
-// does NOT rewrite peer endpoints — the caller decides whether to
-// use direct or relay endpoints initially. The fallback monitor
-// (RunRelayFallback) is what swaps individual peers from direct to
-// relay on handshake failure.
+// maybeOpenRelay opens a relay client and pre-registers every peer
+// so per-peer proxy ports exist. It does NOT rewrite peer endpoints
+// — the caller decides whether to use direct or relay endpoints
+// initially. The fallback monitor (RunRelayFallback) is what swaps
+// individual peers from direct to relay on handshake failure.
 //
-// Returns (nil, nil, nil) when BAMBOO_RELAY_URL is unset.
+// Relay selection (§4 P2 multi-relay stage 2):
+//
+//  1. BAMBOO_RELAY_URL env var — operator override / explicit pin.
+//     Honored as-is when set; no probe, no health filter.
+//  2. RegisterResponse.relay_servers — the controller's curated
+//     eligible list (stage 1's health reaper already filtered out
+//     unhealthy rows). The CLI RTT-probes each in parallel and
+//     picks the lowest-latency one.
+//  3. Neither available — returns (nil, nil, nil) so tunnel bring-
+//     up proceeds without a relay (direct-only mesh).
+//
+// Returning a nil client is NOT an error; it just means clients
+// behind symmetric NAT will fail to handshake with NATed peers.
 func maybeOpenRelay(ctx context.Context, resp *bamboov1.RegisterResponse, priv wg.PrivateKey, session *peerSession) (*relay.Client, clientsync.PeerRelayMap, error) {
 	relayURL := os.Getenv("BAMBOO_RELAY_URL")
 	if relayURL == "" {
-		return nil, nil, nil
+		// Fall through to the controller-supplied list.
+		picked, err := pickRelay(ctx, resp.GetRelayServers())
+		if err != nil {
+			slog.Warn("relay picker: no usable relay; continuing direct-only", "err", err)
+			return nil, nil, nil
+		}
+		if picked == nil {
+			// No relays in the response — direct-only mesh.
+			return nil, nil, nil
+		}
+		relayURL = relayWSSURL(picked)
+		slog.Info("relay picker: chose", "region", picked.GetRegion(), "hostname", picked.GetHostname())
 	}
 
 	token, err := mintRelayToken(ctx, resp.GetSelf().GetId(), priv.PublicKey().Base64(), session)
