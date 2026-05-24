@@ -143,6 +143,61 @@ func (r *UserInvitations) MarkRevoked(ctx context.Context, id, userID uuid.UUID)
 	return nil
 }
 
+// ExpiredInvite is the minimal shape RevokeExpired returns — the
+// reaper goroutine needs enough fields to write a meaningful
+// audit row but doesn't want the full UserInvitation payload
+// (most fields are irrelevant for the "this expired" event).
+type ExpiredInvite struct {
+	ID       uuid.UUID
+	TenantID uuid.UUID
+	Email    string
+}
+
+// RevokeExpired flips revoked_at on every invitation that has
+// passed its expires_at without being accepted or already revoked.
+// Returns the list of newly-revoked rows so the caller (a
+// background reaper) can write one audit event per row.
+//
+// Motivation: the partial unique index on (tenant_id,
+// lower(email)) WHERE accepted_at IS NULL AND revoked_at IS NULL
+// does NOT exclude expired-but-not-revoked rows. Without this
+// cleanup, an admin trying to re-invite alice@example.com after
+// her previous invite expired would hit a duplicate-key error
+// because the expired row still satisfies the partial predicate.
+// Flipping revoked_at releases the slot.
+//
+// The reaper uses revoked_by = NULL to distinguish system-driven
+// expiry-revocations from admin-driven manual revocations (the
+// latter set revoked_by to the acting admin's user id). The Web
+// UI can render the two differently if it grows the affordance
+// later; v1 just shows "revoked" either way and the audit log
+// carries the actor distinction (actor_type = "system" for the
+// reaper).
+func (r *UserInvitations) RevokeExpired(ctx context.Context, now time.Time) ([]*ExpiredInvite, error) {
+	rows, err := r.pool.Query(ctx, `
+		UPDATE user_invitations
+		   SET revoked_at = $1,
+		       revoked_by = NULL
+		 WHERE expires_at < $1
+		   AND accepted_at IS NULL
+		   AND revoked_at IS NULL
+		RETURNING id, tenant_id, email
+	`, now)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*ExpiredInvite
+	for rows.Next() {
+		var e ExpiredInvite
+		if err := rows.Scan(&e.ID, &e.TenantID, &e.Email); err != nil {
+			return nil, err
+		}
+		out = append(out, &e)
+	}
+	return out, rows.Err()
+}
+
 // ListByTenant returns every invitation in the tenant ordered by
 // creation time (newest first). Accepted + revoked rows are included
 // so the admin Users page can show history; the renderer derives
