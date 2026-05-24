@@ -43,6 +43,7 @@ type HTTPServer struct {
 	dns         *repo.TenantDNS
 	invitations *repo.UserInvitations
 	webhooks    *repo.Webhooks
+	apiTokens   *repo.APITokens
 	mailer      *mail.Sender
 	publicURL   string // for /invite links in invitation email; falls back to baseURL
 	traces      *clickhouse.Traces
@@ -86,6 +87,7 @@ func NewHTTPServer(
 		dns:         repo.NewTenantDNS(pool),
 		invitations: repo.NewUserInvitations(pool),
 		webhooks:    repo.NewWebhooks(pool),
+		apiTokens:   repo.NewAPITokens(pool),
 		// Default mailer is the no-op sender — server boot calls
 		// SetMailer to wire in the real SMTP relay when configured.
 		mailer:     mail.New(config.SMTPConfig{}),

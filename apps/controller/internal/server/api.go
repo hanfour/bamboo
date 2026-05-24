@@ -256,6 +256,35 @@ func (h *HTTPServer) routeAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Tenant-scoped API tokens (§4 P2). Same admin-write +
+	// "{id}/revoke" sub-path pattern as pre-auth keys.
+	//   GET    /api/v1/api-tokens             → list (admin; hash hidden)
+	//   POST   /api/v1/api-tokens             → mint (admin; plaintext shown once)
+	//   POST   /api/v1/api-tokens/{id}/revoke → revoke (admin)
+	if r.URL.Path == "/api/v1/api-tokens" {
+		switch r.Method {
+		case http.MethodGet:
+			h.apiListAPITokens(w, r, authn, tenant)
+		case http.MethodPost:
+			h.apiMintAPIToken(w, r, authn, tenant)
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+		return
+	}
+	if rest, ok := strings.CutPrefix(r.URL.Path, "/api/v1/api-tokens/"); ok && rest != "" {
+		if id, found := strings.CutSuffix(rest, "/revoke"); found && id != "" && !strings.Contains(id, "/") {
+			if r.Method != http.MethodPost {
+				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+				return
+			}
+			h.apiRevokeAPIToken(w, r, authn, tenant, id)
+			return
+		}
+		writeRouteMissing(w)
+		return
+	}
+
 	// Tenant-scoped webhook subscriptions (§4 P2 commercial /
 	// SaaS integration). Same admin-write pattern as preauth-keys
 	// and invitations.
@@ -389,11 +418,19 @@ func writeRouteMissing(w http.ResponseWriter) {
 	writeError(w, http.StatusNotFound, errors.New("route not registered"))
 }
 
-// authnContext is what authenticate produces. claims is non-nil when a
-// JWT was successfully validated; otherwise the request is in the
-// dev-fallback path and the caller resolves the tenant via header.
+// authnContext is what authenticate produces. Exactly one of
+// claims or apiToken is non-nil after a successful authentication;
+// the dev-fallback path leaves both nil so the caller resolves the
+// tenant via header.
+//
+//   - claims: an OIDC-issued session JWT (interactive user). The
+//     existing user-membership + admin gates apply.
+//   - apiToken: a long-lived API token (CI / script). v1 grants
+//     tenant-admin scope unconditionally; future scope work tightens
+//     this without changing the field shape.
 type authnContext struct {
-	claims *auth.SessionClaims
+	claims   *auth.SessionClaims
+	apiToken *repo.APIToken
 }
 
 // authenticate validates a session JWT from the Authorization header
@@ -411,6 +448,17 @@ type authnContext struct {
 func (h *HTTPServer) authenticate(r *http.Request) (*authnContext, error) {
 	var claims *auth.SessionClaims
 	if tok := bearerToken(r); tok != "" {
+		// Bearer routing — the bat_ prefix shifts to the API-token
+		// path so a session-JWT verifier doesn't reject the token
+		// before the API-token middleware sees it. Anything else
+		// falls through to session-JWT verification.
+		if strings.HasPrefix(tok, auth.APITokenPrefix) {
+			at, err := h.verifyAPIToken(r.Context(), tok)
+			if err != nil {
+				return nil, err
+			}
+			return &authnContext{apiToken: at}, nil
+		}
 		c, err := auth.VerifySessionToken(h.secret, tok)
 		if err != nil {
 			return nil, errors.New("invalid bearer token")
@@ -444,6 +492,51 @@ func (h *HTTPServer) authenticate(r *http.Request) (*authnContext, error) {
 		}
 	}
 	return &authnContext{claims: claims}, nil
+}
+
+// verifyAPIToken parses the bat_ plaintext, fetches the row by
+// its embedded id, bcrypt-verifies the secret, and refuses tokens
+// that are revoked or expired. On success returns the resolved
+// APIToken (used by requireAdmin + resolveTenant). Side effect:
+// bumps last_used_at on a fresh goroutine so the caller's request
+// doesn't wait on a write.
+//
+// Errors deliberately surface the same shape ("invalid api token")
+// regardless of the failure cause (parse / missing / wrong secret /
+// expired). The client can't tell which token it had wrong, which
+// is the right security default — a "expired" vs "revoked" hint
+// would let an attacker enumerate active tokens.
+func (h *HTTPServer) verifyAPIToken(ctx context.Context, plaintext string) (*repo.APIToken, error) {
+	const errMsg = "invalid api token"
+	id, err := auth.ParseAPIToken(plaintext)
+	if err != nil {
+		return nil, errors.New(errMsg)
+	}
+	if h.apiTokens == nil {
+		return nil, errors.New(errMsg)
+	}
+	tok, err := h.apiTokens.GetByID(ctx, id)
+	if err != nil {
+		return nil, errors.New(errMsg)
+	}
+	if err := auth.VerifyHash(plaintext, tok.SecretHash); err != nil {
+		return nil, errors.New(errMsg)
+	}
+	now := time.Now().UTC()
+	if !tok.IsActive(now) {
+		return nil, errors.New(errMsg)
+	}
+	// Fire-and-forget last_used bump. The user-facing request
+	// can't wait on a write here — a stale "last used" column is
+	// a much cheaper loss than added auth latency on every API call.
+	go func(id uuid.UUID, at time.Time) {
+		bgCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		if uerr := h.apiTokens.MarkUsed(bgCtx, id, at); uerr != nil {
+			slog.Warn("api_token: mark-used failed", "token_id", id, "err", uerr)
+		}
+	}(tok.ID, now)
+	return tok, nil
 }
 
 func bearerToken(r *http.Request) string {
@@ -555,7 +648,12 @@ func (h *HTTPServer) usePeerSessionTenant(r *http.Request) (*repo.Tenant, *auth.
 
 // resolveTenant uses the JWT claims when present (production path) and
 // otherwise falls back to the X-Tenant-Slug header (dev path).
+// API-token authentication pins the tenant to the token's own
+// tenant_id — the caller can't cross-tenant by setting a header.
 func (h *HTTPServer) resolveTenant(r *http.Request, authn *authnContext) (*repo.Tenant, error) {
+	if authn != nil && authn.apiToken != nil {
+		return h.tenants.GetByID(r.Context(), authn.apiToken.TenantID)
+	}
 	if authn != nil && authn.claims != nil {
 		return h.tenants.GetByID(r.Context(), authn.claims.TenantID)
 	}
@@ -1853,6 +1951,15 @@ func (h *HTTPServer) apiCreatePreAuthKey(w http.ResponseWriter, r *http.Request,
 // already returned 401 for unauthenticated requests, so the
 // dev-fallback warn branch is unreachable.
 func (h *HTTPServer) requireAdmin(w http.ResponseWriter, r *http.Request, authn *authnContext, tenant *repo.Tenant, action string) bool {
+	if authn != nil && authn.apiToken != nil {
+		// v1: every API token grants full tenant-admin. Tenant scope
+		// is still enforced via resolveTenant (the apiToken row's
+		// tenant_id is the only tenant the caller can act on), so
+		// this branch doesn't open a cross-tenant escalation.
+		// Future scope work tightens the per-action check without
+		// changing the field shape.
+		return true
+	}
 	if authn != nil && authn.claims != nil {
 		user, err := h.users.GetByID(r.Context(), authn.claims.UserID)
 		if err != nil {
@@ -3027,6 +3134,169 @@ func kindString(k recommend.Kind) string {
 // _ keeps uuid imported (used elsewhere if api.go grows). Removed once
 // uuid is referenced directly in this file.
 var _ uuid.UUID
+
+// --- API tokens (§4 P2) ----------------------------------------------
+
+// apiAPITokenListJSON is the list/get response shape. No secret —
+// once minted, the plaintext is gone forever (DB stores only a
+// bcrypt hash). Status is derived in the renderer from revokedAt
+// + expiresAt; the controller forwards raw columns rather than
+// committing to a status enum on the wire.
+type apiAPITokenListJSON struct {
+	ID          string     `json:"id"`
+	Name        string     `json:"name"`
+	Description string     `json:"description,omitempty"`
+	CreatedAt   time.Time  `json:"createdAt"`
+	ExpiresAt   *time.Time `json:"expiresAt,omitempty"`
+	RevokedAt   *time.Time `json:"revokedAt,omitempty"`
+	LastUsedAt  *time.Time `json:"lastUsedAt,omitempty"`
+}
+
+// apiAPITokenMintResponse adds the plaintext on the mint
+// response. Same convention as pre-auth-keys: the secret leaks
+// once here and never again.
+type apiAPITokenMintResponse struct {
+	apiAPITokenListJSON
+	Token string `json:"token"`
+}
+
+func apiTokenToListJSON(t *repo.APIToken) apiAPITokenListJSON {
+	return apiAPITokenListJSON{
+		ID:          t.ID.String(),
+		Name:        t.Name,
+		Description: t.Description,
+		CreatedAt:   t.CreatedAt,
+		ExpiresAt:   t.ExpiresAt,
+		RevokedAt:   t.RevokedAt,
+		LastUsedAt:  t.LastUsedAt,
+	}
+}
+
+// apiMintAPITokenReq is the wire shape for POST /api/v1/api-tokens.
+// expiresAt is optional; absent ⇒ never expires (rotate via
+// revoke + re-mint, same convention as webhooks).
+type apiMintAPITokenReq struct {
+	Name        string     `json:"name"`
+	Description string     `json:"description,omitempty"`
+	ExpiresAt   *time.Time `json:"expiresAt,omitempty"`
+}
+
+// apiMintAPIToken creates a new token and returns the plaintext
+// exactly once. Admin-only. The plaintext format is documented at
+// auth.APITokenPrefix.
+func (h *HTTPServer) apiMintAPIToken(w http.ResponseWriter, r *http.Request, authn *authnContext, tenant *repo.Tenant) {
+	if !h.requireAdmin(w, r, authn, tenant, "api_tokens.create") {
+		return
+	}
+	var req apiMintAPITokenReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("decode body: %w", err))
+		return
+	}
+	if strings.TrimSpace(req.Name) == "" {
+		writeError(w, http.StatusBadRequest, errors.New("name is required"))
+		return
+	}
+	// Length cap matches the existing pre-auth-key + webhook
+	// description fields — long enough for "github-actions runner
+	// for repo/branch X", short enough to render in a table.
+	if len(req.Name) > 200 {
+		writeError(w, http.StatusBadRequest, errors.New("name exceeds 200 chars"))
+		return
+	}
+	id := uuid.New()
+	plaintext, hash, err := auth.GenerateAPIToken(id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("mint token: %w", err))
+		return
+	}
+	created, err := h.apiTokens.Insert(r.Context(), &repo.APIToken{
+		ID:          id,
+		TenantID:    tenant.ID,
+		Name:        strings.TrimSpace(req.Name),
+		Description: req.Description,
+		SecretHash:  hash,
+		ExpiresAt:   req.ExpiresAt,
+		CreatedBy:   authnActorID(authn),
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("persist token: %w", err))
+		return
+	}
+	insertAudit(r.Context(), h.audits, &repo.AuditEvent{
+		TenantID:     &tenant.ID,
+		ActorType:    authnActorType(authn),
+		ActorID:      authnActorID(authn),
+		Action:       "api_token.create",
+		ResourceType: "api_token",
+		ResourceID:   &created.ID,
+		Diff:         marshalDiff(map[string]any{"name": created.Name}),
+	})
+	writeJSON(w, http.StatusCreated, apiAPITokenMintResponse{
+		apiAPITokenListJSON: apiTokenToListJSON(created),
+		Token:               plaintext,
+	})
+}
+
+// apiListAPITokens lists every token row for the tenant. Admin-
+// only. The bcrypt hash never leaves the controller.
+func (h *HTTPServer) apiListAPITokens(w http.ResponseWriter, r *http.Request, authn *authnContext, tenant *repo.Tenant) {
+	if !h.requireAdmin(w, r, authn, tenant, "api_tokens.list") {
+		return
+	}
+	rows, err := h.apiTokens.ListByTenant(r.Context(), tenant.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	out := make([]apiAPITokenListJSON, 0, len(rows))
+	for _, t := range rows {
+		out = append(out, apiTokenToListJSON(t))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"tokens": out})
+}
+
+// apiRevokeAPIToken flips revoked_at = now() on the row. Admin-
+// only; tenant-scoped (a token id from another tenant resolves
+// to 404 before the revoke runs). Idempotent: re-revoke returns
+// 204 like the first revoke.
+func (h *HTTPServer) apiRevokeAPIToken(w http.ResponseWriter, r *http.Request, authn *authnContext, tenant *repo.Tenant, idStr string) {
+	if !h.requireAdmin(w, r, authn, tenant, "api_tokens.revoke") {
+		return
+	}
+	id, err := uuid.Parse(idStr)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	current, err := h.apiTokens.GetByID(r.Context(), id)
+	if errors.Is(err, repo.ErrNotFound) {
+		http.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if current.TenantID != tenant.ID {
+		http.NotFound(w, r)
+		return
+	}
+	if err := h.apiTokens.Revoke(r.Context(), id); err != nil && !errors.Is(err, repo.ErrNotFound) {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	insertAudit(r.Context(), h.audits, &repo.AuditEvent{
+		TenantID:     &tenant.ID,
+		ActorType:    authnActorType(authn),
+		ActorID:      authnActorID(authn),
+		Action:       "api_token.revoke",
+		ResourceType: "api_token",
+		ResourceID:   &id,
+		Diff:         marshalDiff(map[string]any{"name": current.Name}),
+	})
+	w.WriteHeader(http.StatusNoContent)
+}
 
 // --- webhook subscriptions (§4 P2) -----------------------------------
 
