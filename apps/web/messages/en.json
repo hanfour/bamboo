@@ -123,8 +123,14 @@
         "timestamps": "Timestamps",
         "advertise": "Advertised",
         "actions": "Actions",
+        "bandwidth": "Bandwidth",
         "connectionTimeline": "Connection path",
         "timeline": "Activity"
+      },
+      "bandwidth": {
+        "window": "Last {window}",
+        "peak": "peak {rate}",
+        "sparklineAria": "{label} throughput sparkline, {total} transferred"
       },
       "advertise": {
         "routesHint": "This peer is offering to route the following CIDRs. Approve the ones you trust — other peers' allowed_ips merge in only what you approve.",
@@ -180,7 +186,8 @@
         "tags": "No tags",
         "noHandshake": "No handshake yet",
         "timeline": "No activity yet",
-        "connectionTimeline": "No path transitions in the last 24 hours — connection has been steady."
+        "connectionTimeline": "No path transitions in the last 24 hours — connection has been steady.",
+        "bandwidth": "No bandwidth samples yet. Clients on a version that supports bandwidth reporting will populate this section after their next heartbeat."
       },
       "connectionTimeline": {
         "path": {
