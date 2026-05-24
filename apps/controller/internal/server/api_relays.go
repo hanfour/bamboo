@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"time"
 
 	"github.com/hanfour/bamboo/apps/controller/internal/db/repo"
 )
@@ -28,6 +29,41 @@ type relayJSON struct {
 	Port      int    `json:"port"`
 	PublicKey string `json:"publicKey"`
 	Enabled   bool   `json:"enabled"`
+	// Health fields (§4 P2 multi-relay registry, stage 1).
+	// LastHealthStatus is one of "unknown" / "healthy" / "unhealthy".
+	// Empty when the row has never been probed (rolled-up to "unknown"
+	// on the wire so the admin UI doesn't have to special-case nil).
+	// LastHealthError is the short reason text the reaper recorded
+	// on the most recent failure; empty when status is not 'unhealthy'.
+	// LastHealthCheckAt is the timestamp of the most recent probe;
+	// zero ⇒ never probed.
+	LastHealthStatus  string `json:"lastHealthStatus,omitempty"`
+	LastHealthError   string `json:"lastHealthError,omitempty"`
+	LastHealthCheckAt string `json:"lastHealthCheckAt,omitempty"`
+}
+
+// relayJSONFromRepo flattens a repo.RelayServer into the admin REST
+// wire shape, normalising the "never-probed" case to "unknown" so
+// downstream renderers don't have to.
+func relayJSONFromRepo(rs *repo.RelayServer) relayJSON {
+	status := rs.LastHealthStatus
+	if status == "" {
+		status = "unknown"
+	}
+	out := relayJSON{
+		ID:               rs.ID.String(),
+		Region:           rs.Region,
+		Hostname:         rs.Hostname,
+		Port:             rs.Port,
+		PublicKey:        rs.PublicKey,
+		Enabled:          rs.Enabled,
+		LastHealthStatus: status,
+		LastHealthError:  rs.LastHealthError,
+	}
+	if !rs.LastHealthCheckAt.IsZero() {
+		out.LastHealthCheckAt = rs.LastHealthCheckAt.UTC().Format(time.RFC3339Nano)
+	}
+	return out
 }
 
 type relayCreateRequest struct {
@@ -72,14 +108,7 @@ func (h *HTTPServer) adminRelaysList(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]relayJSON, 0, len(relays))
 	for _, rs := range relays {
-		out = append(out, relayJSON{
-			ID:        rs.ID.String(),
-			Region:    rs.Region,
-			Hostname:  rs.Hostname,
-			Port:      rs.Port,
-			PublicKey: rs.PublicKey,
-			Enabled:   rs.Enabled,
-		})
+		out = append(out, relayJSONFromRepo(rs))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"relays": out})
 }
@@ -109,12 +138,5 @@ func (h *HTTPServer) adminRelaysCreate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, relayJSON{
-		ID:        rs.ID.String(),
-		Region:    rs.Region,
-		Hostname:  rs.Hostname,
-		Port:      rs.Port,
-		PublicKey: rs.PublicKey,
-		Enabled:   rs.Enabled,
-	})
+	writeJSON(w, http.StatusCreated, relayJSONFromRepo(rs))
 }
