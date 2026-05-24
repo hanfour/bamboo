@@ -411,6 +411,7 @@ func (h *HTTPServer) Run(ctx context.Context) error {
 	// below also waits for ctx cancellation so they unwind together.
 	h.StartPublisher(ctx)
 	h.StartInviteReaper(ctx)
+	h.StartRelayHealthReaper(ctx)
 	errCh := make(chan error, 1)
 	go func() {
 		slog.Info("HTTP server listening", "addr", h.addr)

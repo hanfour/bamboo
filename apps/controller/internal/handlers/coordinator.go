@@ -395,7 +395,12 @@ func (h *CoordinatorHandler) Register(ctx context.Context, req *bamboov1.Registe
 		return nil, status.Errorf(codes.Internal, "list peers: %v", err)
 	}
 
-	relays, err := h.relays.ListEnabled(ctx)
+	// ListEligible (not ListEnabled) filters out relays the
+	// health-check reaper has flagged 'unhealthy' (§4 P2 multi-relay
+	// registry, stage 1). Rows with status 'unknown' / NULL stay
+	// included so a freshly inserted relay reaches clients before
+	// its first probe lands.
+	relays, err := h.relays.ListEligible(ctx)
 	if err != nil {
 		// Relay listing failure should not block registration —
 		// peers can still come up via direct connection. Log and
