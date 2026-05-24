@@ -194,13 +194,20 @@ func (r *ConnectionEvents) ListBandwidthByPeer(
 	if limit <= 0 || limit > 5000 {
 		limit = 2000
 	}
+	// bytes_sent ASC is a tiebreaker for samples that collapse to
+	// the same DateTime64(3) millisecond. Cumulative wg counters
+	// are monotonic, so within a single peer the smaller bytes_sent
+	// IS the earlier sample. This matters because (a) fast CI
+	// fixtures can fire multiple heartbeats inside one ms, and
+	// (b) two clients sharing the same wall-clock ms at insert
+	// time would otherwise order-arbitrarily.
 	rows, err := r.c.driver().Query(ctx, `
 		SELECT occurred_at, path, bytes_sent, bytes_received
 		  FROM connection_events
 		 WHERE tenant_id = ? AND source_peer_id = ?
 		   AND event_type = 'bandwidth_sample'
 		   AND occurred_at >= ?
-		 ORDER BY occurred_at ASC
+		 ORDER BY occurred_at ASC, bytes_sent ASC
 		 LIMIT ?
 	`, tenantID, peerID, since, uint64(limit))
 	if err != nil {
