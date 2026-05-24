@@ -108,6 +108,20 @@ final class PacketTunnelProvider_iOS: NEPacketTunnelProvider {
                 status: .init(connected: true, peerCount: -1)
             )
             completionHandler?((try? TunnelIPC.encode(resp)) ?? Data())
+
+        case .bandwidthStats:
+            // Mirror of the macOS provider's path — see comments
+            // there. Forwarded through TunnelManager.bandwidthStats
+            // into HeartbeatLoop's per-tick reporter.
+            adapter.getRuntimeConfiguration { [weak self] config in
+                let (sent, received) = config.map(WGStatsParser.sumBytes) ?? (0, 0)
+                let resp = TunnelIPC.Response(
+                    ok: true,
+                    bandwidth: .init(bytesSent: sent, bytesReceived: received)
+                )
+                completionHandler?((try? TunnelIPC.encode(resp)) ?? Data())
+                _ = self
+            }
         }
     }
 

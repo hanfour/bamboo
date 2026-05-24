@@ -30,6 +30,7 @@ public actor HeartbeatLoop {
     public func start(client: BambooClient,
                       peerID: String,
                       knownRevision: @Sendable @escaping () async -> Int64 = { 0 },
+                      bandwidthStats: @Sendable @escaping () async -> TunnelIPC.BandwidthStats? = { nil },
                       onPolicyChanged: @Sendable @escaping (Int64) -> Void = { _ in },
                       onPeersChanged: @Sendable @escaping () -> Void = {}) {
         task?.cancel()
@@ -48,12 +49,22 @@ public actor HeartbeatLoop {
                     log.debug("heartbeat stun refresh failed: \(String(describing: error), privacy: .public)")
                 }
 
+                // Pull cumulative wg byte counters from the
+                // extension via TunnelIPC.bandwidthStats. nil ⇒
+                // tunnel not up yet / IPC failed / older
+                // extension build; we still heartbeat, just
+                // without the bandwidth side-channel so the
+                // controller skips its bandwidth_sample write.
+                let bw = await bandwidthStats()
+
                 let rev = await knownRevision()
                 do {
                     let resp = try await client.heartbeat(.init(
                         peerId: peerID,
                         knownPolicyRevision: rev,
-                        endpoints: endpoints
+                        endpoints: endpoints,
+                        bytesSent: bw?.bytesSent,
+                        bytesReceived: bw?.bytesReceived
                     ))
                     if resp.policyChanged {
                         onPolicyChanged(resp.currentPolicyRevision)

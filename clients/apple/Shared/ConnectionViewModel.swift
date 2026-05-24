@@ -572,6 +572,15 @@ public final class ConnectionViewModel: ObservableObject {
                     // off the main actor; assumeIsolated would crash.
                     await MainActor.run { self?.policyRevision ?? 0 }
                 },
+                // Pull cumulative wg byte counters from the
+                // PacketTunnelProvider via IPC for the §4 P2
+                // bandwidth-sample side-channel. Returns nil
+                // when the tunnel isn't up yet or the IPC fails;
+                // HeartbeatLoop treats that as no-data.
+                bandwidthStats: { [weak self] in
+                    guard let self else { return nil }
+                    return await self.tunnel.bandwidthStats()
+                },
                 onPolicyChanged: { [weak self] _ in
                     // Heartbeat detected a policy bump (issue #132).
                     // Watch handles this too; running it from both
