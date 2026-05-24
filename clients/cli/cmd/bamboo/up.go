@@ -157,20 +157,36 @@ func runUp(cmd *cobra.Command, _ []string) error {
 	// and is the canonical liveness signal for our own peer row.
 	cache := clientsync.New(resp.GetSelf(), resp.GetPeers())
 	cache.SetPolicyRevision(resp.GetPolicyRevision())
-	// Wrap the gRPC adapter so heartbeat / watch call contexts carry
+	// Wrap the gRPC adapter so the WatchPeers call context carries
 	// the current peer-session bearer as outgoing metadata. The
 	// controller's interceptor whitelist ignores it today; the
-	// prod-mode gate follow-up flips that.
+	// prod-mode gate follow-up flips that. Heartbeat moved to REST
+	// (see restHeartbeater) so the §4 P2 bandwidth-sample side-
+	// channel fires — gRPC's HeartbeatRequest doesn't model the
+	// byte counters today.
 	adapter := newAuthedAdapter(clientsync.AdaptClient(cli.Coordinator), session)
+	heartbeater := newRESTHeartbeater(session, flagTenant)
 
 	refresh := func(refreshCtx context.Context) (*bamboov1.RegisterResponse, error) {
 		return registerWithController(refreshCtx, priv, session, wgPort)
 	}
 	discover := func() []string { return discoverEndpoints(wgPort) }
+	// Bytes reporter aggregates per-peer wg counters into one cumulative
+	// pair the controller writes as a connection_events bandwidth_sample
+	// row. Failures (stats unavailable, device not yet brought up) yield
+	// (0,0) which the controller treats as "no data" and skips the write.
+	reportBytes := func() (uint64, uint64) {
+		stats, err := dev.Stats()
+		if err != nil {
+			slog.Debug("wg stats read for bandwidth report failed", "err", err)
+			return 0, 0
+		}
+		return device.SumBytes(stats)
+	}
 
 	daemonCtx, daemonCancel := context.WithCancel(cmd.Context())
 	defer daemonCancel()
-	go clientsync.RunHeartbeat(daemonCtx, adapter, resp.GetSelf().GetId(), discover)
+	go clientsync.RunHeartbeat(daemonCtx, heartbeater, resp.GetSelf().GetId(), discover, reportBytes)
 	go clientsync.RunWatchPeers(daemonCtx, adapter, dev, priv, cache, resp.GetSelf().GetId(), refresh)
 	if relayClient != nil {
 		reapply := &deviceReapplier{dev: dev, base: cfg}

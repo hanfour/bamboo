@@ -184,12 +184,16 @@ func controllerHTTPBase() string {
 	return base
 }
 
-// authedAdapter wraps a CoordinatorClient so that every Heartbeat /
-// WatchPeers call carries the current peer-session bearer as gRPC
-// outgoing metadata. The controller's interceptor today whitelists
-// these methods (so the bearer is ignored), but the prod-mode gate
-// follow-up will start enforcing them — this wiring ensures that
+// authedAdapter wraps a CoordinatorClient so the WatchPeers call
+// context carries the current peer-session bearer as gRPC outgoing
+// metadata. The controller's interceptor today whitelists
+// WatchPeers (so the bearer is ignored), but the prod-mode gate
+// follow-up will start enforcing it — this wiring ensures that
 // landing the gate does not break in-flight CLIs.
+//
+// Heartbeat moved to REST (see restHeartbeater) so it doesn't go
+// through this adapter anymore — that flow carries the bearer via
+// the HTTP Authorization header directly.
 type authedAdapter struct {
 	inner   clientsync.CoordinatorClient
 	session *peerSession
@@ -201,10 +205,6 @@ func newAuthedAdapter(inner clientsync.CoordinatorClient, session *peerSession) 
 
 func (a *authedAdapter) WatchPeers(ctx context.Context, in *bamboov1.WatchPeersRequest) (clientsync.WatchStream, error) {
 	return a.inner.WatchPeers(a.authCtx(ctx), in)
-}
-
-func (a *authedAdapter) Heartbeat(ctx context.Context, in *bamboov1.HeartbeatRequest) (*bamboov1.HeartbeatResponse, error) {
-	return a.inner.Heartbeat(a.authCtx(ctx), in)
 }
 
 func (a *authedAdapter) authCtx(ctx context.Context) context.Context {

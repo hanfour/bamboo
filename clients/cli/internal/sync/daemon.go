@@ -22,10 +22,55 @@ type Applier interface {
 // CoordinatorClient is the subset of bamboov1.CoordinatorServiceClient
 // the daemon goroutines actually use. Tests inject a fake; production
 // uses AdaptClient to wrap the generated gRPC stub.
+//
+// Heartbeat is intentionally NOT on this interface. It moved to the
+// REST path (see Heartbeater) so the controller's bandwidth-sample
+// side-channel (#187) fires for CLI clients without a proto bump.
 type CoordinatorClient interface {
 	WatchPeers(ctx context.Context, in *bamboov1.WatchPeersRequest) (WatchStream, error)
-	Heartbeat(ctx context.Context, in *bamboov1.HeartbeatRequest) (*bamboov1.HeartbeatResponse, error)
 }
+
+// HeartbeatArgs is the request the daemon hands to a Heartbeater on
+// each tick. Decoupled from bamboov1.HeartbeatRequest so the REST
+// transport (which carries fields the proto doesn't yet model —
+// BytesSent / BytesReceived) and the gRPC transport can live behind
+// the same interface.
+type HeartbeatArgs struct {
+	PeerID              string
+	KnownPolicyRevision int64
+	Endpoints           []string
+	// BytesSent / BytesReceived are CUMULATIVE wg counters summed
+	// across every peer on the local interface. Both zero ⇒ no
+	// data; the controller skips its bandwidth-sample write.
+	BytesSent     uint64
+	BytesReceived uint64
+}
+
+// HeartbeatResult is the slim view of the response RunHeartbeat
+// actually inspects. Future fields (e.g. "should restart relay")
+// can extend it without breaking transports.
+type HeartbeatResult struct {
+	PeersChanged          bool
+	PolicyChanged         bool
+	CurrentPolicyRevision int64
+}
+
+// Heartbeater is the surface RunHeartbeat consumes. The CLI's
+// production impl posts to REST /api/v1/peers/heartbeat carrying
+// the peer-session bearer + cumulative byte counters. Tests inject
+// a counter-based fake.
+type Heartbeater interface {
+	Heartbeat(ctx context.Context, args HeartbeatArgs) (HeartbeatResult, error)
+}
+
+// BytesReporter returns the current cumulative WireGuard byte
+// counters this peer has observed (sum of every peer on the local
+// interface). Called once per heartbeat tick; returning (0, 0)
+// disables the bandwidth-sample write for that tick — appropriate
+// when the reader can't read the device (wgctrl unsupported,
+// transient permission failure). The reporter MUST be cheap to
+// call; it runs on the heartbeat hot path.
+type BytesReporter func() (bytesSent, bytesReceived uint64)
 
 // WatchStream is the minimal surface we exercise from
 // bamboov1.CoordinatorService_WatchPeersClient. The generated gRPC
@@ -47,10 +92,6 @@ type grpcAdapter struct {
 
 func (a *grpcAdapter) WatchPeers(ctx context.Context, in *bamboov1.WatchPeersRequest) (WatchStream, error) {
 	return a.inner.WatchPeers(ctx, in)
-}
-
-func (a *grpcAdapter) Heartbeat(ctx context.Context, in *bamboov1.HeartbeatRequest) (*bamboov1.HeartbeatResponse, error) {
-	return a.inner.Heartbeat(ctx, in)
 }
 
 // HeartbeatInterval is the cadence the daemon pings the controller.
@@ -82,9 +123,13 @@ type Refresher func(ctx context.Context) (*bamboov1.RegisterResponse, error)
 // RunHeartbeat periodically pings the controller until ctx is canceled.
 // When an endpoint discoverer is supplied it re-discovers on every
 // tick so the controller learns about NAT-mapping changes between
-// reboots / network swaps. Errors are logged and tolerated; the loop
-// continues so a transient outage doesn't kill the daemon.
-func RunHeartbeat(ctx context.Context, cli CoordinatorClient, peerID string, discover EndpointDiscoverer) {
+// reboots / network swaps. When a bytes reporter is supplied (CLI
+// production wiring), the cumulative wg counters travel along so the
+// controller can fire its bandwidth-sample side-channel (#187). Both
+// callbacks are nil-safe: callers running in degraded environments
+// (no STUN, no wgctrl) just omit them. Errors are logged and tolerated;
+// the loop continues so a transient outage doesn't kill the daemon.
+func RunHeartbeat(ctx context.Context, hb Heartbeater, peerID string, discover EndpointDiscoverer, reportBytes BytesReporter) {
 	t := time.NewTicker(HeartbeatInterval)
 	defer t.Stop()
 	for {
@@ -92,11 +137,14 @@ func RunHeartbeat(ctx context.Context, cli CoordinatorClient, peerID string, dis
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			req := &bamboov1.HeartbeatRequest{PeerId: peerID}
+			args := HeartbeatArgs{PeerID: peerID}
 			if discover != nil {
-				req.Endpoints = discover()
+				args.Endpoints = discover()
 			}
-			if _, err := cli.Heartbeat(ctx, req); err != nil {
+			if reportBytes != nil {
+				args.BytesSent, args.BytesReceived = reportBytes()
+			}
+			if _, err := hb.Heartbeat(ctx, args); err != nil {
 				slog.Warn("heartbeat failed", "err", err)
 			}
 		}
