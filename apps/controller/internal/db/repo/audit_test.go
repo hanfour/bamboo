@@ -136,3 +136,165 @@ func TestAuditLogs_ListByResource(t *testing.T) {
 		t.Errorf("limit=0 should default to 50, returned %d", len(gotDefault))
 	}
 }
+
+// TestAuditLogs_UpdateBlockedByTrigger pins the migration-00013
+// contract: any attempt to UPDATE an audit_log row gets refused
+// by the BEFORE trigger. Without this guarantee a stolen DB
+// credential could silently rewrite history — and the webhook
+// delivery model that landed alongside it (#180/#181) treats the
+// audit row as the source of truth for event reconstruction.
+func TestAuditLogs_UpdateBlockedByTrigger(t *testing.T) {
+	pool := requireDB(t)
+	ctx := context.Background()
+
+	tenants := repo.NewTenants(pool)
+	audits := repo.NewAuditLogs(pool)
+	slug := fmt.Sprintf("immut-%s", uuid.NewString()[:8])
+	tenant, err := tenants.Create(ctx, "Immut", slug, "100.64.93.0/24")
+	if err != nil {
+		t.Fatalf("create tenant: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, tenant.ID)
+	})
+
+	if err := audits.Insert(ctx, &repo.AuditEvent{
+		TenantID:     &tenant.ID,
+		ActorType:    "system",
+		Action:       "peer.register",
+		ResourceType: "peer",
+	}); err != nil {
+		t.Fatalf("seed Insert: %v", err)
+	}
+
+	// Direct UPDATE attempt must fail. The trigger raises a
+	// plain-language error; we don't assert on the exact text
+	// but the operation must NOT succeed.
+	_, uerr := pool.Exec(ctx,
+		`UPDATE audit_log SET action = 'tampered' WHERE tenant_id = $1`,
+		tenant.ID)
+	if uerr == nil {
+		t.Error("UPDATE audit_log succeeded; want trigger rejection")
+	}
+	// Sanity: the row's action is still the original value.
+	var action string
+	if err := pool.QueryRow(ctx,
+		`SELECT action FROM audit_log WHERE tenant_id = $1 LIMIT 1`,
+		tenant.ID).Scan(&action); err != nil {
+		t.Fatalf("post-UPDATE Read: %v", err)
+	}
+	if action != "peer.register" {
+		t.Errorf("row's action mutated to %q despite trigger", action)
+	}
+}
+
+// TestAuditLogs_DeleteBlockedByDefault pins the rejection path
+// for casual DELETE. The bypass via SET LOCAL is verified in the
+// companion test.
+func TestAuditLogs_DeleteBlockedByDefault(t *testing.T) {
+	pool := requireDB(t)
+	ctx := context.Background()
+
+	tenants := repo.NewTenants(pool)
+	audits := repo.NewAuditLogs(pool)
+	slug := fmt.Sprintf("immut-del-%s", uuid.NewString()[:8])
+	tenant, err := tenants.Create(ctx, "ImmutDel", slug, "100.64.92.0/24")
+	if err != nil {
+		t.Fatalf("create tenant: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, tenant.ID)
+	})
+
+	if err := audits.Insert(ctx, &repo.AuditEvent{
+		TenantID:     &tenant.ID,
+		ActorType:    "system",
+		Action:       "policy.update",
+		ResourceType: "policy",
+	}); err != nil {
+		t.Fatalf("seed Insert: %v", err)
+	}
+
+	_, derr := pool.Exec(ctx, `DELETE FROM audit_log WHERE tenant_id = $1`, tenant.ID)
+	if derr == nil {
+		t.Error("DELETE audit_log succeeded; want trigger rejection")
+	}
+	var count int64
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*) FROM audit_log WHERE tenant_id = $1`,
+		tenant.ID).Scan(&count); err != nil {
+		t.Fatalf("post-DELETE count: %v", err)
+	}
+	if count == 0 {
+		t.Error("DELETE removed rows despite trigger")
+	}
+}
+
+// TestAuditLogs_DeleteBypassWithSessionVar pins the documented
+// escape hatch for future retention / GDPR-erasure flows: a
+// transaction that SET LOCAL bamboo.allow_audit_delete = 'true'
+// may DELETE. Future callers wrap their purge inside a tx that
+// opts in; the bypass disappears at commit/rollback so a stray
+// connection never inherits it.
+func TestAuditLogs_DeleteBypassWithSessionVar(t *testing.T) {
+	pool := requireDB(t)
+	ctx := context.Background()
+
+	tenants := repo.NewTenants(pool)
+	audits := repo.NewAuditLogs(pool)
+	slug := fmt.Sprintf("immut-bypass-%s", uuid.NewString()[:8])
+	tenant, err := tenants.Create(ctx, "ImmutBypass", slug, "100.64.91.0/24")
+	if err != nil {
+		t.Fatalf("create tenant: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, tenant.ID)
+	})
+
+	if err := audits.Insert(ctx, &repo.AuditEvent{
+		TenantID:     &tenant.ID,
+		ActorType:    "system",
+		Action:       "peer.delete",
+		ResourceType: "peer",
+	}); err != nil {
+		t.Fatalf("seed Insert: %v", err)
+	}
+
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	// set_config(name, value, is_local=true) is the function-call
+	// equivalent of `SET LOCAL` and works inside a pgx.Exec.
+	if _, err := tx.Exec(ctx, `SELECT set_config('bamboo.allow_audit_delete', 'true', true)`); err != nil {
+		t.Fatalf("set bypass: %v", err)
+	}
+	tag, err := tx.Exec(ctx, `DELETE FROM audit_log WHERE tenant_id = $1`, tenant.ID)
+	if err != nil {
+		t.Fatalf("bypassed DELETE: %v", err)
+	}
+	if tag.RowsAffected() != 1 {
+		t.Errorf("DELETE removed %d rows, want 1", tag.RowsAffected())
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+
+	// After commit the bypass is gone; a follow-up DELETE on a
+	// fresh connection sees the trigger reject again. This
+	// guarantees the bypass doesn't leak between transactions.
+	if err := audits.Insert(ctx, &repo.AuditEvent{
+		TenantID:     &tenant.ID,
+		ActorType:    "system",
+		Action:       "peer.delete.followup",
+		ResourceType: "peer",
+	}); err != nil {
+		t.Fatalf("post-bypass Insert: %v", err)
+	}
+	_, derr := pool.Exec(ctx, `DELETE FROM audit_log WHERE tenant_id = $1`, tenant.ID)
+	if derr == nil {
+		t.Error("bypass leaked outside transaction; DELETE succeeded")
+	}
+}
