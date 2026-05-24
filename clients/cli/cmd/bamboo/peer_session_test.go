@@ -13,7 +13,9 @@ import (
 )
 
 // fakeCoord captures the ctx passed by callers so the test can assert
-// on the gRPC outgoing metadata the authedAdapter injected.
+// on the gRPC outgoing metadata the authedAdapter injected. Only
+// WatchPeers lives on the gRPC adapter now — heartbeat moved to REST
+// for the §4 P2 bandwidth metering side-channel.
 type fakeCoord struct {
 	lastCtx context.Context
 }
@@ -23,19 +25,14 @@ func (f *fakeCoord) WatchPeers(ctx context.Context, _ *bamboov1.WatchPeersReques
 	return nil, nil
 }
 
-func (f *fakeCoord) Heartbeat(ctx context.Context, _ *bamboov1.HeartbeatRequest) (*bamboov1.HeartbeatResponse, error) {
-	f.lastCtx = ctx
-	return &bamboov1.HeartbeatResponse{}, nil
-}
-
 func TestAuthedAdapter_InjectsBearerWhenTokenSet(t *testing.T) {
 	fake := &fakeCoord{}
 	sess := &peerSession{}
 	sess.set("tok-abc", time.Now().Add(time.Hour))
 	a := newAuthedAdapter(fake, sess)
 
-	if _, err := a.Heartbeat(context.Background(), &bamboov1.HeartbeatRequest{}); err != nil {
-		t.Fatalf("heartbeat: %v", err)
+	if _, err := a.WatchPeers(context.Background(), &bamboov1.WatchPeersRequest{}); err != nil {
+		t.Fatalf("watch: %v", err)
 	}
 	md, ok := metadata.FromOutgoingContext(fake.lastCtx)
 	if !ok {
@@ -55,8 +52,8 @@ func TestAuthedAdapter_NoBearerWhenSessionEmpty(t *testing.T) {
 	fake := &fakeCoord{}
 	sess := &peerSession{}
 	a := newAuthedAdapter(fake, sess)
-	if _, err := a.Heartbeat(context.Background(), &bamboov1.HeartbeatRequest{}); err != nil {
-		t.Fatalf("heartbeat: %v", err)
+	if _, err := a.WatchPeers(context.Background(), &bamboov1.WatchPeersRequest{}); err != nil {
+		t.Fatalf("watch: %v", err)
 	}
 	if md, ok := metadata.FromOutgoingContext(fake.lastCtx); ok {
 		if v := md.Get("authorization"); len(v) > 0 {
