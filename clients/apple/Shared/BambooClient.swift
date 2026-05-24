@@ -126,6 +126,25 @@ public struct BambooClient {
         public var peerId: String
         public var knownPolicyRevision: Int64
         public var endpoints: [String]?
+        /// Cumulative wg byte counters summed across every peer on
+        /// the local interface (§4 P2). Both nil ⇒ no data this
+        /// tick; the controller skips its bandwidth_sample write.
+        /// Optional so older extension builds (without IPC
+        /// `bandwidthStats`) keep producing a valid request.
+        public var bytesSent: UInt64?
+        public var bytesReceived: UInt64?
+
+        public init(peerId: String,
+                    knownPolicyRevision: Int64,
+                    endpoints: [String]? = nil,
+                    bytesSent: UInt64? = nil,
+                    bytesReceived: UInt64? = nil) {
+            self.peerId = peerId
+            self.knownPolicyRevision = knownPolicyRevision
+            self.endpoints = endpoints
+            self.bytesSent = bytesSent
+            self.bytesReceived = bytesReceived
+        }
     }
 
     public struct HeartbeatResponse: Decodable {

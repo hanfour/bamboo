@@ -177,6 +177,51 @@ public final class TunnelManager: ObservableObject {
         }
     }
 
+    /// bandwidthStats asks the running PacketTunnelProvider for its
+    /// cumulative wg byte counters (sum across every peer on the
+    /// local interface). Powers the §4 P2 bandwidth-sample side-
+    /// channel in HeartbeatLoop. Returns nil — caller treats as
+    /// "no data" and the controller skips the bandwidth_sample
+    /// write — when:
+    ///   * the tunnel isn't up yet (extension can't report)
+    ///   * the IPC round-trip fails (extension crashed, OS quirk)
+    ///   * the response doesn't carry a bandwidth payload (older
+    ///     extension build on iOS where TestFlight ships the
+    ///     extension independently of the host app)
+    public func bandwidthStats() async -> TunnelIPC.BandwidthStats? {
+        guard let session = manager?.connection as? NETunnelProviderSession else {
+            return nil
+        }
+        guard session.status == .connected else {
+            return nil
+        }
+        let request = TunnelIPC.Request(kind: .bandwidthStats)
+        let payload: Data
+        do {
+            payload = try TunnelIPC.encode(request)
+        } catch {
+            log.warning("bandwidthStats encode: \(String(describing: error), privacy: .public)")
+            return nil
+        }
+        return await withCheckedContinuation { (cont: CheckedContinuation<TunnelIPC.BandwidthStats?, Never>) in
+            do {
+                try session.sendProviderMessage(payload) { response in
+                    guard let response = response,
+                          let decoded = try? TunnelIPC.decodeResponse(response),
+                          decoded.ok,
+                          let bw = decoded.bandwidth else {
+                        cont.resume(returning: nil)
+                        return
+                    }
+                    cont.resume(returning: bw)
+                }
+            } catch {
+                self.log.warning("bandwidthStats sendProviderMessage: \(String(describing: error), privacy: .public)")
+                cont.resume(returning: nil)
+            }
+        }
+    }
+
     // MARK: - private
 
     private func attachObserver() {

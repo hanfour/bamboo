@@ -119,6 +119,23 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                 status: .init(connected: true, peerCount: -1)
             )
             completionHandler?((try? TunnelIPC.encode(resp)) ?? Data())
+
+        case .bandwidthStats:
+            // adapter.getRuntimeConfiguration returns the wg-uapi
+            // config string asynchronously. WGStatsParser sums
+            // tx_bytes / rx_bytes across every peer block. nil ⇒
+            // adapter has no active backend (tunnel not up yet);
+            // we report (0, 0) so the controller's heartbeat
+            // bandwidth-sample side-channel skips the write.
+            adapter.getRuntimeConfiguration { [weak self] config in
+                let (sent, received) = config.map(WGStatsParser.sumBytes) ?? (0, 0)
+                let resp = TunnelIPC.Response(
+                    ok: true,
+                    bandwidth: .init(bytesSent: sent, bytesReceived: received)
+                )
+                completionHandler?((try? TunnelIPC.encode(resp)) ?? Data())
+                _ = self
+            }
         }
     }
 

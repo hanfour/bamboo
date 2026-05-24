@@ -177,6 +177,7 @@ targets:
       - path: Shared/BambooTunnelError.swift
       - path: Shared/TunnelConfigurationBuilder.swift
       - path: Shared/TunnelIPC.swift
+      - path: Shared/WGStatsParser.swift
     # System Extensions use the NetworkExtension dict (not the
     # NSExtension dict the App Extension form uses). SYSX is the
     # required CFBundlePackageType — without it sysextd refuses to
@@ -347,6 +348,7 @@ targets:
       - path: Shared/MagicDNSResolver.swift
       - path: Shared/ControllerURLParser.swift
       - path: Shared/AdvertiseRoutesParser.swift
+      - path: Shared/WGStatsParser.swift
     settings:
       base:
         # Tests don't ship; sign locally with whatever the developer
@@ -424,6 +426,7 @@ targets:
       - path: Shared/BambooTunnelError.swift
       - path: Shared/TunnelConfigurationBuilder.swift
       - path: Shared/TunnelIPC.swift
+      - path: Shared/WGStatsParser.swift
     info:
       path: PacketTunnelProvider-iOS/Info.plist
       properties:

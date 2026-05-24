@@ -22,6 +22,13 @@ public enum TunnelIPC {
         /// Useful for "show last handshake time" UI; extension replies
         /// with a status payload.
         case status
+
+        /// The host app asks the extension for cumulative wg byte
+        /// counters summed across all peers. Powers the §4 P2
+        /// bandwidth-sample side-channel on each heartbeat (mirrors
+        /// the CLI's REST plumb in PR #188). Out-of-process because
+        /// the wg interface lives in the extension, not the app.
+        case bandwidthStats
     }
 
     /// Request envelope sent app -> extension.
@@ -37,16 +44,19 @@ public enum TunnelIPC {
 
     /// Response envelope sent extension -> app. `ok=false` plus a
     /// non-empty `error` indicates failure; `ok=true` may carry an
-    /// optional status payload.
+    /// optional status / bandwidth payload — the consumer picks
+    /// whichever it asked for via `Request.kind`.
     public struct Response: Codable {
         public let ok: Bool
         public let error: String?
         public let status: TunnelStatus?
+        public let bandwidth: BandwidthStats?
 
-        public init(ok: Bool, error: String? = nil, status: TunnelStatus? = nil) {
+        public init(ok: Bool, error: String? = nil, status: TunnelStatus? = nil, bandwidth: BandwidthStats? = nil) {
             self.ok = ok
             self.error = error
             self.status = status
+            self.bandwidth = bandwidth
         }
     }
 
@@ -59,6 +69,22 @@ public enum TunnelIPC {
         public init(connected: Bool, peerCount: Int) {
             self.connected = connected
             self.peerCount = peerCount
+        }
+    }
+
+    /// BandwidthStats is what `kind=bandwidthStats` returns —
+    /// cumulative byte counters summed across every wg peer on
+    /// the local interface. The values forward verbatim into the
+    /// controller's REST heartbeat (`bytesSent` / `bytesReceived`),
+    /// so the field order matches that wire pair to avoid a
+    /// rx/tx vocabulary flip silently swapping send for receive.
+    public struct BandwidthStats: Codable {
+        public let bytesSent: UInt64
+        public let bytesReceived: UInt64
+
+        public init(bytesSent: UInt64, bytesReceived: UInt64) {
+            self.bytesSent = bytesSent
+            self.bytesReceived = bytesReceived
         }
     }
 
