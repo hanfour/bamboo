@@ -329,6 +329,80 @@ func (h *HTTPServer) StartPublisher(ctx context.Context) {
 	go h.publisher.Run(ctx)
 }
 
+// inviteReaperInterval is how often the auto-revoke reaper sweeps
+// for expired invitations. 5 minutes is short enough that an
+// admin re-inviting the same email after a previous expiry sees
+// the partial-unique-index slot freed within an admin coffee
+// break, and long enough that the DB load stays negligible
+// (one query per tenant cluster every 5 min).
+//
+// Package-scoped non-const so tests can override.
+var inviteReaperInterval = 5 * time.Minute
+
+// StartInviteReaper launches the background goroutine that
+// expires unredeemed invitations past their expires_at. The
+// goroutine exits when ctx is canceled. Exposed separately from
+// Run so e2e tests can call it on demand.
+//
+// Each expired row gets one audit event with actor_type=system,
+// action=invitation.expire — webhook subscribers to
+// "invitation." get auto-revoke notifications for free.
+func (h *HTTPServer) StartInviteReaper(ctx context.Context) {
+	if h == nil || h.invitations == nil {
+		return
+	}
+	go func() {
+		// One immediate sweep on startup so an operator restarting
+		// the controller after a long downtime sees stale invites
+		// reaped within seconds rather than waiting for the first
+		// tick. Subsequent sweeps follow the interval.
+		h.reapExpiredInvitesOnce(ctx)
+		t := time.NewTicker(inviteReaperInterval)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				h.reapExpiredInvitesOnce(ctx)
+			}
+		}
+	}()
+}
+
+// reapExpiredInvitesOnce runs one pass of RevokeExpired + audit
+// log. Errors are logged but do not abort the reaper goroutine —
+// transient DB failures get retried on the next tick.
+func (h *HTTPServer) reapExpiredInvitesOnce(ctx context.Context) {
+	expired, err := h.invitations.RevokeExpired(ctx, time.Now().UTC())
+	if err != nil {
+		slog.Warn("invite reaper: RevokeExpired", "err", err)
+		return
+	}
+	if len(expired) == 0 {
+		return
+	}
+	slog.Info("invite reaper: revoked expired invitations", "count", len(expired))
+	for _, e := range expired {
+		tenantID := e.TenantID
+		ev := &repo.AuditEvent{
+			TenantID:     &tenantID,
+			ActorType:    "system",
+			Action:       "invitation.expire",
+			ResourceType: "invitation",
+			ResourceID:   &e.ID,
+		}
+		// Diff captures the email so the audit row stays
+		// human-readable without forcing the reader to cross-
+		// reference the user_invitations row (which still exists
+		// — revoked, not deleted).
+		ev.Diff = marshalDiffJSON(map[string]any{"email": e.Email})
+		if err := h.audits.Insert(ctx, ev); err != nil {
+			slog.Warn("invite reaper: audit insert", "invitation_id", e.ID, "err", err)
+		}
+	}
+}
+
 // Run blocks until ctx is canceled or the listener errors.
 func (h *HTTPServer) Run(ctx context.Context) error {
 	// Start the webhook delivery worker so audit events fired during
@@ -336,6 +410,7 @@ func (h *HTTPServer) Run(ctx context.Context) error {
 	// Worker exits when ctx is canceled; the HTTP shutdown path
 	// below also waits for ctx cancellation so they unwind together.
 	h.StartPublisher(ctx)
+	h.StartInviteReaper(ctx)
 	errCh := make(chan error, 1)
 	go func() {
 		slog.Info("HTTP server listening", "addr", h.addr)
