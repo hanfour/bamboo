@@ -123,8 +123,14 @@
         "timestamps": "時間",
         "advertise": "宣告路由",
         "actions": "操作",
+        "bandwidth": "頻寬流量",
         "connectionTimeline": "連線路徑變化",
         "timeline": "活動時間軸"
+      },
+      "bandwidth": {
+        "window": "最近 {window}",
+        "peak": "尖峰 {rate}",
+        "sparklineAria": "{label} 流量走勢圖，共傳輸 {total}"
       },
       "advertise": {
         "routesHint": "此節點宣告以下 CIDR 可由它轉發。請核可你信任的範圍 —— 只有核可的部分才會合併進其他節點的 allowed_ips。",
@@ -180,7 +186,8 @@
         "tags": "無標籤",
         "noHandshake": "尚未握手",
         "timeline": "尚無活動紀錄",
-        "connectionTimeline": "近 24 小時內沒有路徑切換 —— 連線穩定。"
+        "connectionTimeline": "近 24 小時內沒有路徑切換 —— 連線穩定。",
+        "bandwidth": "尚無頻寬樣本。支援頻寬回報的用戶端在下次心跳後會自動填入此區。"
       },
       "connectionTimeline": {
         "path": {

@@ -14,7 +14,19 @@ import {
  setPeerTagsAction,
 } from '@/lib/actions';
 import { useDialogA11y } from '@/hooks/useDialogA11y';
-import type { PeerConnectionEvent, PeerConnectionPath, PeerRouteConflict } from '@/lib/api';
+import type {
+ PeerBandwidthSample,
+ PeerConnectionEvent,
+ PeerConnectionPath,
+ PeerRouteConflict,
+} from '@/lib/api';
+import {
+ computeDeltas,
+ formatBytes as formatBandwidthBytes,
+ formatRate,
+ sparklinePath,
+ sumWindow,
+} from '@/lib/bandwidth';
 import type { FetchResult, Peer, PeerEvent } from '@/lib/types';
 
 type Props = {
@@ -40,6 +52,12 @@ type Props = {
  // even if the conflicts endpoint is offline. The AdvertiseSection
  // filters by CIDR to render an inline badge per affected row.
  routeConflicts: PeerRouteConflict[];
+ // bandwidth is the cumulative-counter time series the §4 P2
+ // BandwidthSection renders as a sparkline + last-window totals.
+ // Empty array on any fetch failure (incl. CH outage / older
+ // controller without the endpoint) → section renders an empty
+ // state rather than taking down the drawer.
+ bandwidth: PeerBandwidthSample[];
  open: boolean;
  onClose: () => void;
  // onDeleted fires after a successful delete so PeersView can clear
@@ -53,7 +71,7 @@ type Props = {
 // forward and link-sharing both work; `peer` is null when the id
 // resolved to 404 (deleted peer or stale link), and the drawer
 // renders a not-found state in that case.
-export function PeerDrawer({ peerResult, events, connectionEvents, routeConflicts, open, onClose, onDeleted }: Props) {
+export function PeerDrawer({ peerResult, events, connectionEvents, routeConflicts, bandwidth, open, onClose, onDeleted }: Props) {
  const peer = peerResult?.kind === 'ok' ? peerResult.value : null;
  const t = useTranslations('peers.drawer');
  const tStatus = useTranslations('peers.status');
@@ -87,7 +105,7 @@ export function PeerDrawer({ peerResult, events, connectionEvents, routeConflict
  >
  <DrawerHeader peer={peer} statusLabel={peer ? tStatus(peer.status) : ''} onClose={onClose} closeLabel={t('close')} />
  <div className="flex-1 overflow-y-auto px-6 py-4">
- {renderBody(peerResult, events, connectionEvents, routeConflicts, onDeleted, t)}
+ {renderBody(peerResult, events, connectionEvents, routeConflicts, bandwidth, onDeleted, t)}
  </div>
  </div>
  </div>
@@ -140,12 +158,14 @@ function DrawerBody({
  events,
  connectionEvents,
  routeConflicts,
+ bandwidth,
  onDeleted,
 }: {
  peer: Peer;
  events: PeerEvent[];
  connectionEvents: PeerConnectionEvent[];
  routeConflicts: PeerRouteConflict[];
+ bandwidth: PeerBandwidthSample[];
  onDeleted: () => void;
 }) {
  const t = useTranslations('peers.drawer');
@@ -234,6 +254,10 @@ function DrawerBody({
  <Section title={t('sections.actions')}>
  <DisableToggle peer={peer} onError={setError} />
  <DeleteButton peer={peer} onError={setError} onDeleted={onDeleted} />
+ </Section>
+
+ <Section title={t('sections.bandwidth')}>
+ <BandwidthSection samples={bandwidth} />
  </Section>
 
  <Section title={t('sections.connectionTimeline')}>
@@ -768,6 +792,117 @@ function DeleteButton({
  );
 }
 
+// BandwidthSection renders the §4 P2 per-peer bandwidth view: a
+// sparkline of recent throughput stacked over the cumulative totals
+// for the displayed window. Cumulative wg counters arrive at
+// heartbeat cadence (~30s); we compute deltas client-side via
+// lib/bandwidth.ts so the controller stays stateless.
+//
+// We render TWO sparklines stacked (tx on top, rx below) instead of
+// overlaid because overlaid lines on a 28px-tall sparkline cross
+// each other constantly and become unreadable. Stacked also keeps
+// the labels honest — admins can see "this peer is upload-heavy"
+// without color-coding intuition.
+//
+// Empty state (< 2 samples) explains why the section is blank: the
+// CLI feature ships in #188, controllers without it produce no
+// rows, and a never-talked-to peer has no samples either. We tell
+// the user instead of rendering a misleading empty axis.
+function BandwidthSection({ samples }: { samples: PeerBandwidthSample[] }) {
+ const t = useTranslations('peers.drawer');
+ const deltas = computeDeltas(samples);
+ if (deltas.length === 0) {
+  return <p className="text-sm text-bamboo-200/60">{t('empty.bandwidth')}</p>;
+ }
+ const totals = sumWindow(deltas);
+ const sentSeries = deltas.map((d) => d.sentBytesPerSec);
+ const recvSeries = deltas.map((d) => d.receivedBytesPerSec);
+ const peakSent = Math.max(...sentSeries);
+ const peakRecv = Math.max(...recvSeries);
+ const window = formatRelativeWindow(deltas[0].startedAt, deltas[deltas.length - 1].endedAt);
+ return (
+  <div className="space-y-3">
+   <p className="text-xs text-bamboo-200/60">{t('bandwidth.window', { window })}</p>
+   <SparklineRow
+    label={t('fields.txBytes')}
+    series={sentSeries}
+    total={totals.sent}
+    peak={peakSent}
+   />
+   <SparklineRow
+    label={t('fields.rxBytes')}
+    series={recvSeries}
+    total={totals.received}
+    peak={peakRecv}
+   />
+  </div>
+ );
+}
+
+// SparklineRow is one row inside BandwidthSection: label + tiny SVG
+// path + total-in-window + peak-rate. The 240×28 viewBox is sized
+// to fit the drawer column without horizontal scrolling at any zoom
+// down to ~min-tablet width. stroke-width 1.25 reads well against
+// the warm-dark ink-900 surface without dominating the text labels.
+function SparklineRow({
+ label,
+ series,
+ total,
+ peak,
+}: {
+ label: string;
+ series: number[];
+ total: number;
+ peak: number;
+}) {
+ const t = useTranslations('peers.drawer');
+ const path = sparklinePath(series, 240, 28);
+ return (
+  <div className="space-y-1">
+   <div className="flex items-baseline justify-between gap-3 text-xs">
+    <span className="text-bamboo-200/70">{label}</span>
+    <span className="text-bamboo-100">
+     {formatBandwidthBytes(total)}
+     <span className="ml-2 text-bamboo-200/60">{t('bandwidth.peak', { rate: formatRate(peak) })}</span>
+    </span>
+   </div>
+   <svg
+    role="img"
+    aria-label={t('bandwidth.sparklineAria', { label, total: formatBandwidthBytes(total) })}
+    viewBox="0 0 240 28"
+    preserveAspectRatio="none"
+    className="block h-7 w-full"
+   >
+    {path && (
+     <path
+      d={path}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.25"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="text-bamboo-300"
+     />
+    )}
+   </svg>
+  </div>
+ );
+}
+
+// formatRelativeWindow renders the chart's covered time range as a
+// terse "last Xh" / "last Xd" string. Keeps the section header
+// honest about how much history backs the visible bars without
+// asking the operator to do mental math from two timestamps.
+function formatRelativeWindow(start: Date, end: Date): string {
+ const seconds = Math.max(0, (end.getTime() - start.getTime()) / 1000);
+ if (seconds < 60) return `${Math.round(seconds)}s`;
+ const minutes = seconds / 60;
+ if (minutes < 60) return `${Math.round(minutes)}m`;
+ const hours = minutes / 60;
+ if (hours < 48) return `${Math.round(hours)}h`;
+ return `${Math.round(hours / 24)}d`;
+}
+
 // ConnectionTimeline renders the per-peer path-transition log (issue
 // #138 v2). Newest-first list of "newPath ← prevPath at relative
 // time" entries, mirroring the ⚡/🔄 glyph the PeerTable status
@@ -978,6 +1113,7 @@ function renderBody(
  events: PeerEvent[],
  connectionEvents: PeerConnectionEvent[],
  routeConflicts: PeerRouteConflict[],
+ bandwidth: PeerBandwidthSample[],
  onDeleted: () => void,
  t: ReturnType<typeof useTranslations>,
 ) {
@@ -993,6 +1129,7 @@ function renderBody(
  events={events}
  connectionEvents={connectionEvents}
  routeConflicts={routeConflicts}
+ bandwidth={bandwidth}
  onDeleted={onDeleted}
  />
  );

@@ -403,6 +403,38 @@ export type PeerRouteConflict = {
   otherCidr: string;
 };
 
+// PeerBandwidthSample is one cumulative-counter row from the
+// §4 P2 bandwidth metering side-channel. Mirrors the controller's
+// apiPeerBandwidthSampleJSON in api.go. Cumulative — readers
+// compute deltas via lib/bandwidth.ts:computeDeltas. Counter reset
+// on peer reboot is detected by current < previous and dropped.
+//
+// path correlates the throughput with the connection-path state at
+// the time of the heartbeat (one of "direct" / "relay" / "" for the
+// CLI which doesn't report path yet). Optional — empty path is fine
+// for the dashboard's first-cut rendering.
+export type PeerBandwidthSample = {
+  occurredAt: string;
+  path: string;
+  bytesSent: number;
+  bytesReceived: number;
+};
+
+// fetchPeerBandwidth pulls the recent cumulative byte-counter
+// samples for one peer (§4 P2). Side-channel from the drawer's
+// primary render: any error path (auth, network, CH outage)
+// collapses to [] so the bandwidth section renders empty rather
+// than crashing the drawer. The endpoint defaults to a 24h window
+// server-side; the dashboard renders a sparkline + last-window totals
+// from whatever lands.
+export async function fetchPeerBandwidth(id: string): Promise<PeerBandwidthSample[]> {
+  const r = await fetchResult<{ samples: PeerBandwidthSample[] }>(
+    `/api/v1/peers/${encodeURIComponent(id)}/bandwidth`,
+  );
+  if (r.kind !== 'ok') return [];
+  return r.value.samples ?? [];
+}
+
 // fetchPeerRouteConflicts pulls the list of approved-route conflicts
 // affecting this peer (§3a follow-up). Side-channel from the drawer's
 // primary render: any error path (auth, network, controller outage)

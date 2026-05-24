@@ -4,7 +4,7 @@
 
 import { useCallback } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import type { PeerConnectionEvent, PeerRouteConflict } from '@/lib/api';
+import type { PeerBandwidthSample, PeerConnectionEvent, PeerRouteConflict } from '@/lib/api';
 import type { FetchResult, Peer, PeerEvent } from '@/lib/types';
 import { PeerTable } from './PeerTable';
 import { PeerDrawer } from './PeerDrawer';
@@ -16,6 +16,7 @@ type Props = {
   selectedEvents: PeerEvent[];
   selectedConnectionEvents: PeerConnectionEvent[];
   selectedRouteConflicts: PeerRouteConflict[];
+  selectedBandwidth: PeerBandwidthSample[];
   selectedId?: string;
 };
 
@@ -34,6 +35,7 @@ export function PeersView({
   selectedEvents,
   selectedConnectionEvents,
   selectedRouteConflicts,
+  selectedBandwidth,
   selectedId,
 }: Props) {
   const router = useRouter();
@@ -68,6 +70,7 @@ export function PeersView({
         events={selectedEvents}
         connectionEvents={selectedConnectionEvents}
         routeConflicts={selectedRouteConflicts}
+        bandwidth={selectedBandwidth}
         open={open}
         onClose={() => setSelected(null)}
         onDeleted={() => setSelected(null)}

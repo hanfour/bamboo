@@ -8,10 +8,12 @@ import { Link } from '@/i18n/routing';
 import {
  fetchMe,
  fetchPeer,
+ fetchPeerBandwidth,
  fetchPeerConnectionEvents,
  fetchPeerEvents,
  fetchPeerRouteConflicts,
  fetchPeers,
+ type PeerBandwidthSample,
  type PeerConnectionEvent,
  type PeerRouteConflict,
 } from '@/lib/api';
@@ -32,6 +34,7 @@ export default async function PeersPage({
  selectedEvents,
  selectedConnectionEvents,
  selectedRouteConflicts,
+ selectedBandwidth,
  me,
  ] = await Promise.all([
  fetchPeers(),
@@ -39,6 +42,7 @@ export default async function PeersPage({
  selected ? fetchPeerEvents(selected) : Promise.resolve([]),
  selected ? fetchPeerConnectionEvents(selected) : Promise.resolve([] as PeerConnectionEvent[]),
  selected ? fetchPeerRouteConflicts(selected) : Promise.resolve([] as PeerRouteConflict[]),
+ selected ? fetchPeerBandwidth(selected) : Promise.resolve([] as PeerBandwidthSample[]),
  fetchMe(),
  ]);
 
@@ -57,6 +61,7 @@ export default async function PeersPage({
  selectedEvents={selectedEvents}
  selectedConnectionEvents={selectedConnectionEvents}
  selectedRouteConflicts={selectedRouteConflicts}
+ selectedBandwidth={selectedBandwidth}
  selectedId={selected}
  tenantSlug={me.tenantSlug}
  />
@@ -69,6 +74,7 @@ function Peers({
  selectedEvents,
  selectedConnectionEvents,
  selectedRouteConflicts,
+ selectedBandwidth,
  selectedId,
  tenantSlug,
 }: {
@@ -77,6 +83,7 @@ function Peers({
  selectedEvents: PeerEvent[];
  selectedConnectionEvents: PeerConnectionEvent[];
  selectedRouteConflicts: PeerRouteConflict[];
+ selectedBandwidth: PeerBandwidthSample[];
  selectedId?: string;
  tenantSlug: string;
 }) {
@@ -110,6 +117,7 @@ function Peers({
  selectedEvents={selectedEvents}
  selectedConnectionEvents={selectedConnectionEvents}
  selectedRouteConflicts={selectedRouteConflicts}
+ selectedBandwidth={selectedBandwidth}
  selectedId={selectedId}
  />
  </div>
