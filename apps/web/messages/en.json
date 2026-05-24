@@ -518,6 +518,27 @@
       "done": "Done"
     }
   },
+  "relays": {
+    "title": "Relay servers",
+    "titleAccent": "registry",
+    "subtitle": "Shared infrastructure that forwards WireGuard packets for peers behind symmetric NAT. The controller probes each relay's /healthz every 30 seconds; relays marked unhealthy are hidden from the relay list clients receive on register.",
+    "empty": "No relays registered yet. Add one via POST /api/v1/admin/relays (create form coming in a follow-up).",
+    "columns": {
+      "region": "Region",
+      "hostname": "Hostname",
+      "port": "Port",
+      "health": "Health",
+      "lastCheck": "Last check"
+    },
+    "health": {
+      "healthy": "Healthy",
+      "unhealthy": "Unhealthy",
+      "unknown": "Pending probe"
+    },
+    "lastCheck": {
+      "never": "Never probed"
+    }
+  },
   "settings": {
     "title": "Settings",
     "titleAccent": "tenant",
@@ -548,6 +569,11 @@
       "title": "API tokens",
       "description": "Long-lived admin tokens for CI / Terraform / ops scripts. Presented as Authorization: Bearer bat_… on any /api/v1/* call.",
       "link": "Go to API tokens"
+    },
+    "relaysCard": {
+      "title": "Relay servers",
+      "description": "Shared infrastructure that forwards WireGuard packets for peers behind symmetric NAT. The controller probes each one every 30s and flags unreachable ones.",
+      "link": "Go to Relay servers"
     }
   },
   "invite": {

@@ -518,6 +518,27 @@
       "done": "完成"
     }
   },
+  "relays": {
+    "title": "Relay 伺服器",
+    "titleAccent": "registry",
+    "subtitle": "共用基礎設施，協助位於對稱 NAT 後的節點轉發 WireGuard 封包。Controller 每 30 秒探測一次各台 relay 的 /healthz；被標記為不健康的 relay 不會出現在 client 註冊時收到的清單裡。",
+    "empty": "尚未註冊任何 relay。可透過 POST /api/v1/admin/relays 新增（建立表單預計後續上線）。",
+    "columns": {
+      "region": "地區",
+      "hostname": "Hostname",
+      "port": "Port",
+      "health": "健康狀態",
+      "lastCheck": "上次檢查"
+    },
+    "health": {
+      "healthy": "健康",
+      "unhealthy": "不健康",
+      "unknown": "尚未檢查"
+    },
+    "lastCheck": {
+      "never": "尚未檢查"
+    }
+  },
   "settings": {
     "title": "設定",
     "titleAccent": "tenant",
@@ -548,6 +569,11 @@
       "title": "API tokens",
       "description": "長效 admin token，供 CI / Terraform / 維運腳本呼叫 /api/v1/* 使用。",
       "link": "前往 API tokens"
+    },
+    "relaysCard": {
+      "title": "Relay 伺服器",
+      "description": "共用基礎設施，協助位於對稱 NAT 後的節點轉發 WireGuard 封包。Controller 每 30 秒探測一次，無法到達者會自動隱藏。",
+      "link": "前往 Relay 伺服器"
     }
   },
   "invite": {

@@ -316,6 +316,39 @@ export async function fetchWebhooks(): Promise<FetchResult<Webhook[]>> {
   return { kind: 'ok', value: r.value.webhooks ?? [] };
 }
 
+// Relay is one row from /api/v1/admin/relays (super-admin only).
+// Mirrors the controller's relayJSON shape including the §4 P2
+// stage 1 health fields. lastHealthStatus is normalised server-
+// side to one of "unknown" / "healthy" / "unhealthy" so the
+// renderer doesn't have to special-case nil. lastHealthError is
+// the short cause text the reaper recorded; empty when status is
+// not 'unhealthy'.
+export type RelayHealthStatus = 'unknown' | 'healthy' | 'unhealthy';
+
+export type Relay = {
+  id: string;
+  region: string;
+  hostname: string;
+  port: number;
+  publicKey: string;
+  enabled: boolean;
+  lastHealthStatus?: RelayHealthStatus;
+  lastHealthError?: string;
+  lastHealthCheckAt?: string;
+};
+
+// fetchRelays lists every enabled relay in the registry along
+// with each one's most recent health-probe outcome (§4 P2 stage 1).
+// The endpoint is admin-only on the wire; non-admin callers get a
+// 403 which the FetchErrorState surface translates into the
+// "permission needed" view. Includes unhealthy rows so admins can
+// see + debug them — that's the whole point of the page.
+export async function fetchRelays(): Promise<FetchResult<Relay[]>> {
+  const r = await fetchResult<{ relays: Relay[] }>('/api/v1/admin/relays');
+  if (r.kind !== 'ok') return r;
+  return { kind: 'ok', value: r.value.relays ?? [] };
+}
+
 // fetchPolicyRevisions backs the /acl Versions tab (issue #134).
 // The endpoint is admin-only on the wire; non-admin callers see a
 // 403 which the FetchErrorState surface translates into the
