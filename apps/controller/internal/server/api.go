@@ -129,6 +129,20 @@ func (h *HTTPServer) routeAPI(w http.ResponseWriter, r *http.Request) {
 			h.apiPeerRouteConflicts(w, r, tenant, id)
 			return
 		}
+		// "{id}/bandwidth" — time series of bandwidth_sample rows
+		// reported by this peer (§4 P2). Cumulative byte counters;
+		// the response carries raw samples and the renderer
+		// computes deltas (a sample where current < previous is a
+		// monotonic-counter reset — wg interface restart — and is
+		// treated as the start of a new session).
+		if id, found := strings.CutSuffix(rest, "/bandwidth"); found && id != "" && !strings.Contains(id, "/") {
+			if r.Method != http.MethodGet {
+				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+				return
+			}
+			h.apiPeerBandwidth(w, r, tenant, id)
+			return
+		}
 		// "{id}/approve" — admin gates a pending peer into the mesh
 		// (issue #133). POST-only; requireAdmin is enforced inside the
 		// handler. Idempotent: re-approving an already-approved peer
@@ -1655,6 +1669,75 @@ func (h *HTTPServer) apiPeerConnectionEvents(w http.ResponseWriter, r *http.Requ
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"events": out})
+}
+
+// apiPeerBandwidthSampleJSON is one row in the bandwidth time
+// series. Cumulative counters by design; consumer computes
+// deltas. See clickhouse.BandwidthSample for the storage shape.
+type apiPeerBandwidthSampleJSON struct {
+	OccurredAt    time.Time `json:"occurredAt"`
+	Path          string    `json:"path,omitempty"`
+	BytesSent     uint64    `json:"bytesSent"`
+	BytesReceived uint64    `json:"bytesReceived"`
+}
+
+// apiPeerBandwidth implements GET /api/v1/peers/{id}/bandwidth?since=&limit=
+//
+// Returns oldest-first bandwidth_sample rows for the peer. since
+// defaults to 24h ago; limit defaults to 2000 (cap 5000). Tenant
+// scoping mirrors apiPeerEvents — peer row fetched first so
+// cross-tenant probing 404s before the ClickHouse query runs.
+// CH not configured ⇒ empty list (200 OK, samples=[]) rather
+// than 5xx, same graceful-degrade pattern as the connection-
+// events endpoint.
+func (h *HTTPServer) apiPeerBandwidth(w http.ResponseWriter, r *http.Request, tenant *repo.Tenant, idStr string) {
+	id, err := uuid.Parse(idStr)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	p, err := h.peers.GetByID(r.Context(), id)
+	if errors.Is(err, repo.ErrNotFound) {
+		http.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if p.TenantID != tenant.ID {
+		http.NotFound(w, r)
+		return
+	}
+
+	since := time.Now().Add(-24 * time.Hour)
+	if v := r.URL.Query().Get("since"); v != "" {
+		if t, perr := time.Parse(time.RFC3339, v); perr == nil {
+			since = t
+		}
+	}
+	limit := 2000
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, perr := strconv.Atoi(v); perr == nil && n > 0 {
+			limit = n
+		}
+	}
+
+	samples, err := h.connEvents.ListBandwidthByPeer(r.Context(), tenant.ID, id, since, limit)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	out := make([]apiPeerBandwidthSampleJSON, 0, len(samples))
+	for _, s := range samples {
+		out = append(out, apiPeerBandwidthSampleJSON{
+			OccurredAt:    s.OccurredAt,
+			Path:          s.Path,
+			BytesSent:     s.BytesSent,
+			BytesReceived: s.BytesReceived,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"samples": out})
 }
 
 // apiPeerRouteConflictJSON is one row from

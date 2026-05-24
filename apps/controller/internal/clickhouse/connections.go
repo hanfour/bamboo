@@ -158,6 +158,66 @@ func (r *ConnectionEvents) ListByPeer(
 	return out, rows.Err()
 }
 
+// BandwidthSample is one row from ListBandwidthByPeer — a thin
+// projection of the connection_events columns the bandwidth API
+// returns. EventType is always "bandwidth_sample" on these rows
+// (filtered in the query) so the consumer doesn't have to
+// re-check.
+type BandwidthSample struct {
+	OccurredAt    time.Time
+	Path          string
+	BytesSent     uint64
+	BytesReceived uint64
+}
+
+// ListBandwidthByPeer returns bandwidth_sample rows for the
+// given peer since `since`, oldest first. Oldest-first ordering
+// lets the consumer compute deltas with a single forward pass
+// (current.bytes - previous.bytes); newest-first would force a
+// reverse iteration.
+//
+// limit caps the row count; callers should pass a small number
+// (≤2000) — at the typical 30s heartbeat cadence that's >16
+// hours of samples per peer, plenty for the bandwidth chart's
+// rolling-window view. CH not configured ⇒ empty slice, same
+// graceful-degrade pattern the writer uses.
+func (r *ConnectionEvents) ListBandwidthByPeer(
+	ctx context.Context,
+	tenantID uuid.UUID,
+	peerID uuid.UUID,
+	since time.Time,
+	limit int,
+) ([]*BandwidthSample, error) {
+	if !r.c.IsConfigured() {
+		return nil, nil
+	}
+	if limit <= 0 || limit > 5000 {
+		limit = 2000
+	}
+	rows, err := r.c.driver().Query(ctx, `
+		SELECT occurred_at, path, bytes_sent, bytes_received
+		  FROM connection_events
+		 WHERE tenant_id = ? AND source_peer_id = ?
+		   AND event_type = 'bandwidth_sample'
+		   AND occurred_at >= ?
+		 ORDER BY occurred_at ASC
+		 LIMIT ?
+	`, tenantID, peerID, since, uint64(limit))
+	if err != nil {
+		return nil, fmt.Errorf("query bandwidth samples: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []*BandwidthSample
+	for rows.Next() {
+		var s BandwidthSample
+		if err := rows.Scan(&s.OccurredAt, &s.Path, &s.BytesSent, &s.BytesReceived); err != nil {
+			return nil, fmt.Errorf("scan bandwidth sample: %w", err)
+		}
+		out = append(out, &s)
+	}
+	return out, rows.Err()
+}
+
 // CountByTenant returns the count of events for a tenant since `since`.
 // Used by tests + future overview widgets.
 func (r *ConnectionEvents) CountByTenant(ctx context.Context, tenantID uuid.UUID, since time.Time) (uint64, error) {

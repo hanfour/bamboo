@@ -86,6 +86,57 @@ func TestConnectionEvents_ListByPeer(t *testing.T) {
 	}
 }
 
+// TestConnectionEvents_ListBandwidthByPeer pins the §4 P2
+// bandwidth-metering read path: only bandwidth_sample rows for
+// THIS peer, in oldest-first order, restricted to the since
+// window. Other event types (path_change rows in particular)
+// must NOT bleed in or the consumer's delta computation runs
+// against wrong data.
+func TestConnectionEvents_ListBandwidthByPeer(t *testing.T) {
+	c := requireCH(t)
+	ctx := context.Background()
+	events := clickhouse.NewConnectionEvents(c)
+	tenantID := uuid.New()
+	peerA := uuid.New()
+	peerB := uuid.New()
+
+	now := time.Now().UTC().Truncate(time.Second)
+	rows := []*clickhouse.ConnectionEvent{
+		// Three bandwidth samples for peer A — should round-trip.
+		{TenantID: tenantID, OccurredAt: now.Add(-3 * time.Hour), SourcePeerID: peerA, EventType: "bandwidth_sample", Path: "direct", BytesSent: 1000, BytesReceived: 500},
+		{TenantID: tenantID, OccurredAt: now.Add(-2 * time.Hour), SourcePeerID: peerA, EventType: "bandwidth_sample", Path: "direct", BytesSent: 2500, BytesReceived: 1200},
+		{TenantID: tenantID, OccurredAt: now.Add(-1 * time.Hour), SourcePeerID: peerA, EventType: "bandwidth_sample", Path: "relay", BytesSent: 4000, BytesReceived: 2000},
+		// path_change row for peer A — must be filtered out.
+		{TenantID: tenantID, OccurredAt: now.Add(-90 * time.Minute), SourcePeerID: peerA, EventType: "path_change", Path: "relay", PrevPath: "direct"},
+		// Peer B's bandwidth — must NOT show up in peerA's list.
+		{TenantID: tenantID, OccurredAt: now.Add(-30 * time.Minute), SourcePeerID: peerB, EventType: "bandwidth_sample", Path: "direct", BytesSent: 999, BytesReceived: 999},
+		// Older-than-window peer A sample — filtered by since.
+		{TenantID: tenantID, OccurredAt: now.Add(-48 * time.Hour), SourcePeerID: peerA, EventType: "bandwidth_sample", Path: "direct", BytesSent: 1, BytesReceived: 1},
+	}
+	if err := events.InsertBatch(ctx, rows); err != nil {
+		t.Fatalf("InsertBatch: %v", err)
+	}
+
+	got, err := events.ListBandwidthByPeer(ctx, tenantID, peerA, now.Add(-24*time.Hour), 50)
+	if err != nil {
+		t.Fatalf("ListBandwidthByPeer: %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("got %d samples, want 3 (path_change + peerB + 48h-old all filtered); rows=%+v", len(got), got)
+	}
+	// Oldest-first ordering: bytes_sent must increase across the slice.
+	wantSent := []uint64{1000, 2500, 4000}
+	wantPath := []string{"direct", "direct", "relay"}
+	for i, s := range got {
+		if s.BytesSent != wantSent[i] {
+			t.Errorf("got[%d].BytesSent = %d, want %d", i, s.BytesSent, wantSent[i])
+		}
+		if s.Path != wantPath[i] {
+			t.Errorf("got[%d].Path = %q, want %q", i, s.Path, wantPath[i])
+		}
+	}
+}
+
 func TestConnectionEvents_NilConnDegrades(t *testing.T) {
 	events := clickhouse.NewConnectionEvents(nil)
 	ctx := context.Background()
@@ -103,5 +154,9 @@ func TestConnectionEvents_NilConnDegrades(t *testing.T) {
 	listed, err := events.ListByPeer(ctx, uuid.New(), uuid.New(), time.Now().Add(-time.Hour), 10)
 	if err != nil || len(listed) != 0 {
 		t.Errorf("nil-conn ListByPeer = %d rows, err=%v; want 0, nil", len(listed), err)
+	}
+	bw, err := events.ListBandwidthByPeer(ctx, uuid.New(), uuid.New(), time.Now().Add(-time.Hour), 10)
+	if err != nil || len(bw) != 0 {
+		t.Errorf("nil-conn ListBandwidthByPeer = %d rows, err=%v; want 0, nil", len(bw), err)
 	}
 }

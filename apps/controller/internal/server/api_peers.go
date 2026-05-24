@@ -314,6 +314,60 @@ func (h *HTTPServer) logPathTransition(ctx context.Context, peerID uuid.UUID, pr
 	}
 }
 
+// logBandwidthSample writes a bandwidth_sample row to
+// connection_events on every heartbeat that reports non-zero
+// counters (§4 P2). The row carries:
+//
+//   - source_peer_id      = the peer reporting bytes
+//   - destination_peer_id = uuid.Nil — bytes are aggregated across
+//     every WG peer this row's peer talks to,
+//     not per-link (per-link would require
+//     the reporter to enumerate its wg peers
+//     and produce one row per pair; deferred
+//     to v2).
+//   - event_type          = "bandwidth_sample"
+//   - path                = the most-recent connection path the
+//     reporter knows (empty when never set);
+//     lets the reader correlate transfer
+//     volume with direct-vs-relay state.
+//   - bytes_sent / received = CUMULATIVE wg counters at this tick.
+//     Readers compute deltas via window
+//     functions; a row where current <
+//     previous indicates an interface reset
+//     and gets treated as the start of a new
+//     session in the reader.
+//
+// Cumulative-vs-delta on the wire: storing cumulative keeps the
+// controller stateless across reporter restarts (no last-known
+// to track per peer). The reader pays a query-time cost for
+// delta computation, which is the right place for it since the
+// only consumer today is the (rarely-loaded) bandwidth chart.
+//
+// Failures are logged but never propagated to the heartbeat
+// response — admin-visibility data must not knock real clients
+// offline.
+func (h *HTTPServer) logBandwidthSample(ctx context.Context, peerID uuid.UUID, path string, bytesSent, bytesReceived uint64) {
+	if h.connEvents == nil {
+		return
+	}
+	peer, err := h.peers.GetByID(ctx, peerID)
+	if err != nil {
+		slog.Warn("bandwidth sample: peer lookup failed", "peer_id", peerID, "err", err)
+		return
+	}
+	if err := h.connEvents.Insert(ctx, &clickhouse.ConnectionEvent{
+		TenantID:          peer.TenantID,
+		SourcePeerID:      peerID,
+		DestinationPeerID: uuid.Nil,
+		EventType:         "bandwidth_sample",
+		Path:              path,
+		BytesSent:         bytesSent,
+		BytesReceived:     bytesReceived,
+	}); err != nil {
+		slog.Warn("bandwidth sample: clickhouse insert failed", "peer_id", peerID, "err", err)
+	}
+}
+
 // mintPeerSession issues a peer-bound bearer token derived from the
 // Register response. Pulls tenant_id + peer_id from the response (the
 // authoritative source after IP allocation) and the wireguard pubkey
@@ -355,6 +409,17 @@ type peerHeartbeatRequest struct {
 	// LatencyMs is the most-recent RTT measurement the peer has
 	// (heartbeat / ping). Zero → leave the column unchanged.
 	LatencyMs int32 `json:"latencyMs,omitempty"`
+	// BytesSent / BytesReceived are CUMULATIVE wg interface
+	// counters this peer has observed since its wg interface came
+	// up. Reset on peer reboot / interface restart — readers must
+	// detect the monotonic-counter reset (a sample where current <
+	// previous) and treat it as a fresh session. Both zero ⇒ the
+	// reporter has no data yet (e.g. fresh interface, no traffic);
+	// the controller skips the bandwidth-sample write to avoid
+	// noise in the time series. Optional; clients that don't yet
+	// implement bandwidth reporting omit the fields.
+	BytesSent     uint64 `json:"bytesSent,omitempty"`
+	BytesReceived uint64 `json:"bytesReceived,omitempty"`
 }
 
 type peerHeartbeatResponse struct {
@@ -430,6 +495,16 @@ func (h *HTTPServer) apiPeersHeartbeat(w http.ResponseWriter, r *http.Request) {
 					h.logPathTransition(r.Context(), peerID, prevPath, body.ConnectionPath, body.LatencyMs)
 				}
 			}
+		}
+	}
+	// Bandwidth-sample side-channel (§4 P2). Skip when both
+	// counters are zero — a peer that hasn't transferred anything
+	// yet would otherwise drown the time series in noise. Skip
+	// when PeerID doesn't parse (malformed body — the request
+	// already returned via the path above; this is belt-and-braces).
+	if body.BytesSent > 0 || body.BytesReceived > 0 {
+		if peerID, perr := uuid.Parse(body.PeerID); perr == nil {
+			h.logBandwidthSample(r.Context(), peerID, body.ConnectionPath, body.BytesSent, body.BytesReceived)
 		}
 	}
 	writeJSON(w, http.StatusOK, peerHeartbeatResponse{
