@@ -642,3 +642,66 @@ export async function testWebhookAction(id: string): Promise<WebhookTestResult> 
     return { ok: false, error: (e as Error).message };
   }
 }
+
+// APITokenMintResult mirrors WebhookCreateResult: `token` is the
+// plaintext shown ONCE here, never returned by subsequent list
+// reads. The modal must capture it before close.
+export type APITokenMintResult =
+  | { ok: true; id: string; token: string }
+  | { ok: false; error: string };
+
+// mintAPITokenAction creates a new API token. v1 grants every
+// token tenant-admin scope; per-action scopes are a future
+// follow-up. expiresAt is optional — absent means "never
+// expires" (rotate via revoke + re-mint).
+export async function mintAPITokenAction(input: {
+  name: string;
+  description: string;
+  expiresAt?: string;
+}): Promise<APITokenMintResult> {
+  try {
+    const body: Record<string, unknown> = {
+      name: input.name.trim(),
+      description: input.description.trim(),
+    };
+    if (input.expiresAt) {
+      body.expiresAt = input.expiresAt;
+    }
+    const res = await fetch(`${BASE}/api/v1/api-tokens`, {
+      method: 'POST',
+      headers: await buildHeaders(),
+      body: JSON.stringify(body),
+      cache: 'no-store',
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      return { ok: false, error: `${res.status} ${text || res.statusText}` };
+    }
+    const out = (await res.json()) as { id: string; token: string };
+    revalidatePath('/[locale]/api-tokens', 'page');
+    return { ok: true, id: out.id, token: out.token };
+  } catch (e) {
+    return { ok: false, error: (e as Error).message };
+  }
+}
+
+// revokeAPITokenAction flips revoked_at = now() on the row.
+// Idempotent at the controller (re-revoking still 204) so the
+// UI doesn't need to guard against double-clicks.
+export async function revokeAPITokenAction(id: string): Promise<ActionResult> {
+  try {
+    const res = await fetch(`${BASE}/api/v1/api-tokens/${encodeURIComponent(id)}/revoke`, {
+      method: 'POST',
+      headers: await buildHeaders(),
+      cache: 'no-store',
+    });
+    if (!res.ok && res.status !== 204) {
+      const text = await res.text().catch(() => '');
+      return { ok: false, error: `${res.status} ${text || res.statusText}` };
+    }
+    revalidatePath('/[locale]/api-tokens', 'page');
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: (e as Error).message };
+  }
+}

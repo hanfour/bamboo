@@ -417,6 +417,53 @@
     },
     "noRule": "—"
   },
+  "apiTokens": {
+    "title": "API tokens",
+    "titleAccent": "automation",
+    "subtitle": "Long-lived admin tokens for CI runners, Terraform providers, ops scripts. Present the token as Authorization: Bearer bat_… on any /api/v1/* call.",
+    "empty": "No API tokens yet. Mint one to start automating tenant-admin operations.",
+    "errorPrefix": "Action failed:",
+    "form": {
+      "openButton": "Mint token",
+      "cancel": "Cancel",
+      "submit": "Mint",
+      "working": "Minting…",
+      "nameLabel": "Name",
+      "nameHint": "Operator-facing label — shown in the list and the audit log.",
+      "namePlaceholder": "github-actions",
+      "descriptionLabel": "Description",
+      "descriptionPlaceholder": "What this token is used for",
+      "expiresLabel": "Expires on",
+      "expiresHint": "Optional. Empty = never expires (rotate via revoke + re-mint)."
+    },
+    "actions": {
+      "revoke": "Revoke",
+      "confirmRevoke": "Confirm revoke",
+      "cancel": "Cancel"
+    },
+    "status": {
+      "active": "Active",
+      "pending": "Pending",
+      "expired": "Expired",
+      "revoked": "Revoked"
+    },
+    "row": {
+      "created": "created {when}",
+      "lastUsed": "last used {when}",
+      "expires": "expires {when}"
+    },
+    "secretModal": {
+      "title": "API token",
+      "description": "Copy this token now and store it where your automation can read it. It's shown once and the controller doesn't keep a recovery copy.",
+      "nameLabel": "Name",
+      "tokenLabel": "Token",
+      "warning": "If you lose this token, revoke the row and mint a new one — there's no rotation path.",
+      "usageLabel": "Use it like this:",
+      "copy": "Copy",
+      "copied": "Copied",
+      "done": "Done"
+    }
+  },
   "webhooks": {
     "title": "Webhooks",
     "titleAccent": "delivery",
@@ -489,6 +536,11 @@
       "title": "Webhooks",
       "description": "Outbound HTTP endpoints that receive a signed POST whenever an audited event happens in this tenant.",
       "link": "Go to Webhooks"
+    },
+    "apiTokensCard": {
+      "title": "API tokens",
+      "description": "Long-lived admin tokens for CI / Terraform / ops scripts. Presented as Authorization: Bearer bat_… on any /api/v1/* call.",
+      "link": "Go to API tokens"
     }
   },
   "invite": {

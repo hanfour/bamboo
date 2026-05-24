@@ -134,6 +134,23 @@ export type PreAuthKey = {
   useCount: number;
 };
 
+// APIToken is one row from /api/v1/api-tokens (list / get shape;
+// the mint response is similar but adds a plaintext `token`
+// field — see APITokenMintResult in lib/actions.ts). Status is
+// derived in the renderer from revokedAt / expiresAt / lastUsedAt;
+// keeping the controller agnostic of UI status enums lets the UI
+// change presentation without a coordinated wire-shape bump
+// (same pattern as PreAuthKey).
+export type APIToken = {
+  id: string;
+  name: string;
+  description?: string;
+  createdAt: string;
+  expiresAt?: string;
+  revokedAt?: string;
+  lastUsedAt?: string;
+};
+
 // Webhook is one subscription row from /api/v1/webhooks (list /
 // patch / read shape — the create response carries an additional
 // plaintext `secret` field, see WebhookCreateResult in lib/actions.ts).
