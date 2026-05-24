@@ -25,6 +25,7 @@ import type {
   AclPolicy,
   AclRule,
   ActivityEvent,
+  APIToken,
   DNSConfig,
   FetchResult,
   Invitation,
@@ -292,6 +293,16 @@ export async function fetchPreAuthKeys(): Promise<FetchResult<PreAuthKey[]>> {
     autoApprove: k.autoApprove ?? false,
   }));
   return { kind: 'ok', value: keys };
+}
+
+// fetchAPITokens lists every API token row for the tenant (§4 P2).
+// Admin-only on the wire; non-admin callers see 403 translated by
+// FetchErrorState. The bcrypt hash never reaches the Web side —
+// the APIToken type doesn't even carry it.
+export async function fetchAPITokens(): Promise<FetchResult<APIToken[]>> {
+  const r = await fetchResult<{ tokens: APIToken[] }>('/api/v1/api-tokens');
+  if (r.kind !== 'ok') return r;
+  return { kind: 'ok', value: r.value.tokens ?? [] };
 }
 
 // fetchWebhooks lists every subscription for the tenant (§4 P2).

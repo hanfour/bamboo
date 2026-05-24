@@ -417,6 +417,53 @@
     },
     "noRule": "—"
   },
+  "apiTokens": {
+    "title": "API tokens",
+    "titleAccent": "automation",
+    "subtitle": "長效 admin token，供 CI runner / Terraform provider / 維運腳本使用。呼叫 /api/v1/* 時帶 Authorization: Bearer bat_… 即可。",
+    "empty": "尚無 API token。產生一個即可開始自動化租戶管理操作。",
+    "errorPrefix": "操作失敗：",
+    "form": {
+      "openButton": "產生 token",
+      "cancel": "取消",
+      "submit": "產生",
+      "working": "處理中…",
+      "nameLabel": "名稱",
+      "nameHint": "管理員可見的標籤 —— 會出現在列表與 audit log。",
+      "namePlaceholder": "github-actions",
+      "descriptionLabel": "備註",
+      "descriptionPlaceholder": "此 token 用途說明",
+      "expiresLabel": "到期日",
+      "expiresHint": "可留空。空白 = 永不過期（輪替路徑：撤銷後重新產生）。"
+    },
+    "actions": {
+      "revoke": "撤銷",
+      "confirmRevoke": "確定撤銷",
+      "cancel": "取消"
+    },
+    "status": {
+      "active": "使用中",
+      "pending": "尚未使用",
+      "expired": "已過期",
+      "revoked": "已撤銷"
+    },
+    "row": {
+      "created": "建立於 {when}",
+      "lastUsed": "上次使用 {when}",
+      "expires": "到期 {when}"
+    },
+    "secretModal": {
+      "title": "API token",
+      "description": "請現在複製 token 並貼到自動化系統的設定中。產生後僅顯示一次，controller 不會保留可復原的副本。",
+      "nameLabel": "名稱",
+      "tokenLabel": "Token",
+      "warning": "若遺失此 token，請撤銷此筆並重新產生 —— 沒有輪替路徑。",
+      "usageLabel": "用法範例：",
+      "copy": "複製",
+      "copied": "已複製",
+      "done": "完成"
+    }
+  },
   "webhooks": {
     "title": "Webhooks",
     "titleAccent": "delivery",
@@ -489,6 +536,11 @@
       "title": "Webhooks",
       "description": "對外 HTTP 端點，當本租戶有可稽核事件時 controller 會帶 HMAC 簽章 POST 過去。",
       "link": "前往 Webhooks"
+    },
+    "apiTokensCard": {
+      "title": "API tokens",
+      "description": "長效 admin token，供 CI / Terraform / 維運腳本呼叫 /api/v1/* 使用。",
+      "link": "前往 API tokens"
     }
   },
   "invite": {

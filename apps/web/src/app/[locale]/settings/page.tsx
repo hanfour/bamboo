@@ -66,6 +66,10 @@ function SettingsView({
  <Section title={t('webhooksCard.title')}>
  <WebhooksCard />
  </Section>
+
+ <Section title={t('apiTokensCard.title')}>
+ <APITokensCard />
+ </Section>
  </div>
  );
 }
@@ -109,6 +113,24 @@ function WebhooksCard() {
  return (
  <Link
  href="/webhooks"
+ className="group flex items-start justify-between gap-4 rounded-lg border border-ink-800 bg-ink-950 p-4 transition-colors hover:border-zinc-300 dark:bg-ink-950 dark:hover:border-ink-700"
+ >
+ <div className="min-w-0">
+ <h3 className="text-sm font-medium text-bamboo-50">{t('title')}</h3>
+ <p className="mt-1 text-sm text-bamboo-200/70">{t('description')}</p>
+ <p className="mt-2 text-xs font-medium text-bamboo-700 group-hover:text-bamboo-800 dark:text-bamboo-300 dark:group-hover:text-bamboo-200">
+ {t('link')} →
+ </p>
+ </div>
+ </Link>
+ );
+}
+
+function APITokensCard() {
+ const t = useTranslations('settings.apiTokensCard');
+ return (
+ <Link
+ href="/api-tokens"
  className="group flex items-start justify-between gap-4 rounded-lg border border-ink-800 bg-ink-950 p-4 transition-colors hover:border-zinc-300 dark:bg-ink-950 dark:hover:border-ink-700"
  >
  <div className="min-w-0">
