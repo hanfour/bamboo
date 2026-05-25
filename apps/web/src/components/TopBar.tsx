@@ -5,6 +5,7 @@ import { getTranslations } from 'next-intl/server';
 import { Link } from '@/i18n/routing';
 import { fetchMe } from '@/lib/api';
 import { HamburgerButton } from './HamburgerButton';
+import { UserMenu } from './UserMenu';
 
 const CONTROLLER_BASE = process.env.BAMBOO_API_URL ?? 'http://localhost:8081';
 
@@ -16,11 +17,13 @@ const CONTROLLER_BASE = process.env.BAMBOO_API_URL ?? 'http://localhost:8081';
 // horizontal-tab top bar so we don't read as a clone.
 //
 // Brand stays the Saira Stencil"bamboo" wordmark scoped via the
-// --font-wordmark CSS variable. User pill stays in the right corner;
-// when unauthenticated, the same slot renders an outlined Sign-in
-// link to the controller's Google OIDC flow.
+// --font-wordmark CSS variable. The user slot is just the avatar
+// circle — clicking opens a popover with identity + Settings +
+// Sign out (see UserMenu). Unauthenticated users see an outlined
+// Sign-in link to the controller's Google OIDC flow.
 export async function TopBar() {
  const t = await getTranslations();
+
  const me = await fetchMe();
 
  return (
@@ -32,10 +35,16 @@ export async function TopBar() {
  </div>
  <div className="flex items-center gap-3 text-sm">
  {me.authenticated && me.email ? (
- <UserPill
+ <UserMenu
  email={me.email}
  tenantSlug={me.tenantSlug}
- signOutLabel={t('auth.signOut')}
+ signOutHref={`${CONTROLLER_BASE}/auth/sign-out`}
+ labels={{
+ menuAria: t('auth.menu.aria'),
+ settings: t('auth.menu.settings'),
+ signOut: t('auth.signOut'),
+ tenant: t('auth.menu.tenant'),
+ }}
  />
  ) : (
  <a
@@ -60,41 +69,5 @@ function Brand() {
  >
  bamboo
  </Link>
- );
-}
-
-function UserPill({
- email,
- tenantSlug,
- signOutLabel,
-}: {
- email: string;
- tenantSlug: string;
- signOutLabel: string;
-}) {
- const initial = email[0]?.toUpperCase() ?? '?';
- return (
- <div className="flex items-center gap-3">
- <div className="hidden text-right sm:block">
- <div className="text-xs font-medium leading-tight text-bamboo-50">
- {email}
- </div>
- <div className="text-[11px] leading-tight text-bamboo-200/60">
- {tenantSlug}
- </div>
- </div>
- <span
- aria-hidden
- className="flex h-8 w-8 items-center justify-center rounded-full border border-bamboo-200/30 bg-ink-900 text-xs font-medium text-bamboo-100"
- >
- {initial}
- </span>
- <a
- href={`${CONTROLLER_BASE}/auth/sign-out`}
- className="text-xs text-bamboo-200/60 transition-colors hover:text-bamboo-50"
- >
- {signOutLabel}
- </a>
- </div>
  );
 }

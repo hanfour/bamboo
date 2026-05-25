@@ -18,7 +18,12 @@
   "auth": {
     "signIn": "登入",
     "signOut": "登出",
-    "loggedInAs": "已登入：{email}"
+    "loggedInAs": "已登入：{email}",
+    "menu": {
+      "aria": "帳號選單",
+      "settings": "設定",
+      "tenant": "租戶"
+    }
   },
   "landing": {
     "title": "bamboo",
