@@ -13,6 +13,68 @@ import (
 	"github.com/hanfour/bamboo/apps/controller/internal/db/repo"
 )
 
+// TestAuditLogs_Insert_PopulatesOccurredAt pins the #222 follow-up
+// contract: AuditLogs.Insert writes the persisted occurred_at back
+// onto the supplied AuditEvent via RETURNING, so callers reading
+// e.OccurredAt after Insert see the actually-stored value rather
+// than the Go zero (year 1). Two cases:
+//
+//	a) Caller leaves OccurredAt zero → DB DEFAULT now() applies →
+//	   struct ends up with the DB-side timestamp.
+//	b) Caller pre-sets OccurredAt (e.g. erase handler pinning the
+//	   response timestamp) → that exact value is persisted and
+//	   round-tripped back unchanged.
+func TestAuditLogs_Insert_PopulatesOccurredAt(t *testing.T) {
+	pool := requireDB(t)
+	ctx := context.Background()
+
+	tenants := repo.NewTenants(pool)
+	slug := fmt.Sprintf("audit-occ-%s", uuid.NewString()[:8])
+	tenant, err := tenants.Create(ctx, "Occ", slug, "100.64.230.0/24")
+	if err != nil {
+		t.Fatalf("create tenant: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, `DELETE FROM tenants WHERE id = $1`, tenant.ID)
+	})
+
+	audits := repo.NewAuditLogs(pool)
+
+	// Case (a): caller leaves OccurredAt zero.
+	before := time.Now().UTC().Add(-time.Second)
+	ev := &repo.AuditEvent{
+		TenantID:     &tenant.ID,
+		ActorType:    "system",
+		Action:       "test.default",
+		ResourceType: "test",
+	}
+	if err := audits.Insert(ctx, ev); err != nil {
+		t.Fatalf("Insert default: %v", err)
+	}
+	if ev.OccurredAt.IsZero() {
+		t.Errorf("OccurredAt left zero after Insert; expected RETURNING-populated value")
+	}
+	if ev.OccurredAt.Before(before) {
+		t.Errorf("OccurredAt = %v is before test start %v", ev.OccurredAt, before)
+	}
+
+	// Case (b): caller pre-sets OccurredAt — must round-trip.
+	pinned := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	ev2 := &repo.AuditEvent{
+		TenantID:     &tenant.ID,
+		ActorType:    "system",
+		Action:       "test.pinned",
+		ResourceType: "test",
+		OccurredAt:   pinned,
+	}
+	if err := audits.Insert(ctx, ev2); err != nil {
+		t.Fatalf("Insert pinned: %v", err)
+	}
+	if !ev2.OccurredAt.Equal(pinned) {
+		t.Errorf("OccurredAt = %v, want %v (caller-supplied timestamp must round-trip)", ev2.OccurredAt, pinned)
+	}
+}
+
 func TestAuditLogs_InsertAndList(t *testing.T) {
 	pool := requireDB(t)
 	ctx := context.Background()

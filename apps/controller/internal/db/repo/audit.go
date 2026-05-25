@@ -81,20 +81,33 @@ type AuditEvent struct {
 // not propagate — the audit write is the source of truth, and a
 // hook failure (e.g. webhook publisher queue full) is recoverable
 // from the audit row.
+//
+// e.OccurredAt is two-way: if the caller pre-sets a non-zero value
+// (e.g. the erase handler pins the response timestamp), that exact
+// value is persisted; otherwise the DB's `DEFAULT now()` applies.
+// Either way the post-Insert struct carries the actually-stored
+// timestamp via RETURNING — fixes the prior trap where readers of
+// e.OccurredAt after Insert would see the Go zero value.
 func (r *AuditLogs) Insert(ctx context.Context, e *AuditEvent) error {
 	if e.ActorType == "" {
 		e.ActorType = "system"
 	}
-	_, err := r.pool.Exec(ctx, `
+	var occurredArg any
+	if !e.OccurredAt.IsZero() {
+		occurredArg = e.OccurredAt
+	}
+	err := r.pool.QueryRow(ctx, `
 		INSERT INTO audit_log (
 		    tenant_id, actor_id, actor_type, action,
-		    resource_type, resource_id, diff, ip_address, user_agent
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::inet, $9)
+		    resource_type, resource_id, diff, ip_address, user_agent, occurred_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::inet, $9, COALESCE($10, now()))
+		RETURNING occurred_at
 	`,
 		e.TenantID, e.ActorID, e.ActorType, e.Action,
 		e.ResourceType, e.ResourceID, nullableJSON(e.Diff),
 		nullableString(e.IPAddress), nullableString(e.UserAgent),
-	)
+		occurredArg,
+	).Scan(&e.OccurredAt)
 	if err == nil && r.hook != nil {
 		r.hook.Hook(ctx, e)
 	}
