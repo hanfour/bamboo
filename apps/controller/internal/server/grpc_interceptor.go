@@ -41,12 +41,12 @@ import (
 // flows keep working unchanged. When sessionSec is empty the
 // interceptor cannot verify tokens; it still rejects unauthenticated
 // requests so the misconfiguration is loud.
-func requireAuthUnaryInterceptor(requireAuth bool, sessionSec []byte, revoked *repo.RevokedSessions) grpc.UnaryServerInterceptor {
+func requireAuthUnaryInterceptor(requireAuth bool, sessionSec []byte, revoked *repo.RevokedSessions, users *repo.Users) grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
 		if !requireAuth || isWhitelistedGRPCMethod(info.FullMethod) {
 			return handler(ctx, req)
 		}
-		if err := verifyBearer(ctx, sessionSec, revoked); err != nil {
+		if err := verifyBearer(ctx, sessionSec, revoked, users); err != nil {
 			return nil, err
 		}
 		return handler(ctx, req)
@@ -56,12 +56,12 @@ func requireAuthUnaryInterceptor(requireAuth bool, sessionSec []byte, revoked *r
 // requireAuthStreamInterceptor mirrors the unary interceptor for
 // streaming methods. WatchPeers is no longer whitelisted — see the
 // unary interceptor's comment.
-func requireAuthStreamInterceptor(requireAuth bool, sessionSec []byte, revoked *repo.RevokedSessions) grpc.StreamServerInterceptor {
+func requireAuthStreamInterceptor(requireAuth bool, sessionSec []byte, revoked *repo.RevokedSessions, users *repo.Users) grpc.StreamServerInterceptor {
 	return func(srv any, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
 		if !requireAuth || isWhitelistedGRPCMethod(info.FullMethod) {
 			return handler(srv, ss)
 		}
-		if err := verifyBearer(ss.Context(), sessionSec, revoked); err != nil {
+		if err := verifyBearer(ss.Context(), sessionSec, revoked, users); err != nil {
 			return err
 		}
 		return handler(srv, ss)
@@ -80,7 +80,7 @@ func requireAuthStreamInterceptor(requireAuth bool, sessionSec []byte, revoked *
 // same rejection as one that hits a REST endpoint. Peer-session
 // tokens do not go through the denylist; revoking a peer is done
 // via the pre_auth_key / peer-row paths, which are independent.
-func verifyBearer(ctx context.Context, sessionSec []byte, revoked *repo.RevokedSessions) error {
+func verifyBearer(ctx context.Context, sessionSec []byte, revoked *repo.RevokedSessions, users *repo.Users) error {
 	md, _ := metadata.FromIncomingContext(ctx)
 	var token string
 	for _, v := range md.Get("authorization") {
@@ -109,6 +109,18 @@ func verifyBearer(ctx context.Context, sessionSec []byte, revoked *repo.RevokedS
 		}
 		if isRev {
 			return status.Error(codes.Unauthenticated, "session revoked")
+		}
+	}
+	// Slice 3b: per-user session-version gate (matches the REST
+	// authenticate path). Skipped when users repo isn't wired
+	// (unit tests) — production always passes a non-nil repo.
+	if users != nil {
+		user, uerr := users.GetByID(ctx, claims.UserID)
+		if uerr != nil {
+			return status.Errorf(codes.Internal, "resolve user: %v", uerr)
+		}
+		if claims.SV < user.SessionVersion {
+			return status.Error(codes.Unauthenticated, "session revoked (force sign-out)")
 		}
 	}
 	return nil

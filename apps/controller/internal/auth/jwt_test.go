@@ -144,6 +144,32 @@ func TestSessionToken_JTIPopulated(t *testing.T) {
 	}
 }
 
+// TestSessionToken_SVPreserved pins the slice-3b contract: the
+// caller's SV claim (per-user session version) round-trips through
+// the encode/verify pair unchanged. Zero is also legal — that's
+// the pre-slice-3b legacy-token shape that the middleware treats
+// as "compare against user.session_version=0 → no-op".
+func TestSessionToken_SVPreserved(t *testing.T) {
+	secret := []byte("test-secret")
+	for _, sv := range []int{0, 1, 42} {
+		tok, err := auth.IssueSessionToken(secret, auth.SessionClaims{
+			UserID:   uuid.New(),
+			TenantID: uuid.New(),
+			SV:       sv,
+		}, time.Hour)
+		if err != nil {
+			t.Fatalf("issue sv=%d: %v", sv, err)
+		}
+		claims, err := auth.VerifySessionToken(secret, tok)
+		if err != nil {
+			t.Fatalf("verify sv=%d: %v", sv, err)
+		}
+		if claims.SV != sv {
+			t.Errorf("SV = %d, want %d", claims.SV, sv)
+		}
+	}
+}
+
 // TestSessionToken_JTIPreservedWhenSupplied lets the caller override
 // the jti — currently unused but the contract is that an explicit
 // non-zero JTI passes through unchanged. Useful when a future

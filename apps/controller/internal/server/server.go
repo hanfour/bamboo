@@ -53,7 +53,8 @@ func New(cfg *config.Config, pool *db.Pool, ch *clickhouse.Conn) (*Server, error
 	secret := []byte(cfg.Auth.SessionSecret)
 
 	revoked := repo.NewRevokedSessions(pool)
-	grpcSrv, authHandler, coordHandler := buildGRPCWithAuth(pool, ch, cfg.Auth.RequireAuth, secret, revoked)
+	users := repo.NewUsers(pool)
+	grpcSrv, authHandler, coordHandler := buildGRPCWithAuth(pool, ch, cfg.Auth.RequireAuth, secret, revoked, users)
 	authHandler.SetOIDCConfig(cfg.Auth.OIDC.BaseURL, secret, ttl)
 
 	httpSrv := NewHTTPServer(cfg.Server.HTTPAddr, pool, providers, ch, secret, cfg.Auth.OIDC.BaseURL, ttl, coordHandler)
@@ -78,11 +79,11 @@ func New(cfg *config.Config, pool *db.Pool, ch *clickhouse.Conn) (*Server, error
 // can delegate peer register / heartbeat / watch to the same code path
 // as gRPC). Tests use BuildGRPCServer instead, which takes the simpler
 // path.
-func buildGRPCWithAuth(pool *db.Pool, ch *clickhouse.Conn, requireAuth bool, sessionSec []byte, revoked *repo.RevokedSessions) (*grpc.Server, *handlers.AuthHandler, *handlers.CoordinatorHandler) {
+func buildGRPCWithAuth(pool *db.Pool, ch *clickhouse.Conn, requireAuth bool, sessionSec []byte, revoked *repo.RevokedSessions, users *repo.Users) (*grpc.Server, *handlers.AuthHandler, *handlers.CoordinatorHandler) {
 	bus := events.NewBus()
 	s := grpc.NewServer(
-		grpc.UnaryInterceptor(requireAuthUnaryInterceptor(requireAuth, sessionSec, revoked)),
-		grpc.StreamInterceptor(requireAuthStreamInterceptor(requireAuth, sessionSec, revoked)),
+		grpc.UnaryInterceptor(requireAuthUnaryInterceptor(requireAuth, sessionSec, revoked, users)),
+		grpc.StreamInterceptor(requireAuthStreamInterceptor(requireAuth, sessionSec, revoked, users)),
 	)
 
 	authHandler := handlers.NewAuthHandler(pool)
