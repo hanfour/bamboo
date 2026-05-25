@@ -26,19 +26,31 @@ type SessionClaims struct {
 	TenantID  uuid.UUID `json:"tid"`
 	IssuedAt  int64     `json:"iat"`
 	ExpiresAt int64     `json:"exp"`
+	// JTI is the per-session identifier the revocation denylist
+	// keys off (see migration 00016). Zero (uuid.Nil) on tokens
+	// minted before the slice-3a rollout — the auth middleware
+	// treats a zero jti as "no revocation check possible" rather
+	// than rejecting, so in-flight legacy tokens stay valid until
+	// their natural TTL.
+	JTI uuid.UUID `json:"jti,omitempty"`
 }
 
 // ErrInvalidToken is returned by VerifySessionToken on any failure.
 var ErrInvalidToken = errors.New("invalid session token")
 
 // IssueSessionToken returns a signed token for the supplied claims.
-// The TTL is added to time.Now() if claims.ExpiresAt is zero.
+// The TTL is added to time.Now() if claims.ExpiresAt is zero. A
+// zero JTI is replaced with a fresh UUIDv4 so every issued token
+// gets a unique identifier the revocation denylist can target.
 func IssueSessionToken(secret []byte, claims SessionClaims, ttl time.Duration) (string, error) {
 	if claims.IssuedAt == 0 {
 		claims.IssuedAt = time.Now().Unix()
 	}
 	if claims.ExpiresAt == 0 {
 		claims.ExpiresAt = time.Now().Add(ttl).Unix()
+	}
+	if claims.JTI == uuid.Nil {
+		claims.JTI = uuid.New()
 	}
 
 	body, err := json.Marshal(claims)

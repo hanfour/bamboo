@@ -505,6 +505,20 @@ func (h *HTTPServer) authenticate(r *http.Request) (*authnContext, error) {
 			return nil, errors.New("tenant membership mismatch")
 		}
 	}
+	// Revocation denylist. Tokens minted before slice 3a have no
+	// jti claim — we skip the check there so legacy in-flight
+	// tokens stay valid until their natural TTL. The repo is also
+	// nil in unit-test fixtures that don't wire DB; treat that the
+	// same as the legacy case.
+	if h.revoked != nil && claims.JTI != uuid.Nil {
+		revoked, err := h.revoked.IsRevoked(r.Context(), claims.JTI)
+		if err != nil {
+			return nil, fmt.Errorf("revocation check: %w", err)
+		}
+		if revoked {
+			return nil, errors.New("session revoked")
+		}
+	}
 	return &authnContext{claims: claims}, nil
 }
 

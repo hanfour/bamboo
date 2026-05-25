@@ -122,6 +122,52 @@ func TestSessionToken_Expired(t *testing.T) {
 	}
 }
 
+// TestSessionToken_JTIPopulated pins the slice-3a contract:
+// IssueSessionToken always emits a non-zero jti so the revocation
+// denylist has something to key off. A regression here would mean
+// new sign-ins are silently unrevokable.
+func TestSessionToken_JTIPopulated(t *testing.T) {
+	secret := []byte("test-secret")
+	tok, err := auth.IssueSessionToken(secret, auth.SessionClaims{
+		UserID:   uuid.New(),
+		TenantID: uuid.New(),
+	}, time.Hour)
+	if err != nil {
+		t.Fatalf("issue: %v", err)
+	}
+	claims, err := auth.VerifySessionToken(secret, tok)
+	if err != nil {
+		t.Fatalf("verify: %v", err)
+	}
+	if claims.JTI == uuid.Nil {
+		t.Errorf("JTI is zero; want auto-populated UUID")
+	}
+}
+
+// TestSessionToken_JTIPreservedWhenSupplied lets the caller override
+// the jti — currently unused but the contract is that an explicit
+// non-zero JTI passes through unchanged. Useful when a future
+// "rotate" path wants to mint a new token with a known id.
+func TestSessionToken_JTIPreservedWhenSupplied(t *testing.T) {
+	secret := []byte("test-secret")
+	want := uuid.New()
+	tok, err := auth.IssueSessionToken(secret, auth.SessionClaims{
+		UserID:   uuid.New(),
+		TenantID: uuid.New(),
+		JTI:      want,
+	}, time.Hour)
+	if err != nil {
+		t.Fatalf("issue: %v", err)
+	}
+	claims, err := auth.VerifySessionToken(secret, tok)
+	if err != nil {
+		t.Fatalf("verify: %v", err)
+	}
+	if claims.JTI != want {
+		t.Errorf("JTI = %s, want %s", claims.JTI, want)
+	}
+}
+
 func TestSessionToken_Malformed(t *testing.T) {
 	secret := []byte("s")
 	cases := []string{

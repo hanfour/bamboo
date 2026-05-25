@@ -20,7 +20,7 @@ const testSecret = "test-secret-with-at-least-32-bytes-padding"
 func okHandler(_ context.Context, _ any) (any, error) { return "ok", nil }
 
 func TestRequireAuthUnaryInterceptor_PassesThroughWhenDisabled(t *testing.T) {
-	icpt := requireAuthUnaryInterceptor(false, nil)
+	icpt := requireAuthUnaryInterceptor(false, nil, nil)
 	info := &grpc.UnaryServerInfo{FullMethod: "/bamboo.v1.PolicyService/PutPolicy"}
 	resp, err := icpt(context.Background(), nil, info, okHandler)
 	if err != nil || resp != "ok" {
@@ -29,7 +29,7 @@ func TestRequireAuthUnaryInterceptor_PassesThroughWhenDisabled(t *testing.T) {
 }
 
 func TestRequireAuthUnaryInterceptor_WhitelistAllowsWithoutToken(t *testing.T) {
-	icpt := requireAuthUnaryInterceptor(true, []byte(testSecret))
+	icpt := requireAuthUnaryInterceptor(true, []byte(testSecret), nil)
 	// Register stays whitelisted because its credential lives on the
 	// payload (pre_auth_key_secret / bearer_token); the
 	// CoordinatorHandler enforces it. Auth bootstrap methods are
@@ -51,7 +51,7 @@ func TestRequireAuthUnaryInterceptor_WhitelistAllowsWithoutToken(t *testing.T) {
 // check at all. The doc's Finding #1 closes that hole — they now go
 // through the bearer gate like any other authenticated method.
 func TestRequireAuthUnaryInterceptor_HeartbeatRejectsUnauthenticated(t *testing.T) {
-	icpt := requireAuthUnaryInterceptor(true, []byte(testSecret))
+	icpt := requireAuthUnaryInterceptor(true, []byte(testSecret), nil)
 	for _, fullMethod := range []string{
 		"/bamboo.v1.CoordinatorService/Heartbeat",
 		"/bamboo.v1.CoordinatorService/WatchPeers",
@@ -79,7 +79,7 @@ func TestRequireAuthUnaryInterceptor_AcceptsPeerSessionBearer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("IssuePeerSessionToken: %v", err)
 	}
-	icpt := requireAuthUnaryInterceptor(true, secret)
+	icpt := requireAuthUnaryInterceptor(true, secret, nil)
 	md := metadata.Pairs("authorization", "Bearer "+tok)
 	ctx := metadata.NewIncomingContext(context.Background(), md)
 	info := &grpc.UnaryServerInfo{FullMethod: "/bamboo.v1.CoordinatorService/Heartbeat"}
@@ -90,7 +90,7 @@ func TestRequireAuthUnaryInterceptor_AcceptsPeerSessionBearer(t *testing.T) {
 }
 
 func TestRequireAuthUnaryInterceptor_RejectsUnauthenticated(t *testing.T) {
-	icpt := requireAuthUnaryInterceptor(true, []byte(testSecret))
+	icpt := requireAuthUnaryInterceptor(true, []byte(testSecret), nil)
 	info := &grpc.UnaryServerInfo{FullMethod: "/bamboo.v1.PolicyService/PutPolicy"}
 	_, err := icpt(context.Background(), nil, info, okHandler)
 	if status.Code(err) != codes.Unauthenticated {
@@ -99,7 +99,7 @@ func TestRequireAuthUnaryInterceptor_RejectsUnauthenticated(t *testing.T) {
 }
 
 func TestRequireAuthUnaryInterceptor_RejectsInvalidBearer(t *testing.T) {
-	icpt := requireAuthUnaryInterceptor(true, []byte(testSecret))
+	icpt := requireAuthUnaryInterceptor(true, []byte(testSecret), nil)
 	md := metadata.Pairs("authorization", "Bearer "+"not-a-real-jwt")
 	ctx := metadata.NewIncomingContext(context.Background(), md)
 	info := &grpc.UnaryServerInfo{FullMethod: "/bamboo.v1.PolicyService/PutPolicy"}
@@ -119,7 +119,7 @@ func TestRequireAuthUnaryInterceptor_AcceptsValidBearer(t *testing.T) {
 		t.Fatalf("IssueSessionToken: %v", err)
 	}
 
-	icpt := requireAuthUnaryInterceptor(true, secret)
+	icpt := requireAuthUnaryInterceptor(true, secret, nil)
 	md := metadata.Pairs("authorization", "Bearer "+tok)
 	ctx := metadata.NewIncomingContext(context.Background(), md)
 	info := &grpc.UnaryServerInfo{FullMethod: "/bamboo.v1.PolicyService/PutPolicy"}

@@ -46,6 +46,7 @@ type HTTPServer struct {
 	invitations *repo.UserInvitations
 	webhooks    *repo.Webhooks
 	apiTokens   *repo.APITokens
+	revoked     *repo.RevokedSessions
 	mailer      *mail.Sender
 	publicURL   string // for /invite links in invitation email; falls back to baseURL
 	traces      *clickhouse.Traces
@@ -97,6 +98,7 @@ func NewHTTPServer(
 		invitations: repo.NewUserInvitations(pool),
 		webhooks:    repo.NewWebhooks(pool),
 		apiTokens:   repo.NewAPITokens(pool),
+		revoked:     repo.NewRevokedSessions(pool),
 		// Default mailer is the no-op sender — server boot calls
 		// SetMailer to wire in the real SMTP relay when configured.
 		mailer:     mail.New(config.SMTPConfig{}),
@@ -530,6 +532,54 @@ func (h *HTTPServer) reapAuditOnce(ctx context.Context, window time.Duration) {
 	}
 }
 
+// revokedSessionsInterval governs how often the reaper prunes
+// revoked_sessions rows whose underlying JWT has already expired.
+// Hourly matches auditRetentionInterval — the table is small (one
+// row per sign-out) and the JWT verifier rejects expired tokens on
+// its own, so a delayed sweep doesn't widen any window.
+// Package-scoped non-const so tests can override.
+var revokedSessionsInterval = 1 * time.Hour
+
+// StartRevokedSessionsReaper launches the goroutine that prunes
+// revoked_sessions rows whose JWT has passed its natural exp. Pairs
+// with the slice-3a denylist — keeping the table bounded so the
+// per-request IsRevoked lookup stays cheap.
+//
+// Disabled (no-op) when h.revoked is nil — applies to unit-test
+// fixtures that don't wire DB. The goroutine exits on ctx.Done.
+func (h *HTTPServer) StartRevokedSessionsReaper(ctx context.Context) {
+	if h == nil || h.revoked == nil {
+		return
+	}
+	go func() {
+		// Immediate sweep on startup so a controller restart after a
+		// long downtime catches up the backlog within the first
+		// minute rather than waiting an hour for the first tick.
+		h.reapRevokedSessionsOnce(ctx)
+		t := time.NewTicker(revokedSessionsInterval)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				h.reapRevokedSessionsOnce(ctx)
+			}
+		}
+	}()
+}
+
+func (h *HTTPServer) reapRevokedSessionsOnce(ctx context.Context) {
+	deleted, err := h.revoked.DeleteExpired(ctx, time.Now().UTC())
+	if err != nil {
+		slog.Warn("revoked_sessions reaper: delete", "err", err)
+		return
+	}
+	if deleted > 0 {
+		slog.Info("revoked_sessions reaper: swept", "deleted", deleted)
+	}
+}
+
 // Run blocks until ctx is canceled or the listener errors.
 func (h *HTTPServer) Run(ctx context.Context) error {
 	// Start the webhook delivery worker so audit events fired during
@@ -540,6 +590,7 @@ func (h *HTTPServer) Run(ctx context.Context) error {
 	h.StartInviteReaper(ctx)
 	h.StartAuditRetentionReaper(ctx)
 	h.StartRelayHealthReaper(ctx)
+	h.StartRevokedSessionsReaper(ctx)
 	errCh := make(chan error, 1)
 	go func() {
 		slog.Info("HTTP server listening", "addr", h.addr)
@@ -566,14 +617,22 @@ func (h *HTTPServer) Run(ctx context.Context) error {
 // the request originated from the Web UI; returns 200 plain text
 // otherwise.
 func (h *HTTPServer) handleSignOut(w http.ResponseWriter, r *http.Request) {
-	// Audit only when a verifiable session cookie is present. An
-	// unauthenticated sign-out (no cookie, or a forged one) is a no-op
-	// for state but we don't want to log "session.signout" for an actor
-	// we can't identify — the audit row would have a nil ActorID and
-	// would drown the feed with bot traffic hitting /auth/sign-out.
+	// Audit + revoke only when a verifiable session cookie is
+	// present. An unauthenticated sign-out (no cookie, or a forged
+	// one) is a no-op for state but we don't want to log
+	// "session.signout" for an actor we can't identify, and we
+	// can't add to the revocation denylist without a jti.
 	if cookie, cerr := r.Cookie(SessionCookieName); cerr == nil && cookie.Value != "" {
 		if claims, verr := auth.VerifySessionToken(h.secret, cookie.Value); verr == nil {
 			auditSessionSignout(r.Context(), h.audits, claims.TenantID, claims.UserID, requestIPString(r), r.UserAgent())
+			// jti is empty for legacy tokens minted before slice 3a;
+			// skip the insert there since there's nothing to key
+			// off. The natural TTL still drops the token at exp.
+			if h.revoked != nil && claims.JTI != uuid.Nil {
+				if rerr := h.revoked.Insert(r.Context(), claims.JTI, claims.UserID, time.Unix(claims.ExpiresAt, 0)); rerr != nil {
+					slog.Warn("revoked_sessions insert on sign-out", "err", rerr, "jti", claims.JTI)
+				}
+			}
 		}
 	}
 	http.SetCookie(w, &http.Cookie{

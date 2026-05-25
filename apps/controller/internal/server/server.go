@@ -18,6 +18,7 @@ import (
 	"github.com/hanfour/bamboo/apps/controller/internal/clickhouse"
 	"github.com/hanfour/bamboo/apps/controller/internal/config"
 	"github.com/hanfour/bamboo/apps/controller/internal/db"
+	"github.com/hanfour/bamboo/apps/controller/internal/db/repo"
 	"github.com/hanfour/bamboo/apps/controller/internal/events"
 	"github.com/hanfour/bamboo/apps/controller/internal/handlers"
 	"github.com/hanfour/bamboo/apps/controller/internal/mail"
@@ -51,7 +52,8 @@ func New(cfg *config.Config, pool *db.Pool, ch *clickhouse.Conn) (*Server, error
 	ttl := resolveSessionTTL(cfg.Auth.SessionTTL, 24*time.Hour)
 	secret := []byte(cfg.Auth.SessionSecret)
 
-	grpcSrv, authHandler, coordHandler := buildGRPCWithAuth(pool, ch, cfg.Auth.RequireAuth, secret)
+	revoked := repo.NewRevokedSessions(pool)
+	grpcSrv, authHandler, coordHandler := buildGRPCWithAuth(pool, ch, cfg.Auth.RequireAuth, secret, revoked)
 	authHandler.SetOIDCConfig(cfg.Auth.OIDC.BaseURL, secret, ttl)
 
 	httpSrv := NewHTTPServer(cfg.Server.HTTPAddr, pool, providers, ch, secret, cfg.Auth.OIDC.BaseURL, ttl, coordHandler)
@@ -76,11 +78,11 @@ func New(cfg *config.Config, pool *db.Pool, ch *clickhouse.Conn) (*Server, error
 // can delegate peer register / heartbeat / watch to the same code path
 // as gRPC). Tests use BuildGRPCServer instead, which takes the simpler
 // path.
-func buildGRPCWithAuth(pool *db.Pool, ch *clickhouse.Conn, requireAuth bool, sessionSec []byte) (*grpc.Server, *handlers.AuthHandler, *handlers.CoordinatorHandler) {
+func buildGRPCWithAuth(pool *db.Pool, ch *clickhouse.Conn, requireAuth bool, sessionSec []byte, revoked *repo.RevokedSessions) (*grpc.Server, *handlers.AuthHandler, *handlers.CoordinatorHandler) {
 	bus := events.NewBus()
 	s := grpc.NewServer(
-		grpc.UnaryInterceptor(requireAuthUnaryInterceptor(requireAuth, sessionSec)),
-		grpc.StreamInterceptor(requireAuthStreamInterceptor(requireAuth, sessionSec)),
+		grpc.UnaryInterceptor(requireAuthUnaryInterceptor(requireAuth, sessionSec, revoked)),
+		grpc.StreamInterceptor(requireAuthStreamInterceptor(requireAuth, sessionSec, revoked)),
 	)
 
 	authHandler := handlers.NewAuthHandler(pool)

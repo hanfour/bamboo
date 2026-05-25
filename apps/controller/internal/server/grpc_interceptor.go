@@ -6,7 +6,9 @@ import (
 	"context"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/hanfour/bamboo/apps/controller/internal/auth"
+	"github.com/hanfour/bamboo/apps/controller/internal/db/repo"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -39,12 +41,12 @@ import (
 // flows keep working unchanged. When sessionSec is empty the
 // interceptor cannot verify tokens; it still rejects unauthenticated
 // requests so the misconfiguration is loud.
-func requireAuthUnaryInterceptor(requireAuth bool, sessionSec []byte) grpc.UnaryServerInterceptor {
+func requireAuthUnaryInterceptor(requireAuth bool, sessionSec []byte, revoked *repo.RevokedSessions) grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
 		if !requireAuth || isWhitelistedGRPCMethod(info.FullMethod) {
 			return handler(ctx, req)
 		}
-		if err := verifyBearer(ctx, sessionSec); err != nil {
+		if err := verifyBearer(ctx, sessionSec, revoked); err != nil {
 			return nil, err
 		}
 		return handler(ctx, req)
@@ -54,12 +56,12 @@ func requireAuthUnaryInterceptor(requireAuth bool, sessionSec []byte) grpc.Unary
 // requireAuthStreamInterceptor mirrors the unary interceptor for
 // streaming methods. WatchPeers is no longer whitelisted — see the
 // unary interceptor's comment.
-func requireAuthStreamInterceptor(requireAuth bool, sessionSec []byte) grpc.StreamServerInterceptor {
+func requireAuthStreamInterceptor(requireAuth bool, sessionSec []byte, revoked *repo.RevokedSessions) grpc.StreamServerInterceptor {
 	return func(srv any, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
 		if !requireAuth || isWhitelistedGRPCMethod(info.FullMethod) {
 			return handler(srv, ss)
 		}
-		if err := verifyBearer(ss.Context(), sessionSec); err != nil {
+		if err := verifyBearer(ss.Context(), sessionSec, revoked); err != nil {
 			return err
 		}
 		return handler(srv, ss)
@@ -72,7 +74,13 @@ func requireAuthStreamInterceptor(requireAuth bool, sessionSec []byte) grpc.Stre
 // path will accept any given signed body. Try peer-session first
 // because heartbeat / watch are far more frequent than user-session
 // calls and we want the common path fast.
-func verifyBearer(ctx context.Context, sessionSec []byte) error {
+//
+// User-session JWTs additionally consult the revocation denylist
+// (slice 3a) — a stolen Web cookie that hits a gRPC method gets the
+// same rejection as one that hits a REST endpoint. Peer-session
+// tokens do not go through the denylist; revoking a peer is done
+// via the pre_auth_key / peer-row paths, which are independent.
+func verifyBearer(ctx context.Context, sessionSec []byte, revoked *repo.RevokedSessions) error {
 	md, _ := metadata.FromIncomingContext(ctx)
 	var token string
 	for _, v := range md.Get("authorization") {
@@ -90,10 +98,20 @@ func verifyBearer(ctx context.Context, sessionSec []byte) error {
 	if _, err := auth.VerifyPeerSessionToken(sessionSec, token); err == nil {
 		return nil
 	}
-	if _, err := auth.VerifySessionToken(sessionSec, token); err == nil {
-		return nil
+	claims, err := auth.VerifySessionToken(sessionSec, token)
+	if err != nil {
+		return status.Error(codes.Unauthenticated, "invalid bearer token")
 	}
-	return status.Error(codes.Unauthenticated, "invalid bearer token")
+	if revoked != nil && claims.JTI != uuid.Nil {
+		isRev, ierr := revoked.IsRevoked(ctx, claims.JTI)
+		if ierr != nil {
+			return status.Errorf(codes.Internal, "revocation check: %v", ierr)
+		}
+		if isRev {
+			return status.Error(codes.Unauthenticated, "session revoked")
+		}
+	}
+	return nil
 }
 
 func isWhitelistedGRPCMethod(fullMethod string) bool {
