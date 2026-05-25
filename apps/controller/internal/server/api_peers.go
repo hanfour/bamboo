@@ -112,6 +112,13 @@ type peerRegisterResponse struct {
 	// degrade rather than fail registration.
 	PeerSessionToken     string `json:"peerSessionToken,omitempty"`
 	PeerSessionExpiresAt int64  `json:"peerSessionExpiresAt,omitempty"`
+	// PreferredRegion is the controller's best guess at the
+	// client's region (§4 P2 multi-relay stage 5.5). Derived
+	// from the request IP against the BAMBOO_REGION_CIDRS table.
+	// Empty when no table is configured or no CIDR matches —
+	// client then falls back to its own local hint, or pure
+	// RTT ranking. Field name mirrors proto's preferred_region.
+	PreferredRegion string `json:"preferredRegion,omitempty"`
 }
 
 func (h *HTTPServer) apiPeersRegister(w http.ResponseWriter, r *http.Request) {
@@ -241,6 +248,11 @@ func (h *HTTPServer) apiPeersRegister(w http.ResponseWriter, r *http.Request) {
 		Self:           protoPeerToJSON(resp.GetSelf()),
 		Peers:          protoPeersToJSON(resp.GetPeers()),
 		PolicyRevision: resp.GetPolicyRevision(),
+		// §4 P2 stage 5.5: hint the client which region we
+		// think they're in, based on the request IP vs the
+		// operator-supplied BAMBOO_REGION_CIDRS table. Empty
+		// when no table / no match; client treats as no-hint.
+		PreferredRegion: h.regionMap.resolveRegion(clientIPFromRequest(r.RemoteAddr, r.Header.Get("X-Forwarded-For"))),
 	}
 	// Mint a peer session token for the caller. Failure here is
 	// non-fatal — log and degrade rather than fail registration, since
