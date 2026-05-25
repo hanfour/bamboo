@@ -390,6 +390,35 @@ export async function rollbackPolicyAction(revision: number): Promise<ActionResu
   }
 }
 
+// eraseUserAction triggers GDPR Article 17 erasure of a user via
+// the controller's POST /api/v1/admin/users/{id}/erase endpoint
+// (#208). Admin-only on the wire — non-admin callers see 403,
+// cross-tenant targets see 404 (the controller doesn't reveal
+// whether the user exists in another tenant), self-erase sees 400.
+//
+// On success the controller's audit log records `user.erase` with
+// the email SHA-256; this client side just refreshes the users
+// list. Failure returns the controller's status + body so the
+// dialog can surface a clear message (e.g. "400 admin cannot
+// erase their own account").
+export async function eraseUserAction(id: string): Promise<ActionResult> {
+  try {
+    const res = await fetch(`${BASE}/api/v1/admin/users/${encodeURIComponent(id)}/erase`, {
+      method: 'POST',
+      headers: await buildHeaders(),
+      cache: 'no-store',
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      return { ok: false, error: `${res.status} ${text || res.statusText}` };
+    }
+    revalidatePath('/[locale]/users', 'page');
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: (e as Error).message };
+  }
+}
+
 export async function deletePeerAction(id: string): Promise<ActionResult> {
   try {
     const res = await fetch(`${BASE}/api/v1/peers/${encodeURIComponent(id)}`, {

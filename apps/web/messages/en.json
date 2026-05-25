@@ -329,11 +329,21 @@
       "role": "Role",
       "provider": "Provider",
       "createdAt": "Joined",
-      "lastSeen": "Last seen"
+      "lastSeen": "Last seen",
+      "actions": "Actions"
     },
     "role": {
       "admin": "Admin",
       "member": "Member"
+    },
+    "actions": {
+      "erase": "Erase",
+      "confirmErase": "Erase {email}? Cannot be undone.",
+      "confirmYes": "Erase",
+      "cancel": "Cancel",
+      "working": "Erasing…",
+      "dismiss": "Dismiss",
+      "selfPlaceholder": "(you)"
     },
     "provider": {
       "google": "Google",
