@@ -770,7 +770,102 @@ public final class ConnectionViewModel: ObservableObject {
             log.log("relays_changed: picker still prefers current relay url=\(newURL.absoluteString, privacy: .public)")
             return
         }
-        log.log("relays_changed: picker now prefers different relay (mid-session swap is stage 4b-2) current=\(currentURL ?? "(none)", privacy: .public) preferred=\(newURL.absoluteString, privacy: .public) region=\(picked.region, privacy: .public)")
+        log.log("relays_changed: swapping relay current=\(currentURL ?? "(none)", privacy: .public) preferred=\(newURL.absoluteString, privacy: .public) region=\(picked.region, privacy: .public)")
+        await performRelaySwap(to: newURL)
+    }
+
+    /// performRelaySwap executes the §4 P2 stage 4b-2 mid-session
+    /// relay swap. Mirrors the CLI's dance in
+    /// clients/cli/cmd/bamboo/up.go:
+    ///
+    ///   1. open new RelayClient at newURL (mint token + dial)
+    ///   2. AddPeer for every currently-cached peer → fresh proxy map
+    ///   3. swap self.peerRelayEndpoints + self.relay + self.currentRelayURL
+    ///   4. rebuildAndReapply pushes the new wg config to the extension
+    ///      (via the existing TunnelIPC.applyConfig path) so every
+    ///      relay-routed peer's endpoint flips to the new proxy port
+    ///   5. close the old RelayClient (releases its proxy listeners
+    ///      and the WSS to the old relay)
+    ///
+    /// Failure at step 1 leaves everything intact — we don't tear
+    /// down a working relay just because the new one wouldn't dial.
+    ///
+    /// Concurrency note: handleRelaysChanged runs on @MainActor
+    /// (the actor isolation propagates through the watcher → this
+    /// callback path), so peerCache + peerRelayEndpoints + relay
+    /// cannot mutate concurrently with this method. The await on
+    /// network operations releases the actor briefly; a re-entrant
+    /// peer_added during that gap is fine — it goes through
+    /// rebuildAndReapply with the OLD proxy map, then THIS swap's
+    /// later rebuildAndReapply replaces with the NEW.
+    private func performRelaySwap(to newURL: URL) async {
+        guard
+            let selfID = selfPeerID,
+            let prevConfig = lastConfig
+        else {
+            log.warning("relays_changed: no current session state; skipping swap")
+            return
+        }
+        let privateKey: PrivateKey
+        do {
+            privateKey = try loadOrCreatePrivateKey()
+        } catch {
+            log.warning("relays_changed: load private key failed; skipping swap: \(String(describing: error), privacy: .public)")
+            return
+        }
+        let publicKey = privateKey.publicKey.base64Key
+        let bearer = peerSessionBearer
+            ?? keychain.getString(for: BambooKeychainKey.sessionToken)
+        guard let baseURL = URL(string: controllerURL.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+            log.warning("relays_changed: invalid controllerURL; skipping swap")
+            return
+        }
+        let client = BambooClient(
+            baseURL: baseURL,
+            bearerToken: bearer,
+            tenantSlug: tenantSlug
+        )
+        let newRelay: RelayClient
+        do {
+            newRelay = try await ensureRelay(
+                client: client,
+                selfId: selfID,
+                selfPubKey: publicKey,
+                url: newURL,
+                wgPort: prevConfig.wgListenPort
+            )
+        } catch {
+            log.warning("relays_changed: open new relay failed; staying on current: \(String(describing: error), privacy: .public)")
+            return
+        }
+        // Register every cached peer (excluding self) with the new
+        // relay; fail the whole swap if any AddPeer errors so we
+        // don't end up with a half-populated proxy map that would
+        // leave some peers without a working relay endpoint.
+        var newEndpoints: [String: String] = [:]
+        for p in peerCache.values where p.id != selfID {
+            guard let pkData = Data(base64Encoded: p.wireguardPublicKey) else { continue }
+            do {
+                let proxyAddr = try await newRelay.addPeer(pkData)
+                newEndpoints[p.id] = proxyAddr
+            } catch {
+                log.warning("relays_changed: addPeer failed for \(p.hostname, privacy: .public); staying on current: \(String(describing: error), privacy: .public)")
+                await newRelay.close()
+                return
+            }
+        }
+        // Commit state and push the new config. The old relay is
+        // closed LAST so the brief overlap (~ms) has both relays
+        // alive rather than neither — same ordering as the CLI swap.
+        let oldRelay = self.relay
+        self.relay = newRelay
+        self.peerRelayEndpoints = newEndpoints
+        self.currentRelayURL = newURL.absoluteString
+        rebuildAndReapply()
+        if let oldRelay = oldRelay {
+            await oldRelay.close()
+        }
+        log.log("relays_changed: swap complete url=\(newURL.absoluteString, privacy: .public) peers=\(newEndpoints.count, privacy: .public)")
     }
 
     /// aclAllowedIPs returns the AllowedIPs slice to use for a peer
