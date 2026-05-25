@@ -204,6 +204,51 @@ func (r *AuditLogs) ListByResource(ctx context.Context, tenantID uuid.UUID, reso
 	return out, rows.Err()
 }
 
+// DeleteOlderThan deletes every audit_log row whose occurred_at is
+// strictly before cutoff and returns the number of rows removed.
+// Powers the §4 P2 retention reaper that completes #182's audit
+// log story — immutability landed there; this is the time-based
+// purge counterpart.
+//
+// Bypasses the BEFORE DELETE trigger from migration 00013 by
+// scoping `bamboo.allow_audit_delete = 'true'` to the local
+// transaction with SET LOCAL. The trigger's default-deny path
+// still catches every other caller (ad-hoc psql DELETE, an
+// internal mistake from another repo, a stolen-credential
+// scenario); SET LOCAL evaporates on COMMIT/ROLLBACK so the
+// bypass can't leak past this function.
+//
+// Returns 0, nil when cutoff is the zero time — defensive against
+// a misconfigured caller turning "delete everything ever" on by
+// accident. A real retention window of "delete now and earlier"
+// makes no sense and almost certainly indicates a bug.
+func (r *AuditLogs) DeleteOlderThan(ctx context.Context, cutoff time.Time) (int64, error) {
+	if cutoff.IsZero() {
+		return 0, nil
+	}
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	// SET LOCAL: scoped to this transaction, auto-cleared on
+	// commit/rollback. set_config(name, value, is_local) is the
+	// function form — clearer than the SET LOCAL statement form
+	// when the value is constant and the audit reader is
+	// looking for "what bypasses the trigger".
+	if _, err := tx.Exec(ctx, `SELECT set_config('bamboo.allow_audit_delete', 'true', true)`); err != nil {
+		return 0, err
+	}
+	tag, err := tx.Exec(ctx, `DELETE FROM audit_log WHERE occurred_at < $1`, cutoff)
+	if err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
+}
+
 func nullableJSON(b json.RawMessage) any {
 	if len(b) == 0 {
 		return nil

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/hanfour/bamboo/apps/controller/internal/db/repo"
@@ -296,5 +297,106 @@ func TestAuditLogs_DeleteBypassWithSessionVar(t *testing.T) {
 	_, derr := pool.Exec(ctx, `DELETE FROM audit_log WHERE tenant_id = $1`, tenant.ID)
 	if derr == nil {
 		t.Error("bypass leaked outside transaction; DELETE succeeded")
+	}
+}
+
+// TestAuditLogs_DeleteOlderThan pins the §4 P2 retention-reaper
+// happy path: insert three rows at known timestamps (via direct
+// pool.Exec since Insert always uses now()), call DeleteOlderThan
+// with a cutoff that catches two of them, assert only the recent
+// row survives.
+//
+// Also exercises the trigger-bypass path end-to-end — the DELETE
+// runs against the live BEFORE-DELETE trigger from #182, so a
+// silent regression (forgot SET LOCAL; trigger blocks; reaper
+// returns 0 forever) would surface here as either a tag count
+// of 0 or a Postgres-level error.
+func TestAuditLogs_DeleteOlderThan(t *testing.T) {
+	pool := requireDB(t)
+	ctx := context.Background()
+
+	tenants := repo.NewTenants(pool)
+	slug := fmt.Sprintf("audit-reaper-%s", uuid.NewString()[:8])
+	tenant, err := tenants.Create(ctx, "Audit Reaper", slug, "100.64.98.0/24")
+	if err != nil {
+		t.Fatalf("create tenant: %v", err)
+	}
+	t.Cleanup(func() {
+		// Use bypass to clean up — the trigger blocks bare DELETE
+		// and we're not testing that here.
+		_, _ = pool.Exec(ctx, `
+			DO $$ BEGIN
+				PERFORM set_config('bamboo.allow_audit_delete', 'true', false);
+				DELETE FROM audit_log WHERE tenant_id = $1::uuid;
+			END $$
+		`, tenant.ID)
+		_, _ = pool.Exec(ctx, `DELETE FROM tenants WHERE id = $1`, tenant.ID)
+	})
+
+	audits := repo.NewAuditLogs(pool)
+
+	// Insert three rows at three timestamps. Use direct SQL to
+	// set occurred_at — Insert always uses now() which we can't
+	// backdate.
+	ids := []uuid.UUID{uuid.New(), uuid.New(), uuid.New()}
+	tsAges := []string{"INTERVAL '40 days'", "INTERVAL '20 days'", "INTERVAL '1 day'"}
+	for i, id := range ids {
+		_, err := pool.Exec(ctx, fmt.Sprintf(`
+			INSERT INTO audit_log (id, tenant_id, actor_type, action, resource_type, occurred_at)
+			VALUES ($1, $2, 'system', 'test', 'test', now() - %s)
+		`, tsAges[i]), id, tenant.ID)
+		if err != nil {
+			t.Fatalf("seed row %d: %v", i, err)
+		}
+	}
+
+	// Cutoff = 30 days ago. Expect rows 0 (40d old) deleted,
+	// rows 1 (20d) + 2 (1d) survive.
+	cutoff := time.Now().UTC().AddDate(0, 0, -30)
+	deleted, err := audits.DeleteOlderThan(ctx, cutoff)
+	if err != nil {
+		t.Fatalf("DeleteOlderThan: %v", err)
+	}
+	if deleted != 1 {
+		t.Errorf("deleted = %d, want 1 (40d row only)", deleted)
+	}
+
+	var survivors int
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*) FROM audit_log WHERE tenant_id = $1`,
+		tenant.ID,
+	).Scan(&survivors); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if survivors != 2 {
+		t.Errorf("survivors = %d, want 2 (20d + 1d)", survivors)
+	}
+
+	// Re-run with same cutoff: idempotent — nothing left to delete.
+	deleted, err = audits.DeleteOlderThan(ctx, cutoff)
+	if err != nil {
+		t.Fatalf("idempotent DeleteOlderThan: %v", err)
+	}
+	if deleted != 0 {
+		t.Errorf("second pass deleted = %d, want 0 (idempotent)", deleted)
+	}
+}
+
+// TestAuditLogs_DeleteOlderThan_ZeroCutoffNoop pins the defensive
+// case: cutoff = time.Time{} (zero value) must NOT run a
+// "DELETE FROM audit_log" with no filter. A bug in the caller that
+// forgot to compute now-window could otherwise wipe the entire
+// table.
+func TestAuditLogs_DeleteOlderThan_ZeroCutoffNoop(t *testing.T) {
+	pool := requireDB(t)
+	ctx := context.Background()
+	audits := repo.NewAuditLogs(pool)
+
+	deleted, err := audits.DeleteOlderThan(ctx, time.Time{})
+	if err != nil {
+		t.Fatalf("zero cutoff returned error: %v", err)
+	}
+	if deleted != 0 {
+		t.Errorf("zero cutoff deleted = %d, want 0", deleted)
 	}
 }
