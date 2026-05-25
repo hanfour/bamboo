@@ -152,6 +152,7 @@ func NewHTTPServer(
 	mux.HandleFunc("/auth/sign-out", h.handleSignOut)
 	mux.HandleFunc("/api/v1/admin/relays", h.routeAdminRelays)
 	mux.HandleFunc("/api/v1/admin/users/", h.routeAdminUsers)
+	mux.HandleFunc("/api/v1/admin/audit-log.csv", h.routeAdminAuditExport)
 	mux.HandleFunc("/api/v1/relay-token", h.routeRelayToken)
 	mux.HandleFunc("/api/v1/", h.routeAPI)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
@@ -258,7 +259,8 @@ func normalizeRoute(path string) string {
 		"/api/v1/me", "/api/v1/users", "/api/v1/invitations",
 		"/api/v1/preauth-keys", "/api/v1/dns", "/api/v1/tenant",
 		"/api/v1/overview", "/api/v1/peers/register", "/api/v1/peers/heartbeat",
-		"/api/v1/peers/watch", "/api/v1/relay-token":
+		"/api/v1/peers/watch", "/api/v1/relay-token",
+		"/api/v1/admin/relays", "/api/v1/admin/audit-log.csv":
 		return path
 	}
 	// /api/v1/peers/{id}/<subpath> family — collapse the UUID.
