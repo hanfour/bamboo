@@ -180,26 +180,40 @@ func (r *Users) Erase(ctx context.Context, userID uuid.UUID) error {
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	var email string
+	var tenantID uuid.UUID
 	if err := tx.QueryRow(ctx,
-		`SELECT email FROM users WHERE id = $1 AND deleted_at IS NULL`,
+		`SELECT email, tenant_id FROM users WHERE id = $1 AND deleted_at IS NULL`,
 		userID,
-	).Scan(&email); err != nil {
+	).Scan(&email, &tenantID); err != nil {
 		return asNotFound(err)
 	}
 
 	// Redact invitations addressed to this email. Use a fixed
 	// placeholder so a second erasure of the same email (e.g.
 	// they re-invited + immediately re-erased) doesn't violate
-	// the partial-unique-index on (tenant_id, email) WHERE
-	// pending — it would, because the placeholder is the same.
-	// But invitations addressed to an erased email can't be
-	// pending (they're either revoked or accepted — accepted's
-	// user row was just deleted; revoked is fine). So in practice
-	// only revoked/accepted rows get the placeholder, and the
-	// partial-unique-index excludes them.
+	// the partial-unique-index on (tenant_id, lower(email))
+	// WHERE pending — the placeholder collapses any later rows
+	// into one, and pending invites to an erased email can't
+	// coexist in practice anyway (they'd reference a user row
+	// that's about to be deleted).
+	//
+	// The WHERE clause has two important guards:
+	//   - tenant_id = $2 confines the scrub to the erased user's
+	//     own tenant. The same email can legitimately exist in
+	//     other tenants (multi-tenant admin emails like
+	//     ops@example.com), and an Article-17 erasure in tenant A
+	//     must not silently mutate rows in tenants B/C.
+	//   - lower(email) matches the canonical key used by
+	//     migration 00007's partial-unique-index and the OIDC
+	//     redeem path's strings.EqualFold (see handleCallback).
+	//     A mixed-case row like "Han@example.com" would otherwise
+	//     survive an erasure of the OIDC-normalised "han@example.com"
+	//     users row, leaving PII behind.
 	if _, err := tx.Exec(ctx,
-		`UPDATE user_invitations SET email = '<erased>' WHERE email = $1`,
-		email,
+		`UPDATE user_invitations
+		    SET email = '<erased>'
+		  WHERE tenant_id = $1 AND lower(email) = lower($2)`,
+		tenantID, email,
 	); err != nil {
 		return err
 	}

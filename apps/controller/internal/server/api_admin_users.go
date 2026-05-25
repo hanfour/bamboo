@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/hanfour/bamboo/apps/controller/internal/db/repo"
@@ -186,10 +187,26 @@ func (h *HTTPServer) adminUserErase(w http.ResponseWriter, r *http.Request, acto
 	emailHashHex := hex.EncodeToString(emailHash[:])
 
 	if err := h.users.Erase(r.Context(), targetID); err != nil {
+		// Racy concurrent erase: another admin (or our own
+		// retry-after-network-blip) deleted the row between the
+		// GetByID above and the in-tx SELECT inside Erase. The
+		// docstring promises idempotent 404 on already-erased,
+		// so surface that rather than a misleading 500.
+		if errors.Is(err, repo.ErrNotFound) {
+			writeError(w, http.StatusNotFound, errors.New("user not found"))
+			return
+		}
 		slog.Warn("user erase", "target", targetID, "admin", actor.ID, "err", err)
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
+
+	// Capture the wall-clock erasure time once so the response
+	// and the audit row carry the same timestamp. repo.AuditLogs
+	// .Insert uses pool.Exec + DB-side `now()` for the column;
+	// it doesn't scan back into ev.OccurredAt, so reading that
+	// field after Insert would return the Go zero value (year 1).
+	erasedAt := time.Now().UTC()
 
 	// Audit row for the erasure itself. Stored after the DELETE
 	// commits so a failed erase doesn't leave a misleading "erased"
@@ -205,6 +222,7 @@ func (h *HTTPServer) adminUserErase(w http.ResponseWriter, r *http.Request, acto
 		Action:       "user.erase",
 		ResourceType: "user",
 		ResourceID:   &resID,
+		OccurredAt:   erasedAt,
 	}
 	ev.Diff = marshalDiffJSON(map[string]any{
 		"targetEmailSHA256": emailHashHex,
@@ -218,7 +236,7 @@ func (h *HTTPServer) adminUserErase(w http.ResponseWriter, r *http.Request, acto
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"erasedUserId": targetID.String(),
-		"erasedAt":     ev.OccurredAt.UTC(),
+		"erasedAt":     erasedAt,
 	})
 }
 
