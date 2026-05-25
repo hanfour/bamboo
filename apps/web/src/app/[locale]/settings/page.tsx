@@ -93,6 +93,12 @@ function SettingsView({
  <RelaysCard />
  </Section>
  )}
+
+ {isAdmin && (
+ <Section title={t('auditExportCard.title')}>
+ <AuditExportCard />
+ </Section>
+ )}
  </div>
  );
 }
@@ -146,6 +152,49 @@ function WebhooksCard() {
  </p>
  </div>
  </Link>
+ );
+}
+
+function AuditExportCard() {
+ const t = useTranslations('settings.auditExportCard');
+ // Three preset windows expressed as RFC3339 lower bounds, computed
+ // at SSR time. The browser downloads on click; an empty href would
+ // hit the controller's default (now-7d) so the "Last 7 days" link
+ // can just point at the bare endpoint without a since param.
+ const now = new Date();
+ const ago = (days: number) =>
+ new Date(now.getTime() - days * 24 * 60 * 60 * 1000).toISOString();
+ return (
+ <div className="space-y-3 rounded-lg border border-ink-800 bg-ink-950 p-4">
+ <div className="space-y-1">
+ <h3 className="text-sm font-medium text-bamboo-50">{t('title')}</h3>
+ <p className="text-sm text-bamboo-200/70">{t('description')}</p>
+ </div>
+ <div className="flex flex-wrap gap-2">
+ {/* Plain anchors — admin clicks, browser handles download via
+   * the controller's Content-Disposition. No JS needed; works
+   * even when the Settings page is dehydrated. */}
+ <DownloadLink href="/api/audit-export" label={t('range.last7d')} />
+ <DownloadLink href={`/api/audit-export?since=${encodeURIComponent(ago(30))}`} label={t('range.last30d')} />
+ <DownloadLink href={`/api/audit-export?since=${encodeURIComponent(ago(90))}`} label={t('range.last90d')} />
+ </div>
+ <p className="text-xs text-bamboo-200/50">{t('hint')}</p>
+ </div>
+ );
+}
+
+function DownloadLink({ href, label }: { href: string; label: string }) {
+ // download attribute lets the browser respect the Content-
+ // Disposition filename from the controller without prompting
+ // the user with a "Save link as" dialog.
+ return (
+ <a
+ href={href}
+ download
+ className="inline-flex items-center rounded-md border border-bamboo-300/40 bg-bamboo-50 px-3 py-1.5 text-sm font-medium text-ink-950 transition-colors hover:bg-bamboo-100"
+ >
+ {label}
+ </a>
  );
 }
 
