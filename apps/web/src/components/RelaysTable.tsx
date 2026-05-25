@@ -2,6 +2,8 @@
 
 'use client';
 
+import { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { useTranslations } from 'next-intl';
 import type { Relay, RelayHealthStatus } from '@/lib/api';
 
@@ -18,8 +20,43 @@ import type { Relay, RelayHealthStatus } from '@/lib/api';
 // infrastructure. The empty copy explains both that no relays
 // are registered and that registration goes through the REST
 // admin endpoint until the create form lands.
+//
+// Live refresh (§4 P2 stage 4c): the table re-fetches itself every
+// relayRefreshIntervalMs via router.refresh(), so an admin watching
+// the page sees badges flip in step with the controller's 30s
+// health reaper without manual reload. The `nowTick` state separately
+// re-renders the "Ns ago" timestamps on a faster cadence so a row
+// stuck at "5m ago" reads as live-but-old rather than a frozen
+// page. router.refresh() preserves client component state — focus,
+// scroll position, any open inline editors — so the live refresh
+// stays invisible to anyone not staring at the badges.
+//
+// Polling vs SSE: SSE would need a new admin-side bus stream + a
+// privacy review of which events leak across tenants. Polling
+// every 30s matches the reaper's own cadence (no flips happen
+// faster), so the latency floor is the same with vastly less
+// machinery. The SSE path is a noted follow-up when an admin
+// actually needs sub-second relay visibility.
+const relayRefreshIntervalMs = 30_000;
+const relayClockTickMs = 5_000;
+
 export function RelaysTable({ relays }: { relays: Relay[] }) {
   const t = useTranslations('relays');
+  const router = useRouter();
+  // Force a re-render every clockTickMs so the "Ns ago" text on
+  // each row stays fresh between server refetches. We just need a
+  // changing value; the actual number is unused, useState's setter
+  // is what triggers the render.
+  const [, setNow] = useState(0);
+  useEffect(() => {
+    const refresh = setInterval(() => router.refresh(), relayRefreshIntervalMs);
+    const tick = setInterval(() => setNow((n) => n + 1), relayClockTickMs);
+    return () => {
+      clearInterval(refresh);
+      clearInterval(tick);
+    };
+  }, [router]);
+
   if (relays.length === 0) {
     return (
       <p className="rounded-md border border-dashed border-ink-700 p-6 text-center text-sm text-bamboo-200/60">
