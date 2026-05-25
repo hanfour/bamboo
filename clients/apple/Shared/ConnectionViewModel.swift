@@ -95,6 +95,12 @@ public final class ConnectionViewModel: ObservableObject {
     private let magicDNS = MagicDNSManager()
     private let peerStore = MagicDNSPeerStore()
     private var relay: RelayClient?
+    /// Absolute URL string of the relay we dialed at bring-up
+    /// (Settings pin OR RelayPicker choice). nil ⇒ direct-only
+    /// mesh. The §4 P2 stage 4b RelaysChanged handler compares
+    /// against this to decide whether to log "still preferred"
+    /// vs "picker now prefers different".
+    private var currentRelayURL: String?
     private var statusTask: Task<Void, Never>?
 
     // Latest known tunnel config; held so we can rebuild + reapply
@@ -508,10 +514,17 @@ public final class ConnectionViewModel: ObservableObject {
                         }
                     }
                     self.relay = r
+                    self.currentRelayURL = url.absoluteString
                     log.log("relay enabled url=\(url.absoluteString, privacy: .public) peers=\(resp.peers.count, privacy: .public)")
                 } catch {
                     log.warning("relay init failed; falling back to direct: \(String(describing: error), privacy: .public)")
                 }
+            } else {
+                // No relay dialed — direct-only mesh. Clear the
+                // recorded URL so a stage 4b log line doesn't
+                // compare against a stale value from a previous
+                // bring-up.
+                self.currentRelayURL = nil
             }
 
             // ACL enforcement (issue #132): when the controller is
@@ -677,7 +690,48 @@ public final class ConnectionViewModel: ObservableObject {
             Task { @MainActor [weak self] in
                 await self?.refreshPolicyFromController()
             }
+        case .relaysChanged(let servers):
+            // §4 P2 multi-relay stage 4b. The controller pushed a
+            // fresh eligible-relay list (admin enable/disable, or
+            // the health reaper flipped a relay in/out). We re-run
+            // the RelayPicker against it and log what it would
+            // choose now vs the URL we dialed at bring-up. Stage
+            // 4b-2 will actually swap the RelayClient mid-session;
+            // today this is observe-only so operators have a
+            // preview log line and the wire shape is exercised
+            // end-to-end before the more invasive swap lands.
+            log.log("watch: relays_changed count=\(servers.count, privacy: .public)")
+            Task { @MainActor [weak self] in
+                await self?.handleRelaysChanged(servers)
+            }
         }
+    }
+
+    /// handleRelaysChanged runs the RelayPicker against the fresh
+    /// eligible-relay list pushed by the controller and logs the
+    /// preferred relay. Observe-only; mid-session swap is 4b-2.
+    ///
+    /// Skipped when the user has pinned a relayURL in Settings —
+    /// honoring that override matters because an operator who
+    /// typed a relay into Settings expects that exact relay, not
+    /// "whatever the picker preferred this minute".
+    private func handleRelaysChanged(_ servers: [BambooClient.RelayServer]) async {
+        let pinned = !relayURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        if pinned {
+            log.log("relays_changed: ignoring (user pinned relayURL in Settings)")
+            return
+        }
+        guard let picked = await RelayPicker.pickLowestRTT(from: servers) else {
+            log.log("relays_changed: no usable relay; would degrade to direct-only on next reconnect")
+            return
+        }
+        guard let newURL = RelayPicker.relayWSSURL(picked) else { return }
+        let currentURL = self.currentRelayURL
+        if newURL.absoluteString == currentURL {
+            log.log("relays_changed: picker still prefers current relay url=\(newURL.absoluteString, privacy: .public)")
+            return
+        }
+        log.log("relays_changed: picker now prefers different relay (mid-session swap is stage 4b-2) current=\(currentURL ?? "(none)", privacy: .public) preferred=\(newURL.absoluteString, privacy: .public) region=\(picked.region, privacy: .public)")
     }
 
     /// aclAllowedIPs returns the AllowedIPs slice to use for a peer
