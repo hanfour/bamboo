@@ -118,6 +118,45 @@ func TestProbeRelayHealth_Timeout(t *testing.T) {
 // compact. Otherwise the admin UI table cell renders something
 // like 'Get "https://relay-east.example.com:8443/healthz":
 // context deadline exceeded' — useful but redundant.
+// TestRelayEligibilityChanged is the truth table for the §4 P2
+// stage 4a eligibility-flip detection. Every cell of the 3x3 matrix
+// gets a row because a subtle bug here would either silently
+// spam every WatchPeers subscriber every 30s (false positives) or
+// silently fail to notify them when a relay flipped (false
+// negatives). The matrix is small enough to enumerate fully.
+func TestRelayEligibilityChanged(t *testing.T) {
+	cases := []struct {
+		prev, next string
+		want       bool
+		why        string
+	}{
+		// Both eligible → no change.
+		{"unknown", "unknown", false, "no-op"},
+		{"unknown", "healthy", false, "unknown→healthy: both eligible, set unchanged"},
+		{"healthy", "unknown", false, "healthy→unknown: both eligible"},
+		{"healthy", "healthy", false, "no-op"},
+		{"", "healthy", false, "empty→healthy: empty normalises to unknown, both eligible"},
+		// Both ineligible → no change (degenerate but the function should still say false).
+		{"unhealthy", "unhealthy", false, "no-op"},
+		// Flip into ineligibility.
+		{"unknown", "unhealthy", true, "first probe failed: relay drops out of eligible list"},
+		{"healthy", "unhealthy", true, "regression: relay drops out of eligible list"},
+		{"", "unhealthy", true, "empty→unhealthy: same as unknown→unhealthy"},
+		// Flip back to eligibility.
+		{"unhealthy", "healthy", true, "recovered: relay re-enters eligible list"},
+		{"unhealthy", "unknown", true, "shouldn't normally happen but covers the row"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.prev+"→"+tc.next, func(t *testing.T) {
+			got := relayEligibilityChanged(tc.prev, tc.next)
+			if got != tc.want {
+				t.Errorf("relayEligibilityChanged(%q, %q) = %v, want %v — %s",
+					tc.prev, tc.next, got, tc.want, tc.why)
+			}
+		})
+	}
+}
+
 func TestTrimErrForUI(t *testing.T) {
 	cases := []struct {
 		in, want string

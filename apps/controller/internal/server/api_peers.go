@@ -636,6 +636,28 @@ func writeSSE(w io.Writer, event *bamboov1.WatchPeersEvent) error {
 		return writeSSEEvent(w, "policy_changed", map[string]any{
 			"policyRevision": e.PolicyChanged.GetPolicyRevision(),
 		})
+	case *bamboov1.WatchPeersEvent_RelaysChanged:
+		// §4 P2 multi-relay stage 4a: a relay flipped eligibility
+		// (admin enable/disable, health reaper marked it
+		// unhealthy / recovered). Payload is the FRESH eligible
+		// list so clients can re-pick without a re-register
+		// round-trip. Field names mirror RegisterResponse's
+		// `relayServers` so the client decoder can reuse the
+		// same type.
+		relays := e.RelaysChanged.GetRelayServers()
+		out := make([]map[string]any, 0, len(relays))
+		for _, rs := range relays {
+			out = append(out, map[string]any{
+				"id":        rs.GetId(),
+				"region":    rs.GetRegion(),
+				"hostname":  rs.GetHostname(),
+				"port":      rs.GetPort(),
+				"publicKey": rs.GetPublicKey(),
+			})
+		}
+		return writeSSEEvent(w, "relays_changed", map[string]any{
+			"relayServers": out,
+		})
 	default:
 		return nil
 	}

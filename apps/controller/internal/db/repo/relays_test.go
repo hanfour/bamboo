@@ -86,10 +86,10 @@ func TestRelays_ListEligibleFiltersUnhealthy(t *testing.T) {
 		)
 	})
 
-	if err := relays.UpdateHealth(ctx, healthy.ID, "healthy", ""); err != nil {
+	if _, err := relays.UpdateHealth(ctx, healthy.ID, "healthy", ""); err != nil {
 		t.Fatalf("UpdateHealth healthy: %v", err)
 	}
-	if err := relays.UpdateHealth(ctx, unhealthy.ID, "unhealthy", "timeout"); err != nil {
+	if _, err := relays.UpdateHealth(ctx, unhealthy.ID, "unhealthy", "timeout"); err != nil {
 		t.Fatalf("UpdateHealth unhealthy: %v", err)
 	}
 	// Leave neverProbed alone.
@@ -151,10 +151,10 @@ func TestRelays_UpdateHealth_ClearsErrorOnRecovery(t *testing.T) {
 		_, _ = pool.Exec(ctx, `DELETE FROM relay_servers WHERE id = $1`, rs.ID)
 	})
 
-	if err := relays.UpdateHealth(ctx, rs.ID, "unhealthy", "connection refused"); err != nil {
+	if _, err := relays.UpdateHealth(ctx, rs.ID, "unhealthy", "connection refused"); err != nil {
 		t.Fatalf("UpdateHealth: %v", err)
 	}
-	if err := relays.UpdateHealth(ctx, rs.ID, "healthy", ""); err != nil {
+	if _, err := relays.UpdateHealth(ctx, rs.ID, "healthy", ""); err != nil {
 		t.Fatalf("UpdateHealth recover: %v", err)
 	}
 	listed, _ := relays.ListEnabled(ctx)
@@ -167,6 +167,50 @@ func TestRelays_UpdateHealth_ClearsErrorOnRecovery(t *testing.T) {
 				t.Errorf("LastHealthError = %q, want empty after recovery", r.LastHealthError)
 			}
 		}
+	}
+}
+
+// TestRelays_UpdateHealth_ReturnsPreviousStatus pins the "previous"
+// return — stage 4a's RelaysChanged reaper depends on this to decide
+// whether a probe sweep changed eligibility and needs a broadcast.
+// First call on a fresh row returns 'unknown' (NULL normalised) so
+// the caller can detect an unknown→healthy/unhealthy transition;
+// subsequent calls return the just-overwritten value.
+func TestRelays_UpdateHealth_ReturnsPreviousStatus(t *testing.T) {
+	pool := requireDB(t)
+	ctx := context.Background()
+	relays := repo.NewRelays(pool)
+
+	rs, _ := relays.Insert(ctx, &repo.RelayServer{
+		Region: "us-east-1", Hostname: uniqueHostname(), Port: 8443,
+		PublicKey: "stub", Enabled: true,
+	})
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, `DELETE FROM relay_servers WHERE id = $1`, rs.ID)
+	})
+
+	prev, err := relays.UpdateHealth(ctx, rs.ID, "healthy", "")
+	if err != nil {
+		t.Fatalf("first UpdateHealth: %v", err)
+	}
+	if prev != "unknown" {
+		t.Errorf("first probe prev = %q, want 'unknown' (NULL normalised)", prev)
+	}
+
+	prev, err = relays.UpdateHealth(ctx, rs.ID, "unhealthy", "timeout")
+	if err != nil {
+		t.Fatalf("second UpdateHealth: %v", err)
+	}
+	if prev != "healthy" {
+		t.Errorf("second probe prev = %q, want 'healthy'", prev)
+	}
+
+	prev, err = relays.UpdateHealth(ctx, rs.ID, "healthy", "")
+	if err != nil {
+		t.Fatalf("third UpdateHealth: %v", err)
+	}
+	if prev != "unhealthy" {
+		t.Errorf("recovery probe prev = %q, want 'unhealthy'", prev)
 	}
 }
 

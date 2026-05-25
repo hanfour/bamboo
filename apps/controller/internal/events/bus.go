@@ -81,6 +81,38 @@ func (b *Bus) Publish(tenantID uuid.UUID, event *bamboov1.WatchPeersEvent) {
 	}
 }
 
+// PublishAll broadcasts event to every active subscriber across all
+// tenants. Relays are tenant-agnostic infrastructure (the
+// relay_servers table has no tenant_id column — see the
+// 00003_relay_servers.sql notes), so a RelaysChanged event needs to
+// reach every connected client regardless of tenant. Routing
+// per-tenant through Publish would require enumerating tenants on
+// every relay-health flip, an unnecessary DB round-trip when the
+// in-memory subscriber map already knows the active set.
+//
+// Slow-subscriber semantics match Publish: drop rather than block.
+func (b *Bus) PublishAll(event *bamboov1.WatchPeersEvent) {
+	if event == nil {
+		return
+	}
+	b.mu.Lock()
+	subs := make([]chan *bamboov1.WatchPeersEvent, 0)
+	for _, perTenant := range b.subscribers {
+		for ch := range perTenant {
+			subs = append(subs, ch)
+		}
+	}
+	b.mu.Unlock()
+
+	for _, ch := range subs {
+		select {
+		case ch <- event:
+		default:
+			// dropped — slow consumer reconciles by reopening WatchPeers.
+		}
+	}
+}
+
 // SubscriberCount returns the number of active subscribers for tenantID.
 // Useful in tests; not part of the hot path.
 func (b *Bus) SubscriberCount(tenantID uuid.UUID) int {

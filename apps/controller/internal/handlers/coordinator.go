@@ -193,6 +193,25 @@ func (h *CoordinatorHandler) PublishPeerUpdatedIfVisible(tenantID uuid.UUID, pee
 	})
 }
 
+// PublishRelaysChanged broadcasts the fresh eligible-relay list to
+// every active WatchPeers subscriber across every tenant (§4 P2
+// multi-relay stage 4a). Relays are tenant-agnostic shared
+// infrastructure (the relay_servers table has no tenant_id column),
+// so PublishAll is the right routing primitive instead of looping
+// per tenant.
+//
+// Called from the health-check reaper when a probe sweep flipped at
+// least one relay's eligibility, and from the admin REST relay-create
+// path so a brand-new relay reaches clients in seconds rather than
+// at the next 30s health sweep.
+func (h *CoordinatorHandler) PublishRelaysChanged(servers []*bamboov1.RelayServer) {
+	h.bus.PublishAll(&bamboov1.WatchPeersEvent{
+		Event: &bamboov1.WatchPeersEvent_RelaysChanged{
+			RelaysChanged: &bamboov1.RelaysChanged{RelayServers: servers},
+		},
+	})
+}
+
 // BumpPolicyRevision increments the tenant's policy_revision and
 // publishes a PolicyChanged event so subscribed WatchPeers streams
 // re-pull their per-peer allowed_ips. Used by admin actions that
