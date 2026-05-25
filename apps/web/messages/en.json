@@ -107,7 +107,19 @@
       "tags": "Tags",
       "os": "OS",
       "status": "Status",
-      "lastSeen": "Last seen"
+      "lastSeen": "Last seen",
+      "actions": "Actions"
+    },
+    "rowMenu": {
+      "aria": "Peer actions",
+      "disable": "Disable peer",
+      "enable": "Enable peer",
+      "delete": "Delete peer",
+      "confirmDelete": "Delete this peer? This cannot be undone.",
+      "confirmYes": "Delete",
+      "confirmCancel": "Cancel",
+      "working": "Working…",
+      "errorPrefix": "Failed:"
     },
     "ownerUnknown": "—",
     "status": {
