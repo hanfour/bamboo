@@ -95,6 +95,96 @@ func (a *fakeApplier) Apply(_ context.Context, cfg *wg.DeviceConfig) error {
 	return nil
 }
 
+// TestRunWatchPeers_InvokesRelaysChangedHandler pins the §4 P2 stage
+// 4b wiring: a relays_changed event must reach the supplied
+// RelaysChangedHandler with the FULL relay list — and the cache /
+// device Apply path must NOT fire (this event is informational about
+// the relay set, not about the peer mesh, so reapplying WG config
+// would be wasted work).
+func TestRunWatchPeers_InvokesRelaysChangedHandler(t *testing.T) {
+	priv, _ := wg.GeneratePrivateKey()
+	self := peer("self", "100.64.0.1")
+	cache := sync.New(self, nil)
+
+	cli := &fakeClient{}
+	app := &fakeApplier{}
+
+	var (
+		mu   stdsync.Mutex
+		seen [][]*bamboov1.RelayServer
+	)
+	handler := func(_ context.Context, servers []*bamboov1.RelayServer) {
+		mu.Lock()
+		seen = append(seen, servers)
+		mu.Unlock()
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan struct{})
+	go func() {
+		sync.RunWatchPeers(ctx, cli, app, priv, cache, self.GetId(), nil, handler)
+		close(done)
+	}()
+
+	// Wait for the stream to open.
+	var evts chan *bamboov1.WatchPeersEvent
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		_, evts, _ = cli.snapshot()
+		if evts != nil {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if evts == nil {
+		t.Fatal("stream never opened")
+	}
+
+	evts <- &bamboov1.WatchPeersEvent{
+		Event: &bamboov1.WatchPeersEvent_RelaysChanged{
+			RelaysChanged: &bamboov1.RelaysChanged{
+				RelayServers: []*bamboov1.RelayServer{
+					{Id: "r1", Region: "us-east-1", Hostname: "a.example.com", Port: 8443},
+					{Id: "r2", Region: "ap-northeast-1", Hostname: "b.example.com", Port: 8443},
+				},
+			},
+		},
+	}
+
+	// Spin until the handler was called (or 1s budget).
+	deadline = time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		got := len(seen)
+		mu.Unlock()
+		if got >= 1 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(seen) != 1 {
+		t.Fatalf("handler called %d times, want 1", len(seen))
+	}
+	if got := len(seen[0]); got != 2 {
+		t.Errorf("relay count = %d, want 2", got)
+	}
+	if seen[0][0].GetHostname() != "a.example.com" || seen[0][1].GetHostname() != "b.example.com" {
+		t.Errorf("relay order lost; got %+v", seen[0])
+	}
+	// And critically — the device/applier MUST NOT have been called.
+	// relays_changed is a relay-side event; the WG peer config is
+	// unchanged, so reapplying would be wasted work + churn.
+	app.mu.Lock()
+	defer app.mu.Unlock()
+	if app.count != 0 {
+		t.Errorf("Apply count = %d on relays_changed event, want 0", app.count)
+	}
+}
+
 func TestRunWatchPeers_AppliesAfterPeerAdded(t *testing.T) {
 	priv, _ := wg.GeneratePrivateKey()
 	self := peer("self", "100.64.0.1")
@@ -108,7 +198,7 @@ func TestRunWatchPeers_AppliesAfterPeerAdded(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		sync.RunWatchPeers(ctx, cli, app, priv, cache, self.GetId(), nil)
+		sync.RunWatchPeers(ctx, cli, app, priv, cache, self.GetId(), nil, nil)
 		close(done)
 	}()
 
@@ -164,7 +254,7 @@ func TestRunWatchPeers_ReconnectsAfterStreamError(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	go sync.RunWatchPeers(ctx, cli, app, priv, cache, self.GetId(), nil)
+	go sync.RunWatchPeers(ctx, cli, app, priv, cache, self.GetId(), nil, nil)
 
 	// Wait for first open.
 	var errs chan error
@@ -235,7 +325,7 @@ func TestRunWatchPeers_RefreshesOnPolicyChanged(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		sync.RunWatchPeers(ctx, cli, app, priv, cache, self.GetId(), refresh)
+		sync.RunWatchPeers(ctx, cli, app, priv, cache, self.GetId(), refresh, nil)
 		close(done)
 	}()
 
