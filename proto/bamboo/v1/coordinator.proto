@@ -97,6 +97,16 @@ message RegisterResponse {
   int64 policy_revision = 3;
   // relay_servers are DERP-style relays the client may use as fallback.
   repeated RelayServer relay_servers = 4;
+  // preferred_region is the controller's best guess at the client's
+  // region (§4 P2 multi-relay stage 5.5). Derived from the client's
+  // request IP against an operator-supplied CIDR table. Empty when no
+  // table is configured or no CIDR matches — clients then fall back
+  // to pure RTT ranking or their own local region hint.
+  //
+  // Clients precedence: local hint (env / Settings) wins over this
+  // server-supplied value. The server hint is the "fleet-wide
+  // default"; an individual operator may still override per-device.
+  string preferred_region = 5;
 }
 
 message RelayServer {
