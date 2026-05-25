@@ -467,17 +467,34 @@ public final class ConnectionViewModel: ObservableObject {
             // three failure shapes into named log lines.
             var peerEndpoints: [String: String] = [:] // peer.id -> endpoint
             let trimmedRelayURL = relayURL.trimmingCharacters(in: .whitespacesAndNewlines)
-            if trimmedRelayURL.isEmpty {
-                log.log("relay: skipped (relayURL is empty; type one in Settings to enable)")
-            } else if let url = URL(string: trimmedRelayURL),
-                      let scheme = url.scheme?.lowercased(),
-                      scheme == "ws" || scheme == "wss" {
-                // URL(string:) on macOS 26 rejects strings with
-                // trailing whitespace or newlines (verified via
-                // `swift -e`), so we trim first. The scheme guard
-                // catches strings like "abc" — URL(string:) returns
-                // a non-nil URL with scheme==nil that would otherwise
-                // pass through to RelayClient.dial and hang there.
+            // resolvedRelayURL is the URL we'll actually dial. Picked
+            // in this order (§4 P2 multi-relay stage 2):
+            //   1. Settings `relayURL` (operator pin / dev override)
+            //   2. RegisterResponse.relayServers — RTT-probe each
+            //      and pick the lowest; controller stage 1's reaper
+            //      has already filtered out unhealthy rows
+            //   3. neither ⇒ direct-only mesh
+            var resolvedRelayURL: URL? = nil
+            if !trimmedRelayURL.isEmpty {
+                if let url = URL(string: trimmedRelayURL),
+                   let scheme = url.scheme?.lowercased(),
+                   scheme == "ws" || scheme == "wss" {
+                    resolvedRelayURL = url
+                } else {
+                    log.warning("relay: not a valid ws/wss URL — relayURL=\(trimmedRelayURL, privacy: .public); fix in Settings")
+                }
+            } else if let servers = resp.relayServers, !servers.isEmpty {
+                if let picked = await RelayPicker.pickLowestRTT(from: servers),
+                   let url = RelayPicker.relayWSSURL(picked) {
+                    resolvedRelayURL = url
+                    log.log("relay picker: chose region=\(picked.region, privacy: .public) hostname=\(picked.hostname, privacy: .public)")
+                } else {
+                    log.log("relay picker: no usable relay in registry; continuing direct-only")
+                }
+            } else {
+                log.log("relay: skipped (relayURL is empty + no controller-supplied relays)")
+            }
+            if let url = resolvedRelayURL {
                 do {
                     let r = try await ensureRelay(client: client,
                                                    selfId: resp.self_.id,
@@ -495,8 +512,6 @@ public final class ConnectionViewModel: ObservableObject {
                 } catch {
                     log.warning("relay init failed; falling back to direct: \(String(describing: error), privacy: .public)")
                 }
-            } else {
-                log.warning("relay: not a valid ws/wss URL — relayURL=\(trimmedRelayURL, privacy: .public); fix in Settings")
             }
 
             // ACL enforcement (issue #132): when the controller is

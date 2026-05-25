@@ -97,6 +97,25 @@ public struct BambooClient {
         public var allowedIps: [String]?
     }
 
+    /// RelayServer is one entry in the controller-curated relay
+    /// list (§4 P2 multi-relay registry). Stage 1's reaper already
+    /// filtered out unhealthy rows so the Apple client can pick
+    /// any entry without re-checking health. The client uses these
+    /// to RTT-probe and pick the lowest-latency relay when the
+    /// user hasn't pinned one via Settings (`relayURL`).
+    public struct RelayServer: Decodable {
+        public var id: String
+        public var region: String
+        public var hostname: String
+        public var port: Int
+        public var publicKey: String
+
+        enum CodingKeys: String, CodingKey {
+            case id, region, hostname, port
+            case publicKey = "publicKey"
+        }
+    }
+
     public struct RegisterResponse: Decodable {
         public var self_: PeerJSON
         public var peers: [PeerJSON]
@@ -106,10 +125,15 @@ public struct BambooClient {
         /// predates the prod-mode auth train omits these fields.
         public var peerSessionToken: String?
         public var peerSessionExpiresAt: Int64?
+        /// Curated eligible relay list (§4 P2 multi-relay stage 2).
+        /// Optional so an older controller without the registry
+        /// still decodes — empty / missing ⇒ direct-only mesh
+        /// unless the user typed a relayURL in Settings.
+        public var relayServers: [RelayServer]?
 
         enum CodingKeys: String, CodingKey {
             case self_ = "self"
-            case peers, policyRevision, peerSessionToken, peerSessionExpiresAt
+            case peers, policyRevision, peerSessionToken, peerSessionExpiresAt, relayServers
         }
     }
 
