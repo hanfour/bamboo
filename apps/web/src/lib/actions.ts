@@ -419,6 +419,40 @@ export async function eraseUserAction(id: string): Promise<ActionResult> {
   }
 }
 
+// signOutAllSessionsAction triggers an admin-driven force-sign-out
+// for the target user via POST /api/v1/admin/users/{id}/sign-out-all
+// (slice 3b, #218). Bumps users.session_version; every outstanding
+// JWT for that user fails its next request with "session revoked".
+//
+// Unlike eraseUserAction, the actor MAY target themselves — useful
+// when the admin wants to invalidate sessions on devices they no
+// longer control. Their current session dies on the next request,
+// so the UI should expect the page to bounce to the sign-in flow
+// shortly after a self-target.
+//
+// Cross-tenant targets see 404 (the controller treats them as
+// non-existent to avoid leaking foreign-tenant user ids).
+export async function signOutAllSessionsAction(id: string): Promise<ActionResult> {
+  try {
+    const res = await fetch(
+      `${BASE}/api/v1/admin/users/${encodeURIComponent(id)}/sign-out-all`,
+      {
+        method: 'POST',
+        headers: await buildHeaders(),
+        cache: 'no-store',
+      },
+    );
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      return { ok: false, error: `${res.status} ${text || res.statusText}` };
+    }
+    revalidatePath('/[locale]/users', 'page');
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: (e as Error).message };
+  }
+}
+
 export async function deletePeerAction(id: string): Promise<ActionResult> {
   try {
     const res = await fetch(`${BASE}/api/v1/peers/${encodeURIComponent(id)}`, {

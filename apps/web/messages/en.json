@@ -338,10 +338,13 @@
     },
     "actions": {
       "erase": "Erase",
+      "signOutAll": "Sign out all",
       "confirmErase": "Erase {email}? Cannot be undone.",
-      "confirmYes": "Erase",
+      "confirmSignOutAll": "Sign out every session for {email}? They'll be forced to re-authenticate.",
+      "confirmSignOutAllSelf": "Sign out every session for your own account — this kills your current session too. You'll bounce to the sign-in flow on the next request.",
+      "confirmYes": "Confirm",
       "cancel": "Cancel",
-      "working": "Erasing…",
+      "working": "Working…",
       "dismiss": "Dismiss",
       "selfPlaceholder": "(you)"
     },
