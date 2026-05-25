@@ -46,57 +46,100 @@ demo to a customer\") not yet real. All four closed on 2026-05-18.
 | [#138](https://github.com/hanfour/bamboo/issues/138) | Connection log + diagnostics | PR [#148](https://github.com/hanfour/bamboo/pull/148) — v1: peer.connection_path enum on heartbeat + Web ⚡/🔄 glyph on PeerTable. Rolling-window timeline deferred to P2. |
 | [#139](https://github.com/hanfour/bamboo/issues/139) | Tag owners | PR [#147](https://github.com/hanfour/bamboo/pull/147). HCL grammar adds `tagOwners` map. Policy.CanAssignTag helper enforced on PATCH /peers/{id}/tags. Case-insensitive email compare. |
 
-## 3a. P1 follow-ups (not blocking)
+## 3a. P1 follow-ups — status as of 2026-05-25
 
-The wire is plumbed end-to-end on the controller; the client + UI pieces
-below are the next visible wins but aren't required for the brand promise:
+Most landed during the §4 P2 sprint. Updated marks:
 
-- **CLI / Apple `--advertise-routes` / `--advertise-exit-node` flags.** REST accepts the fields; clients need to surface them in their config UX. Without these clients can't actually advertise anything; subnet router + exit node require the client opt-in for end-to-end value.
-- **Web admin pending-advertisements queue.** Today the PeerDrawer doesn't surface \"this peer wants to advertise X / claim exit-node role\". The REST endpoints + peerJSON fields are ready; the UI section lands in a follow-up.
-- **Connection-log timeline UI** (#138 v2). Rolling-window storage of path transitions (1h / 7d) + per-peer timeline section in PeerDrawer. ClickHouse-backed.
-- **Side-by-side diff in ACL editor.** The Versions tab's expandable source + the Source tab cover the common workflow; a true two-pane diff renderer is a follow-up if traffic justifies.
-- **HCL syntax highlighting** in ACL editor textarea. Bundle cost (~300KB CodeMirror) isn't justified yet.
-- **Group definitions** (`group:engineering = [...]`) in tagOwners. Today owner lists are flat emails; group expansion is a P2 follow-up.
-- **Route conflict detection** (two peers advertising overlapping CIDRs). Admin can pick whichever; explicit warning is v2.
+- ✅ **CLI / Apple `--advertise-routes` / `--advertise-exit-node` flags.** CLI [#167](https://github.com/hanfour/bamboo/pull/167), Apple Settings fields [#168](https://github.com/hanfour/bamboo/pull/168). Subnet-router + exit-node verified end-to-end on prod 2026-05-22.
+- ✅ **Web admin pending-advertisements queue** — PeerDrawer Advertise review section. [#169](https://github.com/hanfour/bamboo/pull/169).
+- ✅ **Connection-log timeline UI** (#138 v2) — ClickHouse rolling window + Web ConnectionTimeline component. [#174](https://github.com/hanfour/bamboo/pull/174).
+- ✅ **Side-by-side diff in ACL editor** — Versions tab gained a true two-pane diff (DIY LCS in `lib/lineDiff.ts`). [#175](https://github.com/hanfour/bamboo/pull/175).
+- ❌ **HCL syntax highlighting** in ACL editor textarea. Bundle cost (~300KB CodeMirror) still not justified. Examples tab ([#213](https://github.com/hanfour/bamboo/pull/213)) addressed the "where do I start" friction instead.
+- ✅ **Group definitions** in tagOwners — `groups = { "group:NAME" = [emails] }` block with lookup-time expansion. [#176](https://github.com/hanfour/bamboo/pull/176).
+- ✅ **Route conflict detection** — internal/routes package + `GET /peers/{id}/route-conflicts` + amber warning badges in PeerDrawer AdvertiseSection (warn-only, doesn't block `POST /routes`). [#177](https://github.com/hanfour/bamboo/pull/177).
 
-## 4. P2 backlog — not yet filed as issues
+## 4. P2 backlog — status as of 2026-05-25
 
-Items deliberately not filed as separate issues yet — they're real but the
-P0/P1 stack above must land first. File when prior issues close.
+Originally deliberately not filed as separate issues. Most landed in the
+2026-05 sprint; remaining items are larger initiatives that need their own
+design phase rather than a single PR. ✅ marks delivered, ❌ marks
+deferred to a future doc.
 
 ### Commercial / multi-tenant lifecycle
 
-- **Webhooks** (`settings/webhooks`) — push events (peer.register,
-  peer.approve, acl.update) to external endpoints. SaaS integration story.
-- **API tokens UI** (`settings/api-keys`) — CI / script credentials with
-  fine-grained scopes. Today only OIDC sessions work.
-- **Invite expiry / auto-revoke** — current invitations have `expires_at`
-  but no scheduler to clean them up.
-- **Tenant billing / plan tier** — multi-tenant SaaS requires this; today
-  we have a tenant table without commercial metadata.
+- ✅ **Webhooks** (`settings/webhooks`) — push events to external
+  endpoints. Backend [#180](https://github.com/hanfour/bamboo/pull/180),
+  Web [#181](https://github.com/hanfour/bamboo/pull/181).
+- ✅ **API tokens UI** (`settings/api-tokens`) — CI / script credentials.
+  Backend [#184](https://github.com/hanfour/bamboo/pull/184),
+  Web [#185](https://github.com/hanfour/bamboo/pull/185).
+- ✅ **Invite expiry / auto-revoke** — hourly reaper revokes expired
+  invitations. [#186](https://github.com/hanfour/bamboo/pull/186).
+- ❌ **Tenant billing / plan tier** — commercial SaaS scope; OSS defers.
 
 ### Observability / operational maturity
 
-- **Service metrics** — Prometheus endpoint on controller + relay + ai.
-  Today only ad-hoc logging exists.
-- **Support bundle** — client `bamboo support-bundle` collects last N logs
-  + wg state + interface info into a zip for support tickets.
-- **Audit log retention + immutability** — append-only enforcement at the
-  DB layer (currently soft).
+- ✅ **Service metrics** — Prometheus `/metrics` on controller; per-tenant
+  gauges. [#178](https://github.com/hanfour/bamboo/pull/178) plus a
+  per-tenant follow-up.
+- ✅ **Support bundle** — `bamboo support-bundle` CLI subcommand collects
+  logs + wg state + interface info into a redacted zip.
+  [#183](https://github.com/hanfour/bamboo/pull/183).
+- ✅ **Audit log immutability** — Postgres BEFORE UPDATE/DELETE triggers
+  with a `bamboo.allow_audit_delete` session-var bypass for the retention
+  reaper. [#182](https://github.com/hanfour/bamboo/pull/182).
+- ✅ **Audit log retention** — hourly reaper deletes rows past
+  `BAMBOO_AUDIT_RETENTION_DAYS` (default 365).
+  [#205](https://github.com/hanfour/bamboo/pull/205).
+- ✅ **Admin audit log CSV export** — `/api/v1/admin/audit-log.csv`
+  streaming endpoint + Settings download card.
+  Backend [#206](https://github.com/hanfour/bamboo/pull/206),
+  Web [#207](https://github.com/hanfour/bamboo/pull/207).
 
 ### Network / scale
 
-- **Multi-relay registry** — today a single relay endpoint per tenant;
-  Tailscale has DERP with geographic failover.
-- **Bandwidth metering per peer** — useful for both pricing and abuse
-  detection. Reuses Connection log (#138) data path.
-- **NAT64 / IPv6 dual-stack** — today IPv4 only.
+- ✅ **Multi-relay registry** — health-check reaper, RTT-based picker,
+  RelaysChanged push event, web admin page with health badges,
+  region-affinity hint, server-side region detection. Stages 1–5.5a
+  across [#191](https://github.com/hanfour/bamboo/pull/191),
+  [#192](https://github.com/hanfour/bamboo/pull/192),
+  [#193](https://github.com/hanfour/bamboo/pull/193) /
+  [#194](https://github.com/hanfour/bamboo/pull/194),
+  [#195](https://github.com/hanfour/bamboo/pull/195) /
+  [#196](https://github.com/hanfour/bamboo/pull/196) /
+  [#197](https://github.com/hanfour/bamboo/pull/197),
+  [#198](https://github.com/hanfour/bamboo/pull/198),
+  [#199](https://github.com/hanfour/bamboo/pull/199),
+  [#202](https://github.com/hanfour/bamboo/pull/202),
+  with Apple mid-session relay swap on RelaysChanged
+  [#204](https://github.com/hanfour/bamboo/pull/204).
+- ✅ **Bandwidth metering per peer** — heartbeat carries rx/tx counters,
+  per-peer drawer renders sparkline. Backend
+  [#187](https://github.com/hanfour/bamboo/pull/187),
+  CLI [#188](https://github.com/hanfour/bamboo/pull/188),
+  Web [#189](https://github.com/hanfour/bamboo/pull/189),
+  Apple [#190](https://github.com/hanfour/bamboo/pull/190).
+- ❌ **NAT64 / IPv6 dual-stack** — needs IPv6 transit + NAT64 prefix +
+  DNS64 design; cross-platform client work. Future sprint.
 
 ### Compliance / enterprise
 
-- **SOC 2 gap list** — audit log immutability, admin activity export,
-  session policy controls.
-- **Data deletion / GDPR right-to-erasure** — workflow + audit trail.
+- ✅ **SOC 2 gap list** — addressed by the audit chain above plus
+  session-policy controls: slice 1 audit + TTL override
+  [#210](https://github.com/hanfour/bamboo/pull/210),
+  slice 2 Web Settings session card
+  [#211](https://github.com/hanfour/bamboo/pull/211),
+  slice 3a per-jti revocation
+  [#212](https://github.com/hanfour/bamboo/pull/212),
+  slice 3b admin force-sign-out
+  [#218](https://github.com/hanfour/bamboo/pull/218) +
+  Web button [#219](https://github.com/hanfour/bamboo/pull/219).
+- ✅ **Data deletion / GDPR right-to-erasure** — hard-DELETE user row
+  with cascade FKs handling dependents; audit row carries SHA-256 of
+  email. Backend + Web button shipped together via
+  [#208](https://github.com/hanfour/bamboo/pull/208) (which absorbed
+  [#209](https://github.com/hanfour/bamboo/pull/209) as a stacked
+  follow-up).
 
 ## 5. P3 backlog — strategic / aspirational
 
@@ -116,19 +159,16 @@ Out of immediate scope, captured for direction only.
   (2026-05-18); the iOS / macOS picker UI is the next visible piece
   (tracked under "P1 follow-ups" §3a above).
 
-## 6. Visual / UX small follow-ups
+## 6. Visual / UX small follow-ups — status as of 2026-05-25
 
-Not features, but visible-to-user polish items worth tracking:
+Not features, but visible-to-user polish items. Most landed in the same
+sprint as §4.
 
-- Version-upgrade indicator on PeerTable (\"this client is on 0.1.2,
-  latest is 0.1.4\") — Tailscale shows this prominently.
-- Users page + Logs page informative empty states (similar to DNS page
-  empty state shipped in PR #130).
-- ACL editor Examples tab (curated starter HCL: \"open mesh\", \"dev/prod
-  isolation\", \"single exit node\") — Tailscale has this.
-- Kebab menu row actions on PeerTable (disable, delete, expire) — today
-  these only exist inside the drawer.
-- Avatar dropdown in TopBar (replacing the inline email + sign-out chip).
+- ❌ **Version-upgrade indicator on PeerTable** ("this client is on 0.1.2, latest is 0.1.4"). Still missing — needs client-version reporting on heartbeat + a latest-known-version source (release-feed or hard-coded ldflag). Future sprint.
+- ✅ **Users + Logs page informative empty states** — soft warm-bordered cards matching the DNS page vocabulary. [#216](https://github.com/hanfour/bamboo/pull/216).
+- ✅ **ACL editor Examples tab** — curated starter HCL (open mesh, dev/prod isolation, single exit node). [#213](https://github.com/hanfour/bamboo/pull/213).
+- ✅ **Kebab menu row actions on PeerTable** — Disable/Enable + Delete promoted from the drawer to the row. [#215](https://github.com/hanfour/bamboo/pull/215).
+- ✅ **Avatar dropdown in TopBar** — collapsed the inline `email + sign-out` chip into a popover with Settings + Sign out. [#214](https://github.com/hanfour/bamboo/pull/214).
 
 ## 7. Out of scope reaffirmed
 
@@ -142,8 +182,21 @@ Not features, but visible-to-user polish items worth tracking:
 
 **Doc lifecycle.** This roadmap was authored 2026-05-17 with §2 + §3 as
 the open P0 + P1 work; on 2026-05-18 every issue listed there closed (see
-the shipped-via columns). The doc now serves as historical record of the
-P0+P1 sprint. New roadmap work should land in a follow-up doc dated
-forward; if a P2 item from §4 gets filed as an issue, link it inline
-rather than restructuring §2/§3 (which are now read-only).
+the shipped-via columns).
+
+A follow-up sprint (2026-05-19 → 2026-05-25) cleared the bulk of §3a,
+§4 P2, and §6 polish — see the inline ✅ marks added on 2026-05-25.
+Items still ❌ as of that date:
+
+- §3a HCL syntax highlighting (CodeMirror bundle cost; Examples tab
+  partially mitigates).
+- §4 P2 NAT64 / IPv6 dual-stack.
+- §4 P2 Tenant billing / plan tier (commercial scope).
+- §6 PeerTable version-upgrade indicator (needs client version
+  reporting plumbing first).
+
+§5 P3 backlog is unchanged. New roadmap work should land in a follow-up
+doc dated forward; this one now serves as historical record. If a
+remaining backlog item gets filed as an issue, link it inline rather
+than restructuring the section headings.
 
