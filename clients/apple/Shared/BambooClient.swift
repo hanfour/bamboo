@@ -103,7 +103,7 @@ public struct BambooClient {
     /// any entry without re-checking health. The client uses these
     /// to RTT-probe and pick the lowest-latency relay when the
     /// user hasn't pinned one via Settings (`relayURL`).
-    public struct RelayServer: Decodable {
+    public struct RelayServer: Decodable, Equatable {
         public var id: String
         public var region: String
         public var hostname: String

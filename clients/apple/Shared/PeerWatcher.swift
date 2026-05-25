@@ -8,15 +8,21 @@ import OSLog
 /// emits decoded events to its delegate. Reconnects with exponential
 /// backoff on stream breakage.
 ///
-/// The controller emits four event names: peer_added, peer_updated,
-/// peer_removed, policy_changed. We map each to a typed enum case so
-/// callers don't have to parse raw JSON.
+/// The controller emits five event names: peer_added, peer_updated,
+/// peer_removed, policy_changed, relays_changed. We map each to a
+/// typed enum case so callers don't have to parse raw JSON.
 public actor PeerWatcher {
-    public enum Event {
+    public enum Event: Equatable {
         case peerAdded(BambooClient.PeerJSON)
         case peerUpdated(BambooClient.PeerJSON)
         case peerRemoved(String)
         case policyChanged(Int64)
+        /// §4 P2 multi-relay stage 4b — the controller's eligible
+        /// relay list changed. Payload is the FRESH list (mirrors
+        /// the controller's `relays_changed` SSE event from #195).
+        /// Consumers re-run RelayPicker against it and (today)
+        /// log the preferred relay; mid-session swap is 4b-2.
+        case relaysChanged([BambooClient.RelayServer])
     }
 
     private let log = Logger(subsystem: "dev.hanfour.bamboo.app", category: "watch")
@@ -90,7 +96,12 @@ public actor PeerWatcher {
         task = nil
     }
 
-    private static func decode(name: String, payload: String) throws -> Event {
+    // decode is internal (rather than private) so AppleSharedTests
+    // can exercise the wire-shape mapping directly. Driving a real
+    // SSE stream from a unit test would need a stub URLProtocol;
+    // hitting decode in isolation is cheaper and pins the same
+    // contract that matters for clients on a wire-shape change.
+    internal static func decode(name: String, payload: String) throws -> Event {
         guard let data = payload.data(using: .utf8) else {
             throw DecodingError.dataCorrupted(.init(codingPath: [], debugDescription: "non-utf8 payload"))
         }
@@ -107,6 +118,13 @@ public actor PeerWatcher {
         case "policy_changed":
             let body = try JSONDecoder().decode(PolicyEnvelope.self, from: data)
             return .policyChanged(body.policyRevision)
+        case "relays_changed":
+            // Wire shape mirrors RegisterResponse.relayServers from
+            // BambooClient — same fields, same casing — so reusing
+            // the RelayServer Decodable keeps decode round-trip
+            // symmetric with the register path.
+            let body = try JSONDecoder().decode(RelaysEnvelope.self, from: data)
+            return .relaysChanged(body.relayServers)
         default:
             throw DecodingError.dataCorrupted(.init(codingPath: [], debugDescription: "unknown event \(name)"))
         }
@@ -115,4 +133,5 @@ public actor PeerWatcher {
     private struct PeerEnvelope: Decodable { let peer: BambooClient.PeerJSON }
     private struct PeerIDEnvelope: Decodable { let peerId: String }
     private struct PolicyEnvelope: Decodable { let policyRevision: Int64 }
+    private struct RelaysEnvelope: Decodable { let relayServers: [BambooClient.RelayServer] }
 }
