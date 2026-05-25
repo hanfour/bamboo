@@ -312,11 +312,21 @@
       "role": "角色",
       "provider": "登入方式",
       "createdAt": "加入時間",
-      "lastSeen": "最後活動"
+      "lastSeen": "最後活動",
+      "actions": "操作"
     },
     "role": {
       "admin": "管理員",
       "member": "成員"
+    },
+    "actions": {
+      "erase": "抹除",
+      "confirmErase": "確認抹除 {email}？無法復原。",
+      "confirmYes": "確認抹除",
+      "cancel": "取消",
+      "working": "抹除中…",
+      "dismiss": "關閉",
+      "selfPlaceholder": "（你自己）"
     },
     "provider": {
       "google": "Google",

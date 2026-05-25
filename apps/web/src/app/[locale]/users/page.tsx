@@ -5,7 +5,7 @@ import { UsersTable } from '@/components/UsersTable';
 import { InvitationsTable } from '@/components/InvitationsTable';
 import { InviteUserButton } from '@/components/InviteUserButton';
 import { FetchErrorState } from '@/components/FetchErrorState';
-import { fetchInvitations, fetchUsers } from '@/lib/api';
+import { fetchInvitations, fetchMe, fetchUsers } from '@/lib/api';
 import type { Invitation, User } from '@/lib/types';
 
 // Users + invitations are both admin-only on the wire. We fetch them
@@ -14,8 +14,17 @@ import type { Invitation, User } from '@/lib/types';
 // independently is rare in practice (same controller, same auth) but
 // we degrade gracefully by passing an empty list rather than blocking
 // the working section.
+//
+// fetchMe is also pulled so the table can render an "erase" button
+// only for admins, and skip the button on the caller's own row
+// (self-erase is blocked at the controller; hiding the button keeps
+// the UI honest without depending on a backend round-trip).
 export default async function UsersPage() {
- const [users, invitations] = await Promise.all([fetchUsers(), fetchInvitations()]);
+ const [users, invitations, me] = await Promise.all([
+ fetchUsers(),
+ fetchInvitations(),
+ fetchMe(),
+ ]);
  if (users.kind !== 'ok') {
  return <FetchErrorState kind={users.kind} />;
  }
@@ -23,6 +32,8 @@ export default async function UsersPage() {
  <UsersView
  users={users.value}
  invitations={invitations.kind === 'ok' ? invitations.value : []}
+ meId={me.userId ?? ''}
+ meIsAdmin={Boolean(me.isAdmin)}
  />
  );
 }
@@ -30,9 +41,13 @@ export default async function UsersPage() {
 function UsersView({
  users,
  invitations,
+ meId,
+ meIsAdmin,
 }: {
  users: User[];
  invitations: Invitation[];
+ meId: string;
+ meIsAdmin: boolean;
 }) {
  const t = useTranslations('users');
  return (
@@ -50,7 +65,7 @@ function UsersView({
  </header>
 
  <section className="space-y-3">
- <UsersTable users={users} />
+ <UsersTable users={users} meId={meId} meIsAdmin={meIsAdmin} />
  </section>
 
  <section className="space-y-3">
