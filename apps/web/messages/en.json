@@ -341,6 +341,11 @@
       "fallback": "Local"
     },
     "empty": "No users yet. The first account to sign in via OIDC becomes admin.",
+    "emptyCard": {
+      "title": "No teammates yet",
+      "body": "Members are created automatically the first time someone signs in through your OIDC provider. The first account to sign in becomes admin; subsequent ones land as members.",
+      "hint": "To invite someone before they sign in, use the Invite user button above — they'll receive a one-time link valid for 7 days."
+    },
     "newInvite": {
       "button": "Invite user",
       "formTitle": "Invite a new user",
@@ -427,6 +432,11 @@
     "titleAccent": "trail",
     "subtitle": "Recent policy-evaluation traces from peers in this tenant. Allow/deny decisions are recorded with the matching rule so you can audit access in production.",
     "empty": "No log events recorded yet. Once peers begin handshaking and exchanging traffic, decisions will appear here.",
+    "emptyCard": {
+      "title": "No policy evaluations yet",
+      "body": "Decisions populate here as peers send traffic that the controller evaluates against your ACL. You'll need at least two approved peers connected and an active policy before anything appears.",
+      "hint": "Once events start flowing they stream in near-real-time; refresh this page to see the latest."
+    },
     "columns": {
       "occurredAt": "Time",
       "source": "Source",

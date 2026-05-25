@@ -16,11 +16,7 @@ import type { User } from '@/lib/types';
 export function UsersTable({ users }: { users: User[] }) {
  const t = useTranslations('users');
  if (users.length === 0) {
- return (
- <p className="rounded-lg border border-dashed border-bamboo-200/30 p-8 text-center text-sm text-bamboo-200/60 dark:text-bamboo-200/40">
- {t('empty')}
- </p>
- );
+ return <UsersEmptyState />;
  }
  return (
  <div className="overflow-x-auto rounded-lg border border-ink-800">
@@ -127,4 +123,25 @@ function formatRelative(iso: string): string {
  if (s < 3600) return `${Math.round(s / 60)}m`;
  if (s < 86_400) return `${Math.round(s / 3600)}h`;
  return `${Math.round(s / 86_400)}d`;
+}
+
+// UsersEmptyState replaces the prior one-line dashed-border empty
+// state. Mirrors the DNS page's richer empty-card vocabulary
+// (title + body in a soft warm-bordered card) so a brand-new
+// tenant lands on something informative rather than a single grey
+// sentence. The Invite-user button still lives on the page header
+// above this block, so the call-to-action references it by name.
+function UsersEmptyState() {
+ const t = useTranslations('users.emptyCard');
+ return (
+ <div className="max-w-2xl space-y-3 rounded-lg border border-bamboo-200/30 bg-ink-900/40 p-6">
+ <h2 className="text-base font-medium tracking-tight text-bamboo-50">
+ {t('title')}
+ </h2>
+ <p className="text-sm leading-relaxed text-bamboo-200/70">
+ {t('body')}
+ </p>
+ <p className="text-xs text-bamboo-200/60">{t('hint')}</p>
+ </div>
+ );
 }
