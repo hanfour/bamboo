@@ -90,12 +90,18 @@ func (r *Users) GetByID(ctx context.Context, id uuid.UUID) (*User, error) {
 // twice ends up at +2 (callers wanting "force-revoke now and don't
 // double-count" should rely on the new return value rather than
 // re-issuing the call).
+//
+// updated_at is deliberately NOT touched. ListByTenant orders by
+// updated_at DESC as the "recently active" sort; a force-sign-out
+// is the opposite of activity, so bumping it would push the just-
+// signed-out user to the top of the admin Users page — a SOC 2
+// incident-response footgun. The session.revoke_all audit row is
+// the durable record of when the bump happened.
 func (r *Users) BumpSessionVersion(ctx context.Context, userID uuid.UUID) (int, error) {
 	var next int
 	err := r.pool.QueryRow(ctx, `
 		UPDATE users
-		   SET session_version = session_version + 1,
-		       updated_at      = now()
+		   SET session_version = session_version + 1
 		 WHERE id = $1 AND deleted_at IS NULL
 		RETURNING session_version
 	`, userID).Scan(&next)
@@ -112,7 +118,7 @@ func (r *Users) BumpSessionVersion(ctx context.Context, userID uuid.UUID) (int, 
 // last_seen_at column.
 func (r *Users) ListByTenant(ctx context.Context, tenantID uuid.UUID) ([]*User, error) {
 	rows, err := r.pool.Query(ctx, `
-		SELECT id, tenant_id, email, display_name, oidc_provider, oidc_subject, is_admin, created_at, updated_at
+		SELECT id, tenant_id, email, display_name, oidc_provider, oidc_subject, is_admin, session_version, created_at, updated_at
 		FROM users
 		WHERE tenant_id = $1 AND deleted_at IS NULL
 		ORDER BY updated_at DESC
@@ -126,7 +132,7 @@ func (r *Users) ListByTenant(ctx context.Context, tenantID uuid.UUID) ([]*User, 
 		var u User
 		if err := rows.Scan(
 			&u.ID, &u.TenantID, &u.Email, &u.DisplayName,
-			&u.OIDCProvider, &u.OIDCSubject, &u.IsAdmin,
+			&u.OIDCProvider, &u.OIDCSubject, &u.IsAdmin, &u.SessionVersion,
 			&u.CreatedAt, &u.UpdatedAt,
 		); err != nil {
 			return nil, err
@@ -214,12 +220,12 @@ func (r *Users) Erase(ctx context.Context, userID uuid.UUID) error {
 func (r *Users) GetByEmail(ctx context.Context, tenantID uuid.UUID, email string) (*User, error) {
 	var u User
 	err := r.pool.QueryRow(ctx, `
-		SELECT id, tenant_id, email, display_name, oidc_provider, oidc_subject, is_admin, created_at, updated_at
+		SELECT id, tenant_id, email, display_name, oidc_provider, oidc_subject, is_admin, session_version, created_at, updated_at
 		FROM users
 		WHERE tenant_id = $1 AND email = $2 AND deleted_at IS NULL
 	`, tenantID, email).Scan(
 		&u.ID, &u.TenantID, &u.Email, &u.DisplayName,
-		&u.OIDCProvider, &u.OIDCSubject, &u.IsAdmin,
+		&u.OIDCProvider, &u.OIDCSubject, &u.IsAdmin, &u.SessionVersion,
 		&u.CreatedAt, &u.UpdatedAt,
 	)
 	if err != nil {

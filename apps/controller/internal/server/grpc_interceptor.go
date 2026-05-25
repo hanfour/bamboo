@@ -4,6 +4,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"strings"
 
 	"github.com/google/uuid"
@@ -111,13 +112,29 @@ func verifyBearer(ctx context.Context, sessionSec []byte, revoked *repo.RevokedS
 			return status.Error(codes.Unauthenticated, "session revoked")
 		}
 	}
-	// Slice 3b: per-user session-version gate (matches the REST
-	// authenticate path). Skipped when users repo isn't wired
-	// (unit tests) — production always passes a non-nil repo.
+	// User-row gate mirroring the REST authenticate path:
+	// (1) ErrNotFound = the row was deleted or soft-deleted, treat
+	//     as Unauthenticated so the client re-auths (Internal would
+	//     trigger client-side retry storms via grpc-go backoff).
+	// (2) tenant membership mismatch = stale token after a tenant
+	//     move; defence-in-depth even though current gRPC handlers
+	//     resolve tenant from metadata rather than claims.
+	// (3) claims.SV < user.SessionVersion = slice-3b force sign-out.
+	//
+	// Skipped when users repo isn't wired (unit tests) — production
+	// always passes a non-nil repo. Internal errors use a fixed
+	// message (no %v) to avoid leaking driver internals to the
+	// caller.
 	if users != nil {
 		user, uerr := users.GetByID(ctx, claims.UserID)
 		if uerr != nil {
-			return status.Errorf(codes.Internal, "resolve user: %v", uerr)
+			if errors.Is(uerr, repo.ErrNotFound) {
+				return status.Error(codes.Unauthenticated, "user not found")
+			}
+			return status.Error(codes.Internal, "resolve user")
+		}
+		if user.TenantID != claims.TenantID {
+			return status.Error(codes.Unauthenticated, "tenant membership mismatch")
 		}
 		if claims.SV < user.SessionVersion {
 			return status.Error(codes.Unauthenticated, "session revoked (force sign-out)")
