@@ -37,7 +37,14 @@ func (h *HTTPServer) routeAdminUsers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	actor, err := h.users.GetByID(r.Context(), authn.claims.UserID)
-	if err != nil || actor == nil || !actor.IsAdmin {
+	if err != nil {
+		// Separate the DB-error path from the non-admin path so a
+		// transient PG blip doesn't look identical to a real
+		// authorization denial. Mirrors requireAdmin in api.go.
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("resolve actor: %w", err))
+		return
+	}
+	if !actor.IsAdmin {
 		writeError(w, http.StatusForbidden, errors.New("admin only"))
 		return
 	}
@@ -104,7 +111,7 @@ func (h *HTTPServer) adminUserSignOutAll(w http.ResponseWriter, r *http.Request,
 		writeError(w, http.StatusInternalServerError, fmt.Errorf("bump session_version: %w", err))
 		return
 	}
-	auditSessionRevokeAll(r.Context(), h.audits, actor.TenantID, actor.ID, target.ID, target.Email, next, requestIPString(r), r.UserAgent())
+	auditSessionRevokeAll(r.Context(), h.audits, actor.TenantID, actor.ID, target.ID, target.Email, target.SessionVersion, next, requestIPString(r), r.UserAgent())
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"userId":         target.ID.String(),
@@ -217,15 +224,17 @@ func (h *HTTPServer) adminUserErase(w http.ResponseWriter, r *http.Request, acto
 
 // auditSessionRevokeAll writes the audit row for an admin-driven
 // force-sign-out of a user. Actor = the admin who pressed the
-// button; resource = the targeted user. Diff carries the bumped
-// session_version (so log-only readers see "from N to N+1") plus
-// the target email for human-friendly searches.
-func auditSessionRevokeAll(ctx context.Context, audits *repo.AuditLogs, tenantID, actorID, targetID uuid.UUID, targetEmail string, newVersion int, ip, userAgent string) {
+// button; resource = the targeted user. Diff carries the
+// pre-bump + post-bump session_version (so a single audit row
+// reads "from N to N+1" without cross-referencing earlier rows)
+// plus the target email for human-friendly searches.
+func auditSessionRevokeAll(ctx context.Context, audits *repo.AuditLogs, tenantID, actorID, targetID uuid.UUID, targetEmail string, oldVersion, newVersion int, ip, userAgent string) {
 	if audits == nil {
 		return
 	}
 	diff, _ := json.Marshal(map[string]any{
 		"targetEmail":       targetEmail,
+		"oldSessionVersion": oldVersion,
 		"newSessionVersion": newVersion,
 	})
 	ev := &repo.AuditEvent{
