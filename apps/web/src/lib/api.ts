@@ -168,6 +168,7 @@ type ApiMe = {
   isAdmin?: boolean;
   tenantId: string;
   tenantSlug: string;
+  issuedAt?: string;
   expiresAt?: string;
 };
 

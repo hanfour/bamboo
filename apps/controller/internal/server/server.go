@@ -9,6 +9,9 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"os"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/hanfour/bamboo/apps/controller/internal/auth"
@@ -45,7 +48,7 @@ func New(cfg *config.Config, pool *db.Pool, ch *clickhouse.Conn) (*Server, error
 	}
 
 	providers := buildOIDCProviders(cfg)
-	ttl := parseTTL(cfg.Auth.SessionTTL, 24*time.Hour)
+	ttl := resolveSessionTTL(cfg.Auth.SessionTTL, 24*time.Hour)
 	secret := []byte(cfg.Auth.SessionSecret)
 
 	grpcSrv, authHandler, coordHandler := buildGRPCWithAuth(pool, ch, cfg.Auth.RequireAuth, secret)
@@ -130,6 +133,32 @@ func parseTTL(raw string, fallback time.Duration) time.Duration {
 		return fallback
 	}
 	return d
+}
+
+// resolveSessionTTL picks the session JWT lifetime in this precedence:
+// BAMBOO_SESSION_TTL_HOURS env (operator override) → cfg.Auth.SessionTTL
+// (YAML) → fallback. Env wins because rotating session lifetimes during
+// an incident shouldn't require a config-file deploy — SOC 2 control
+// language often demands "ability to shorten session validity" as an
+// operator runbook step.
+//
+// The env value is parsed as a positive integer number of hours; a
+// non-positive value or unparseable string falls through to the config
+// (warned in logs so the operator notices the typo).
+func resolveSessionTTL(cfgRaw string, fallback time.Duration) time.Duration {
+	if raw := os.Getenv("BAMBOO_SESSION_TTL_HOURS"); raw != "" {
+		n, err := strconv.Atoi(strings.TrimSpace(raw))
+		if err != nil {
+			slog.Warn("session ttl: BAMBOO_SESSION_TTL_HOURS unparseable; falling back to config",
+				"value", raw, "err", err)
+		} else if n <= 0 {
+			slog.Warn("session ttl: BAMBOO_SESSION_TTL_HOURS must be positive; falling back to config",
+				"value", raw)
+		} else {
+			return time.Duration(n) * time.Hour
+		}
+	}
+	return parseTTL(cfgRaw, fallback)
 }
 
 // Run blocks until ctx is canceled or either listener errors. On shutdown
