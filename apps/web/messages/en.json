@@ -345,8 +345,7 @@
       "confirmYes": "Confirm",
       "cancel": "Cancel",
       "working": "Working…",
-      "dismiss": "Dismiss",
-      "selfPlaceholder": "(you)"
+      "dismiss": "Dismiss"
     },
     "provider": {
       "google": "Google",

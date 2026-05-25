@@ -345,8 +345,7 @@
       "confirmYes": "確認",
       "cancel": "取消",
       "working": "處理中…",
-      "dismiss": "關閉",
-      "selfPlaceholder": "（你自己）"
+      "dismiss": "關閉"
     },
     "provider": {
       "google": "Google",
