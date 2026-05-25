@@ -23,9 +23,9 @@ func TestRouteAdminUsers_RequiresAuth(t *testing.T) {
 		"/api/v1/admin/users/",
 		"/api/v1/admin/users/" + uid + "/erase",
 		"/api/v1/admin/users/" + uid + "/sign-out-all",
-		"/api/v1/admin/users/" + uid + "/other",          // unknown action
-		"/api/v1/admin/users/not-a-uuid/erase",           // bad uuid
-		"/api/v1/admin/users/" + uid + "/eras",           // typo
+		"/api/v1/admin/users/" + uid + "/other", // unknown action
+		"/api/v1/admin/users/not-a-uuid/erase",  // bad uuid
+		"/api/v1/admin/users/" + uid + "/eras",  // typo
 	}
 	for _, path := range cases {
 		t.Run(path, func(t *testing.T) {
