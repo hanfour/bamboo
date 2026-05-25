@@ -62,6 +62,16 @@ public final class ConnectionViewModel: ObservableObject {
         UserDefaults.bambooStandard.string(forKey: "hostname") ?? currentHostname()
     @Published public var relayURL: String =
         UserDefaults.bambooStandard.string(forKey: "relayURL") ?? ""
+    /// §4 P2 stage 5 region-affinity hint. When set (e.g.
+    /// "ap-northeast-1", matching the region label in the relay
+    /// registry), the RelayPicker prefers a same-region relay over
+    /// a lower-RTT out-of-region one within
+    /// RelayPicker.regionToleranceSeconds. Empty ⇒ pure RTT
+    /// ranking (pre-stage-5 behaviour). The hint also rides into
+    /// the §4 P2 stage 4b RelaysChanged handler so a runtime relay
+    /// re-shuffle respects the same preference.
+    @Published public var regionHint: String =
+        UserDefaults.bambooStandard.string(forKey: "regionHint") ?? ""
     /// Comma-/whitespace-separated CIDR list for the "advertise as
     /// subnet router" field (issue #136). The string lives in the
     /// `@Published` storage; parsed into `[String]` only at connect
@@ -383,6 +393,7 @@ public final class ConnectionViewModel: ObservableObject {
         persistSettingIfNonEmpty(preAuthKey, forKey: "preAuthKey")
         persistSettingIfNonEmpty(hostname, forKey: "hostname")
         persistSettingIfNonEmpty(relayURL, forKey: "relayURL")
+        persistSettingIfNonEmpty(regionHint, forKey: "regionHint")
         persistSettingIfNonEmpty(advertiseRoutes, forKey: "advertiseRoutes")
         // Unconditional set: the bool toggle has explicit on/off
         // semantics (no "preserve previous value" concept like the
@@ -490,7 +501,8 @@ public final class ConnectionViewModel: ObservableObject {
                     log.warning("relay: not a valid ws/wss URL — relayURL=\(trimmedRelayURL, privacy: .public); fix in Settings")
                 }
             } else if let servers = resp.relayServers, !servers.isEmpty {
-                if let picked = await RelayPicker.pickLowestRTT(from: servers),
+                let trimmedHint = regionHint.trimmingCharacters(in: .whitespacesAndNewlines)
+                if let picked = await RelayPicker.pickLowestRTT(from: servers, preferredRegion: trimmedHint),
                    let url = RelayPicker.relayWSSURL(picked) {
                     resolvedRelayURL = url
                     log.log("relay picker: chose region=\(picked.region, privacy: .public) hostname=\(picked.hostname, privacy: .public)")
@@ -721,7 +733,8 @@ public final class ConnectionViewModel: ObservableObject {
             log.log("relays_changed: ignoring (user pinned relayURL in Settings)")
             return
         }
-        guard let picked = await RelayPicker.pickLowestRTT(from: servers) else {
+        let trimmedHint = regionHint.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let picked = await RelayPicker.pickLowestRTT(from: servers, preferredRegion: trimmedHint) else {
             log.log("relays_changed: no usable relay; would degrade to direct-only on next reconnect")
             return
         }

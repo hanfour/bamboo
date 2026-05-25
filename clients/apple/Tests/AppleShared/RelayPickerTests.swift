@@ -81,6 +81,96 @@ final class RelayPickerTests: XCTestCase {
         XCTAssertEqual(got?.region, "good")
     }
 
+    /// §4 P2 stage 5 affinity: same-region within tolerance wins.
+    /// Mirrors the CLI's TestPickRelay_PrefersSameRegionWithinTolerance
+    /// — both clients must rank the same way against the same hint
+    /// so admins see consistent behaviour across platforms.
+    func testPrefersSameRegionWithinTolerance() async {
+        let latencies: [String: TimeInterval] = [
+            "fast-far.example.com": 0.020,
+            "slower-near.example.com": 0.060, // 40ms slower, within 50ms tolerance
+        ]
+        RelayPicker.probeFn = { hostname, _ in
+            guard let rtt = latencies[hostname] else {
+                return .failure(RelayPickerError.timeout)
+            }
+            return .success(rtt)
+        }
+
+        let candidates = [
+            relayServer(region: "us-west-1", hostname: "fast-far.example.com"),
+            relayServer(region: "ap-northeast-1", hostname: "slower-near.example.com"),
+        ]
+        let got = await RelayPicker.pickLowestRTT(
+            from: candidates, preferredRegion: "ap-northeast-1"
+        )
+        XCTAssertEqual(got?.region, "ap-northeast-1",
+            "should pick slower-but-same-region relay within tolerance")
+    }
+
+    /// §4 P2 stage 5 affinity inverse: beyond tolerance, RTT wins.
+    /// A region hint must never make the picker pathologically slow.
+    func testFallsBackToRTTBeyondTolerance() async {
+        let latencies: [String: TimeInterval] = [
+            "fast-far.example.com": 0.020,
+            "much-slower-near.example.com": 0.200, // 180ms slower, beyond 50ms
+        ]
+        RelayPicker.probeFn = { hostname, _ in
+            guard let rtt = latencies[hostname] else {
+                return .failure(RelayPickerError.timeout)
+            }
+            return .success(rtt)
+        }
+
+        let candidates = [
+            relayServer(region: "us-west-1", hostname: "fast-far.example.com"),
+            relayServer(region: "ap-northeast-1", hostname: "much-slower-near.example.com"),
+        ]
+        let got = await RelayPicker.pickLowestRTT(
+            from: candidates, preferredRegion: "ap-northeast-1"
+        )
+        XCTAssertEqual(got?.region, "us-west-1",
+            "cross-region winner stays — region hint shouldn't override beyond tolerance")
+    }
+
+    /// Empty preferredRegion ⇒ pure RTT ranking (back-compat with
+    /// pre-stage-5 behaviour). Default parameter on pickLowestRTT
+    /// makes this the no-arg call site too.
+    func testEmptyRegionHintKeepsRTTOrder() async {
+        let latencies: [String: TimeInterval] = [
+            "fast.example.com": 0.005,
+            "slow.example.com": 0.200,
+        ]
+        RelayPicker.probeFn = { hostname, _ in
+            guard let rtt = latencies[hostname] else {
+                return .failure(RelayPickerError.timeout)
+            }
+            return .success(rtt)
+        }
+
+        let candidates = [
+            relayServer(region: "ap-northeast-1", hostname: "slow.example.com"),
+            relayServer(region: "us-west-1", hostname: "fast.example.com"),
+        ]
+        let got = await RelayPicker.pickLowestRTT(from: candidates)
+        XCTAssertEqual(got?.region, "us-west-1", "empty hint = pure RTT")
+    }
+
+    /// Preferred region not present in candidate list — picker
+    /// must return the RTT winner, not nil. A stale Settings
+    /// value or typo can't break tunnel bring-up.
+    func testPreferredRegionAbsentNoOp() async {
+        RelayPicker.probeFn = { _, _ in .success(0.010) }
+        let candidates = [
+            relayServer(region: "us-west-1", hostname: "a.example.com"),
+            relayServer(region: "eu-west-1", hostname: "b.example.com"),
+        ]
+        let got = await RelayPicker.pickLowestRTT(
+            from: candidates, preferredRegion: "ap-northeast-1"
+        )
+        XCTAssertNotNil(got, "missing-region hint should not block selection")
+    }
+
     func testRelayWSSURL() {
         let rs = relayServer(region: "us-east-1", hostname: "relay-east.example.com", port: 8443)
         let got = RelayPicker.relayWSSURL(rs)

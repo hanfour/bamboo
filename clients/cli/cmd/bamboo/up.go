@@ -184,12 +184,19 @@ func runUp(cmd *cobra.Command, _ []string) error {
 	// maybeOpenRelay actually dialed (env-var OR picker choice OR
 	// "" for direct-only mesh).
 	pinned := os.Getenv("BAMBOO_RELAY_URL") != ""
+	// regionHint is the §4 P2 stage 5 affinity bias. Operators set
+	// BAMBOO_REGION_HINT on the deploy ("us-east-1", "ap-northeast-1",
+	// etc., matching the region label used in the relay registry);
+	// the picker then prefers a same-region relay over a lower-RTT
+	// out-of-region one as long as the gap is within tolerance.
+	// Empty ⇒ pure RTT ranking (pre-stage-5 behaviour).
+	regionHint := os.Getenv("BAMBOO_REGION_HINT")
 	onRelaysChanged := func(handlerCtx context.Context, servers []*bamboov1.RelayServer) {
 		if pinned {
 			slog.Info("relays_changed: ignoring (BAMBOO_RELAY_URL pinned by operator)")
 			return
 		}
-		picked, err := pickRelay(handlerCtx, servers)
+		picked, err := pickRelay(handlerCtx, servers, regionHint)
 		if err != nil {
 			slog.Warn("relays_changed: picker found no usable relay", "err", err)
 			return
@@ -343,8 +350,10 @@ func pickFreeUDPPort() (uint16, error) {
 func maybeOpenRelay(ctx context.Context, resp *bamboov1.RegisterResponse, priv wg.PrivateKey, session *peerSession) (*relay.Client, clientsync.PeerRelayMap, string, error) {
 	relayURL := os.Getenv("BAMBOO_RELAY_URL")
 	if relayURL == "" {
-		// Fall through to the controller-supplied list.
-		picked, err := pickRelay(ctx, resp.GetRelayServers())
+		// Fall through to the controller-supplied list. BAMBOO_REGION_HINT
+		// biases the picker toward a same-region relay within tolerance
+		// (stage 5); empty ⇒ pure RTT ranking.
+		picked, err := pickRelay(ctx, resp.GetRelayServers(), os.Getenv("BAMBOO_REGION_HINT"))
 		if err != nil {
 			slog.Warn("relay picker: no usable relay; continuing direct-only", "err", err)
 			return nil, nil, "", nil
