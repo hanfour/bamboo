@@ -566,6 +566,16 @@ func (h *HTTPServer) Run(ctx context.Context) error {
 // the request originated from the Web UI; returns 200 plain text
 // otherwise.
 func (h *HTTPServer) handleSignOut(w http.ResponseWriter, r *http.Request) {
+	// Audit only when a verifiable session cookie is present. An
+	// unauthenticated sign-out (no cookie, or a forged one) is a no-op
+	// for state but we don't want to log "session.signout" for an actor
+	// we can't identify — the audit row would have a nil ActorID and
+	// would drown the feed with bot traffic hitting /auth/sign-out.
+	if cookie, cerr := r.Cookie(SessionCookieName); cerr == nil && cookie.Value != "" {
+		if claims, verr := auth.VerifySessionToken(h.secret, cookie.Value); verr == nil {
+			auditSessionSignout(r.Context(), h.audits, claims.TenantID, claims.UserID, requestIPString(r), r.UserAgent())
+		}
+	}
 	http.SetCookie(w, &http.Cookie{
 		Name:     SessionCookieName,
 		Value:    "",
@@ -796,6 +806,7 @@ func (h *HTTPServer) handleCallback(w http.ResponseWriter, r *http.Request, prov
 		http.Error(w, "issue token: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
+	auditSessionStart(r.Context(), h.audits, tenant.ID, user.ID, identity.Provider, requestIPString(r), r.UserAgent(), h.ttl)
 
 	// Set the session cookie so the Web UI (or any same-origin browser
 	// caller) sees the token without needing to copy/paste. The CLI
@@ -937,6 +948,81 @@ func (h *HTTPServer) resolveInvite(ctx context.Context, token string) (*repo.Use
 		return nil, "", fmt.Errorf("resolve tenant for invite: %w", err)
 	}
 	return inv, tenant.Slug, nil
+}
+
+// requestIPString returns the best-effort client IP for audit
+// recording, formatted as a string suitable for the audit_log
+// IPAddress column. Empty string means we couldn't extract one — the
+// audit row is still written but with NULL ip_address.
+func requestIPString(r *http.Request) string {
+	addr := clientIPFromRequest(r.RemoteAddr, r.Header.Get("X-Forwarded-For"))
+	if !addr.IsValid() {
+		return ""
+	}
+	return addr.String()
+}
+
+// auditSessionStart writes the audit row for a fresh OIDC sign-in.
+// session.start is a SOC 2 "successful authentication" event — it
+// pairs with session.signout to bound the session window in the audit
+// feed. The diff carries the OIDC provider + ttl so an operator
+// looking at the row sees both *how* the session was opened and *how
+// long* it is good for (matters when BAMBOO_SESSION_TTL_HOURS varies
+// across deploys).
+func auditSessionStart(ctx context.Context, audits *repo.AuditLogs, tenantID, userID uuid.UUID, provider, ip, userAgent string, ttl time.Duration) {
+	if audits == nil {
+		return
+	}
+	diff, _ := json.Marshal(map[string]any{
+		"provider":  provider,
+		"ttlHours":  int(ttl / time.Hour),
+		"expiresAt": time.Now().Add(ttl).UTC().Format(time.RFC3339),
+	})
+	ev := &repo.AuditEvent{
+		TenantID:     &tenantID,
+		ActorType:    "user",
+		ActorID:      &userID,
+		Action:       "session.start",
+		ResourceType: "user",
+		ResourceID:   &userID,
+		Diff:         diff,
+	}
+	if ip != "" {
+		ev.IPAddress = &ip
+	}
+	if userAgent != "" {
+		ev.UserAgent = &userAgent
+	}
+	if err := audits.Insert(ctx, ev); err != nil {
+		slog.Warn("audit session.start", "err", err, "user_id", userID)
+	}
+}
+
+// auditSessionSignout writes the audit row for an interactive sign-out.
+// Only emitted when the request carried a verifiable session cookie
+// (see handleSignOut); unauthenticated sign-out hits are not logged
+// because we can't attribute them to a real actor.
+func auditSessionSignout(ctx context.Context, audits *repo.AuditLogs, tenantID, userID uuid.UUID, ip, userAgent string) {
+	if audits == nil {
+		return
+	}
+	ev := &repo.AuditEvent{
+		TenantID:     &tenantID,
+		ActorType:    "user",
+		ActorID:      &userID,
+		Action:       "session.signout",
+		ResourceType: "user",
+		ResourceID:   &userID,
+	}
+	if ip != "" {
+		ev.IPAddress = &ip
+	}
+	if userAgent != "" {
+		ev.UserAgent = &userAgent
+	}
+	if err := audits.Insert(ctx, ev); err != nil {
+		slog.Warn("audit session.signout", "err", err, "user_id", userID)
+	}
 }
 
 // auditInviteAccepted writes the audit row for a successful

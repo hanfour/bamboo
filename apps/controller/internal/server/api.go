@@ -680,15 +680,21 @@ func (h *HTTPServer) resolveTenant(r *http.Request, authn *authnContext) (*repo.
 
 // apiMeJSON is the wire shape for /api/v1/me.
 type apiMeJSON struct {
-	Authenticated bool       `json:"authenticated"`
-	UserID        string     `json:"userId,omitempty"`
-	Email         string     `json:"email,omitempty"`
-	DisplayName   string     `json:"displayName,omitempty"`
-	OIDCProvider  string     `json:"oidcProvider,omitempty"`
-	IsAdmin       bool       `json:"isAdmin,omitempty"`
-	TenantID      string     `json:"tenantId"`
-	TenantSlug    string     `json:"tenantSlug"`
-	ExpiresAt     *time.Time `json:"expiresAt,omitempty"`
+	Authenticated bool   `json:"authenticated"`
+	UserID        string `json:"userId,omitempty"`
+	Email         string `json:"email,omitempty"`
+	DisplayName   string `json:"displayName,omitempty"`
+	OIDCProvider  string `json:"oidcProvider,omitempty"`
+	IsAdmin       bool   `json:"isAdmin,omitempty"`
+	TenantID      string `json:"tenantId"`
+	TenantSlug    string `json:"tenantSlug"`
+	// IssuedAt is the iat claim from the session JWT — when the
+	// session was originally minted. The Web settings page renders
+	// "Signed in N hours ago" from this; pairs with ExpiresAt to
+	// communicate session lifetime without needing a separate
+	// endpoint.
+	IssuedAt  *time.Time `json:"issuedAt,omitempty"`
+	ExpiresAt *time.Time `json:"expiresAt,omitempty"`
 }
 
 func (h *HTTPServer) apiMe(w http.ResponseWriter, r *http.Request, authn *authnContext, tenant *repo.Tenant) {
@@ -715,6 +721,10 @@ func (h *HTTPServer) apiMe(w http.ResponseWriter, r *http.Request, authn *authnC
 	}
 	exp := time.Unix(authn.claims.ExpiresAt, 0)
 	out.ExpiresAt = &exp
+	if authn.claims.IssuedAt > 0 {
+		iat := time.Unix(authn.claims.IssuedAt, 0)
+		out.IssuedAt = &iat
+	}
 	writeJSON(w, http.StatusOK, out)
 }
 
