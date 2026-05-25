@@ -112,16 +112,38 @@ func (r *Relays) ListEligible(ctx context.Context) ([]*RelayServer, error) {
 // be one of 'unknown', 'healthy', 'unhealthy' (the CHECK constraint
 // rejects anything else). probeErr is the short reason text shown
 // to admins when status='unhealthy'; ignored otherwise.
-func (r *Relays) UpdateHealth(ctx context.Context, id uuid.UUID, status, probeErr string) error {
-	_, err := r.pool.Exec(ctx, `
-		UPDATE relay_servers
-		   SET last_health_check_at = now(),
-		       last_health_status   = $2,
-		       last_health_error    = NULLIF($3, ''),
-		       updated_at           = now()
-		 WHERE id = $1
-	`, id, status, probeErr)
-	return err
+//
+// Returns the PREVIOUS status (normalised to 'unknown' when the row
+// was never probed before, matching ListEligible's NULL handling),
+// so the caller can detect flips and publish a RelaysChanged event
+// only when eligibility actually changed. The CTE captures the
+// pre-update value in one round-trip — read-then-update would race
+// with concurrent probes (which we serialize per-row in practice,
+// but the SQL shouldn't assume that).
+func (r *Relays) UpdateHealth(ctx context.Context, id uuid.UUID, status, probeErr string) (prev string, err error) {
+	var prevPtr *string
+	err = r.pool.QueryRow(ctx, `
+		WITH old AS (
+		    SELECT last_health_status FROM relay_servers WHERE id = $1
+		),
+		upd AS (
+		    UPDATE relay_servers
+		       SET last_health_check_at = now(),
+		           last_health_status   = $2,
+		           last_health_error    = NULLIF($3, ''),
+		           updated_at           = now()
+		     WHERE id = $1
+		    RETURNING 1
+		)
+		SELECT old.last_health_status FROM old JOIN upd ON true
+	`, id, status, probeErr).Scan(&prevPtr)
+	if err != nil {
+		return "", err
+	}
+	if prevPtr == nil {
+		return "unknown", nil
+	}
+	return *prevPtr, nil
 }
 
 // queryRelays is the shared row-scan loop for the ListEnabled /

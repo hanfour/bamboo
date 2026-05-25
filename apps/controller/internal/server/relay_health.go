@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	bamboov1 "github.com/hanfour/bamboo/proto/gen/go/bamboo/v1"
 )
 
 // relayHealthInterval is how often the reaper sweeps every enabled
@@ -83,19 +84,87 @@ func (h *HTTPServer) runRelayHealthSweep(ctx context.Context, client *http.Clien
 	if len(relays) == 0 {
 		return
 	}
-	var wg sync.WaitGroup
+	var (
+		wg                 sync.WaitGroup
+		eligibilityMu      sync.Mutex
+		eligibilityChanged bool
+	)
 	wg.Add(len(relays))
 	for _, rs := range relays {
 		go func(id uuid.UUID, hostname string, port int) {
 			defer wg.Done()
 			status, probeErr := probeRelayHealth(ctx, client, hostname, port)
-			if err := h.relays.UpdateHealth(ctx, id, status, probeErr); err != nil {
+			prev, err := h.relays.UpdateHealth(ctx, id, status, probeErr)
+			if err != nil {
 				slog.Warn("relay health: UpdateHealth",
 					"relay_id", id, "hostname", hostname, "err", err)
+				return
+			}
+			// Eligibility = COALESCE(status, 'unknown') <> 'unhealthy'.
+			// A flip in either direction (healthy⇄unhealthy, unknown→unhealthy,
+			// unhealthy→healthy) changes the set served to clients; an
+			// 'unknown'→'healthy' transition does NOT change eligibility
+			// because both are eligible. Skipping the no-change case
+			// avoids spamming every connected client every 30s.
+			if relayEligibilityChanged(prev, status) {
+				eligibilityMu.Lock()
+				eligibilityChanged = true
+				eligibilityMu.Unlock()
 			}
 		}(rs.ID, rs.Hostname, rs.Port)
 	}
 	wg.Wait()
+	if eligibilityChanged {
+		h.publishRelaysChanged(ctx)
+	}
+}
+
+// relayEligibilityChanged returns true when the (prev, next) status
+// pair would change ListEligible's output for this relay. "unknown"
+// and "healthy" are both eligible; "unhealthy" is not. Pulled out
+// for unit-testing the cell of the truth table — a subtle flip in
+// the rule would silently spam clients (or silently fail to notify
+// them) without a focused test catching it.
+func relayEligibilityChanged(prev, next string) bool {
+	return relayIsEligibleStatus(prev) != relayIsEligibleStatus(next)
+}
+
+func relayIsEligibleStatus(s string) bool {
+	if s == "" {
+		s = "unknown"
+	}
+	return s != "unhealthy"
+}
+
+// publishRelaysChanged broadcasts the current eligible-relay list
+// to every active WatchPeers subscriber via Bus.PublishAll. Called
+// from runRelayHealthSweep when a probe sweep flipped at least one
+// relay's eligibility, and from the admin REST create path so a
+// brand-new relay reaches clients in seconds rather than at the
+// next 30s health sweep.
+//
+// nil-safe: when the coord (and thus the bus) is unwired in a
+// test fixture, this is a no-op.
+func (h *HTTPServer) publishRelaysChanged(ctx context.Context) {
+	if h.coord == nil {
+		return
+	}
+	eligible, err := h.relays.ListEligible(ctx)
+	if err != nil {
+		slog.Warn("relays_changed: ListEligible", "err", err)
+		return
+	}
+	servers := make([]*bamboov1.RelayServer, 0, len(eligible))
+	for _, rs := range eligible {
+		servers = append(servers, &bamboov1.RelayServer{
+			Id:        rs.ID.String(),
+			Region:    rs.Region,
+			Hostname:  rs.Hostname,
+			Port:      int32(rs.Port),
+			PublicKey: rs.PublicKey,
+		})
+	}
+	h.coord.PublishRelaysChanged(servers)
 }
 
 // probeRelayHealth returns the status string + short error reason

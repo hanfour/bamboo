@@ -138,5 +138,11 @@ func (h *HTTPServer) adminRelaysCreate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
+	// New relays enter as 'unknown' health — ListEligible includes
+	// them by default (see the relay_servers table comments), so the
+	// eligible set has genuinely grown. Push so connected clients
+	// re-pick within seconds rather than waiting for the next 30s
+	// health sweep to surface the change.
+	h.publishRelaysChanged(r.Context())
 	writeJSON(w, http.StatusCreated, relayJSONFromRepo(rs))
 }
