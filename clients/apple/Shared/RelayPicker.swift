@@ -38,6 +38,17 @@ internal enum RelayPicker {
 
     static var probeFn: ProbeFn = probeRelayRTT
 
+    /// regionToleranceSeconds is the §4 P2 stage 5 affinity window.
+    /// A same-region relay wins over a lower-RTT out-of-region one
+    /// when the RTT gap is within this many seconds — same magnitude
+    /// as typical intra-AZ jitter, so the picker isn't preferring
+    /// slowness for the sake of geography. Beyond the tolerance the
+    /// cross-region option is genuinely faster and wins.
+    ///
+    /// 50ms (0.05s) matches the CLI's relayRegionToleranceMs so both
+    /// clients pick the same relay against the same hint.
+    static let regionToleranceSeconds: TimeInterval = 0.05
+
     /// pickLowestRTT returns the relay with the smallest measured
     /// RTT, or nil when:
     ///   * the candidate list is empty
@@ -45,10 +56,18 @@ internal enum RelayPicker {
     ///     to direct-only; not an error since the network may
     ///     have direct-only peers anyway)
     ///
-    /// Parallel by design: serial would stretch a 5-relay probe
-    /// to 5s in the worst case, doubling tunnel bring-up latency
-    /// the user can see.
-    static func pickLowestRTT(from candidates: [BambooClient.RelayServer]) async -> BambooClient.RelayServer? {
+    /// preferredRegion is the §4 P2 stage 5 affinity hint. Empty ⇒
+    /// pure RTT ranking (back-compat with pre-stage-5 behaviour).
+    /// When set, a same-region relay wins over a lower-RTT out-of-
+    /// region one if the gap is within `regionToleranceSeconds`.
+    ///
+    /// Parallel by design: serial would stretch a 5-relay probe to
+    /// 5s in the worst case, doubling tunnel bring-up latency the
+    /// user can see.
+    static func pickLowestRTT(
+        from candidates: [BambooClient.RelayServer],
+        preferredRegion: String = ""
+    ) async -> BambooClient.RelayServer? {
         guard !candidates.isEmpty else { return nil }
 
         // TaskGroup fans out probes in parallel and collects
@@ -78,8 +97,42 @@ internal enum RelayPicker {
             return ok
         }
         guard !results.isEmpty else { return nil }
-        let winnerIdx = results.min(by: { $0.1 < $1.1 })!.0
+        let sorted = results.sorted { $0.1 < $1.1 }
+        let winnerIdx = applyRegionAffinity(
+            candidates: candidates,
+            ranked: sorted,
+            preferredRegion: preferredRegion
+        )
         return candidates[winnerIdx]
+    }
+
+    /// applyRegionAffinity returns the index of the winning relay
+    /// after the §4 P2 stage 5 same-region preference. Empty
+    /// preferredRegion ⇒ RTT winner. If the RTT winner is already
+    /// in the preferred region, no-op. Otherwise the first same-
+    /// region row within `regionToleranceSeconds` of the RTT
+    /// winner wins; if none qualifies, the RTT winner stays. The
+    /// hint can therefore never make the picker pathologically
+    /// slow — only same or better than pure RTT.
+    private static func applyRegionAffinity(
+        candidates: [BambooClient.RelayServer],
+        ranked: [(Int, TimeInterval)],
+        preferredRegion: String
+    ) -> Int {
+        let rttWinnerIdx = ranked[0].0
+        if preferredRegion.isEmpty { return rttWinnerIdx }
+        if candidates[rttWinnerIdx].region == preferredRegion { return rttWinnerIdx }
+        let winnerRTT = ranked[0].1
+        for (idx, rtt) in ranked {
+            guard candidates[idx].region == preferredRegion else { continue }
+            if rtt - winnerRTT <= regionToleranceSeconds {
+                return idx
+            }
+            // ranked is ASC by RTT; once a same-region row exceeds
+            // the tolerance, all later same-region rows do too.
+            break
+        }
+        return rttWinnerIdx
     }
 
     /// relayWSSURL builds the wss URL for a chosen relay. Wraps

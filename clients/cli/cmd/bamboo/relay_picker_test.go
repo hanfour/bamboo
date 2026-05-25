@@ -18,7 +18,7 @@ import (
 // caller passes [], picker returns nil + nil so maybeOpenRelay
 // degrades to direct-only without ever firing a probe goroutine.
 func TestPickRelay_EmptyList(t *testing.T) {
-	got, err := pickRelay(context.Background(), nil)
+	got, err := pickRelay(context.Background(), nil, "")
 	if got != nil || err != nil {
 		t.Errorf("pickRelay(nil) = (%v, %v), want (nil, nil)", got, err)
 	}
@@ -54,7 +54,7 @@ func TestPickRelay_SelectsLowestRTT(t *testing.T) {
 		{Region: "fast", Hostname: "fast.example.com", Port: 8443},
 		{Region: "medium", Hostname: "medium.example.com", Port: 8443},
 	}
-	got, err := pickRelay(context.Background(), candidates)
+	got, err := pickRelay(context.Background(), candidates, "")
 	if err != nil {
 		t.Fatalf("pickRelay: %v", err)
 	}
@@ -77,7 +77,7 @@ func TestPickRelay_AllFailReturnsError(t *testing.T) {
 		{Region: "deadA", Hostname: "127.0.0.1", Port: int32(deadA)},
 		{Region: "deadB", Hostname: "127.0.0.1", Port: int32(deadB)},
 	}
-	got, err := pickRelay(context.Background(), candidates)
+	got, err := pickRelay(context.Background(), candidates, "")
 	if got != nil {
 		t.Errorf("picked = %v, want nil when all probes fail", got)
 	}
@@ -101,7 +101,7 @@ func TestPickRelay_HealthyAmongFailedWins(t *testing.T) {
 		{Region: "dead", Hostname: "127.0.0.1", Port: int32(deadPort)},
 		buildRelay("good", goodAddr),
 	}
-	got, err := pickRelay(context.Background(), candidates)
+	got, err := pickRelay(context.Background(), candidates, "")
 	if err != nil {
 		t.Errorf("err = %v, want nil when at least one probe succeeds", err)
 	}
@@ -131,7 +131,7 @@ func TestPickRelay_RespectsTimeout(t *testing.T) {
 		{Region: "void", Hostname: "192.0.2.1", Port: 8443},
 	}
 	start := time.Now()
-	got, err := pickRelay(context.Background(), candidates)
+	got, err := pickRelay(context.Background(), candidates, "")
 	elapsed := time.Since(start)
 	if got != nil || err == nil {
 		t.Errorf("pickRelay = (%v, %v), want (nil, err)", got, err)
@@ -140,6 +140,122 @@ func TestPickRelay_RespectsTimeout(t *testing.T) {
 	// didn't trip and we'd block the user's tunnel bring-up.
 	if elapsed > time.Second {
 		t.Errorf("pickRelay took %v, want under 1s with 100ms probe timeout", elapsed)
+	}
+}
+
+// TestPickRelay_PrefersSameRegionWithinTolerance pins the §4 P2
+// stage 5 affinity behaviour: a same-region relay that's a little
+// slower (within toleranceMs) wins over the otherwise-lowest-RTT
+// out-of-region one. The whole point is to stop the picker
+// flapping between two regions whose latency numbers happen to
+// land close.
+func TestPickRelay_PrefersSameRegionWithinTolerance(t *testing.T) {
+	orig := probeFn
+	probeFn = func(_ context.Context, host string, _ int) (time.Duration, error) {
+		switch host {
+		case "fast-far.example.com":
+			return 20 * time.Millisecond, nil
+		case "slower-near.example.com":
+			return 60 * time.Millisecond, nil // 40ms slower, within 50ms tolerance
+		}
+		return 0, fmt.Errorf("unknown %s", host)
+	}
+	defer func() { probeFn = orig }()
+
+	candidates := []*bamboov1.RelayServer{
+		{Region: "us-west-1", Hostname: "fast-far.example.com", Port: 8443},
+		{Region: "ap-northeast-1", Hostname: "slower-near.example.com", Port: 8443},
+	}
+	got, err := pickRelay(context.Background(), candidates, "ap-northeast-1")
+	if err != nil {
+		t.Fatalf("pickRelay: %v", err)
+	}
+	if got.GetRegion() != "ap-northeast-1" {
+		t.Errorf("picked %q, want ap-northeast-1 (slower-but-same-region within tolerance)", got.GetRegion())
+	}
+}
+
+// TestPickRelay_FallsBackToRTTBeyondTolerance pins the inverse: a
+// same-region relay BEYOND tolerance does NOT win — region hint
+// must never make the picker pathologically slow.
+func TestPickRelay_FallsBackToRTTBeyondTolerance(t *testing.T) {
+	orig := probeFn
+	probeFn = func(_ context.Context, host string, _ int) (time.Duration, error) {
+		switch host {
+		case "fast-far.example.com":
+			return 20 * time.Millisecond, nil
+		case "much-slower-near.example.com":
+			return 200 * time.Millisecond, nil // 180ms slower, beyond 50ms tolerance
+		}
+		return 0, fmt.Errorf("unknown %s", host)
+	}
+	defer func() { probeFn = orig }()
+
+	candidates := []*bamboov1.RelayServer{
+		{Region: "us-west-1", Hostname: "fast-far.example.com", Port: 8443},
+		{Region: "ap-northeast-1", Hostname: "much-slower-near.example.com", Port: 8443},
+	}
+	got, err := pickRelay(context.Background(), candidates, "ap-northeast-1")
+	if err != nil {
+		t.Fatalf("pickRelay: %v", err)
+	}
+	if got.GetRegion() != "us-west-1" {
+		t.Errorf("picked %q, want us-west-1 (faster despite cross-region — gap beyond tolerance)", got.GetRegion())
+	}
+}
+
+// TestPickRelay_EmptyRegionHintKeepsRTTOrder pins
+// back-compatibility: empty hint must produce the exact ranking
+// pre-stage-5 callers got. Without this, the (one-shot,
+// pre-existing) caller path would silently change behaviour the
+// day a different lib added a hint somewhere.
+func TestPickRelay_EmptyRegionHintKeepsRTTOrder(t *testing.T) {
+	orig := probeFn
+	probeFn = func(_ context.Context, host string, _ int) (time.Duration, error) {
+		switch host {
+		case "fast.example.com":
+			return 5 * time.Millisecond, nil
+		case "slow.example.com":
+			return 200 * time.Millisecond, nil
+		}
+		return 0, fmt.Errorf("unknown %s", host)
+	}
+	defer func() { probeFn = orig }()
+
+	candidates := []*bamboov1.RelayServer{
+		{Region: "ap-northeast-1", Hostname: "slow.example.com", Port: 8443},
+		{Region: "us-west-1", Hostname: "fast.example.com", Port: 8443},
+	}
+	got, err := pickRelay(context.Background(), candidates, "")
+	if err != nil {
+		t.Fatalf("pickRelay: %v", err)
+	}
+	if got.GetRegion() != "us-west-1" {
+		t.Errorf("picked %q, want us-west-1 (empty hint ⇒ pure RTT)", got.GetRegion())
+	}
+}
+
+// TestPickRelay_PreferredRegionAbsentNoOp pins another defensive
+// case: hint set to a region NOT present in the candidate list.
+// Picker must return the RTT winner, not nil — a stale env var
+// or typo'd region shouldn't break tunnel bring-up.
+func TestPickRelay_PreferredRegionAbsentNoOp(t *testing.T) {
+	orig := probeFn
+	probeFn = func(_ context.Context, _ string, _ int) (time.Duration, error) {
+		return 10 * time.Millisecond, nil
+	}
+	defer func() { probeFn = orig }()
+
+	candidates := []*bamboov1.RelayServer{
+		{Region: "us-west-1", Hostname: "a.example.com", Port: 8443},
+		{Region: "eu-west-1", Hostname: "b.example.com", Port: 8443},
+	}
+	got, err := pickRelay(context.Background(), candidates, "ap-northeast-1")
+	if err != nil {
+		t.Fatalf("pickRelay: %v", err)
+	}
+	if got == nil {
+		t.Fatal("got nil; missing-region hint should not block selection")
 	}
 }
 

@@ -18,6 +18,7 @@ import (
 	"os/signal"
 	"runtime"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -31,6 +32,26 @@ import (
 	bamboov1 "github.com/hanfour/bamboo/proto/gen/go/bamboo/v1"
 	"github.com/spf13/cobra"
 )
+
+// relaySession bundles the live-relay state mutated by the §4 P2
+// stage 4b-2 mid-session swap. The swap path needs to atomically
+// replace the client + proxy map AND restart the relay-fallback
+// goroutine with the new map (RunRelayFallback captures its
+// PeerRelayMap by value at start — without a restart it would
+// keep dialing the dead listener ports of the previous relay
+// after a swap).
+//
+// All fields read+write under mu. Held briefly only during swap +
+// at process exit; the hot path (RunRelayFallback iteration) does
+// not lock — it reads its own immutable map handed in at start,
+// and the swap path passes a fresh map to its replacement
+// goroutine.
+type relaySession struct {
+	mu             sync.Mutex
+	client         *relay.Client
+	url            string
+	fallbackCancel context.CancelFunc
+}
 
 var upCmd = &cobra.Command{
 	Use:   "up",
@@ -122,8 +143,17 @@ func runUp(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		slog.Warn("relay setup failed; continuing without relay", "err", err)
 	}
+	relaySess := &relaySession{client: relayClient, url: currentRelayURL}
+	defer func() {
+		// Close whatever client is current at process exit (may
+		// have been swapped out by stage 4b-2). No lock — defer
+		// runs after every goroutine that could swap has been
+		// cancelled via daemonCtx.
+		if relaySess.client != nil {
+			_ = relaySess.client.Close()
+		}
+	}()
 	if relayClient != nil {
-		defer func() { _ = relayClient.Close() }()
 		for i := range cfg.Peers {
 			if cfg.Peers[i].Endpoint == "" {
 				if r, ok := relayProxies[cfg.Peers[i].PublicKey.Base64()]; ok {
@@ -171,25 +201,63 @@ func runUp(cmd *cobra.Command, _ []string) error {
 		return registerWithController(refreshCtx, priv, session, wgPort)
 	}
 	discover := func() []string { return discoverEndpoints(wgPort) }
-	// onRelaysChanged is the §4 P2 multi-relay stage 4b observer.
-	// When the controller pushes a fresh eligible-relay list, we
-	// re-run the picker that ran at bring-up and log what it would
-	// choose now vs what we're currently using. The MVP is observe-
-	// only: a future stage 4b-2 will actually reopen RelayClient
-	// with the new pick and re-add every peer's proxy port.
+
+	// daemonCtx is the parent of every background goroutine
+	// (heartbeat, watch, relay-fallback). Declared here — before
+	// onRelaysChanged — because the swap handler needs to spawn
+	// the replacement fallback goroutine under daemonCtx (so
+	// process-exit cancels it too) but uses an intermediate
+	// per-launch context (held in relaySess.fallbackCancel) so
+	// the swap can cancel just THIS fallback without taking down
+	// the whole daemon.
+	daemonCtx, daemonCancel := context.WithCancel(cmd.Context())
+	defer daemonCancel()
+
+	// onRelaysChanged is the §4 P2 multi-relay stage 4b-2 swap
+	// handler. When the controller pushes a fresh eligible-relay
+	// list and the picker now prefers a different relay than the
+	// one we're on, we:
+	//   1. dial the new relay + AddPeer for every cached peer
+	//   2. apply the new endpoint map to the WG device (every
+	//      relay-routed peer flips to the new proxy port)
+	//   3. restart the relay-fallback goroutine with the new map
+	//      (RunRelayFallback captures its map by value at start;
+	//      without the restart it would dial dead listener ports
+	//      on the previous relay forever)
+	//   4. close the old relay client (releases its proxy
+	//      listeners and the WSS to the old relay)
 	//
-	// The env-var override is honored — if BAMBOO_RELAY_URL was set
-	// at bring-up, the operator pinned this client and we don't
-	// second-guess them. currentRelayURL captures whichever URL
-	// maybeOpenRelay actually dialed (env-var OR picker choice OR
-	// "" for direct-only mesh).
+	// Failure at step 1 or 2 leaves everything intact — we don't
+	// tear down the working relay just because a new one wouldn't
+	// dial or apply.
+	//
+	// The env-var override is honored — if BAMBOO_RELAY_URL was
+	// set at bring-up, the operator pinned this client and we
+	// don't second-guess them. regionHint biases the picker
+	// toward a same-region relay (§4 P2 stage 5).
+	//
+	// §4 P2 stage 5.5b: when the user didn't set a local hint,
+	// fall back to whatever the controller inferred from our
+	// register-time request IP (resp.GetPreferredRegion()).
+	// Local hint wins so an operator who explicitly chose
+	// "us-west-1" doesn't get overridden by a server table
+	// matching a wider CIDR to "us-east-1". Empty on both sides
+	// ⇒ pure RTT ranking, same as before stage 5.
 	pinned := os.Getenv("BAMBOO_RELAY_URL") != ""
+	regionHint := os.Getenv("BAMBOO_REGION_HINT")
+	if regionHint == "" {
+		regionHint = resp.GetPreferredRegion()
+		if regionHint != "" {
+			slog.Info("region hint: using controller-inferred", "region", regionHint)
+		}
+	}
+	reapply := &deviceReapplier{dev: dev, base: cfg}
 	onRelaysChanged := func(handlerCtx context.Context, servers []*bamboov1.RelayServer) {
 		if pinned {
 			slog.Info("relays_changed: ignoring (BAMBOO_RELAY_URL pinned by operator)")
 			return
 		}
-		picked, err := pickRelay(handlerCtx, servers)
+		picked, err := pickRelay(handlerCtx, servers, regionHint)
 		if err != nil {
 			slog.Warn("relays_changed: picker found no usable relay", "err", err)
 			return
@@ -199,12 +267,49 @@ func runUp(cmd *cobra.Command, _ []string) error {
 			return
 		}
 		newURL := relayWSSURL(picked)
-		if newURL == currentRelayURL {
+		relaySess.mu.Lock()
+		currentURL := relaySess.url
+		relaySess.mu.Unlock()
+		if newURL == currentURL {
 			slog.Info("relays_changed: picker still prefers current relay", "url", newURL)
 			return
 		}
-		slog.Info("relays_changed: picker now prefers different relay (mid-session swap is stage 4b-2)",
-			"current", currentRelayURL, "preferred", newURL, "region", picked.GetRegion())
+		slog.Info("relays_changed: swapping relay",
+			"current", currentURL, "preferred", newURL, "region", picked.GetRegion())
+		// cache.Snapshot returns the controller's current peer set
+		// — this is what we register with the new relay, so a peer
+		// that joined since bring-up also gets a proxy port on
+		// the new relay (and one that left no longer takes one).
+		_, cachedPeers := cache.Snapshot()
+		newClient, newProxies, err := openRelayAtURL(handlerCtx, newURL, resp.GetSelf().GetId(), cachedPeers, priv, session)
+		if err != nil {
+			slog.Warn("relays_changed: open new relay failed; staying on current", "err", err)
+			return
+		}
+		if err := reapply.Reapply(handlerCtx, newProxies); err != nil {
+			slog.Warn("relays_changed: apply new relay endpoints failed; staying on current", "err", err)
+			_ = newClient.Close()
+			return
+		}
+		// Cancel old fallback, start fresh with new map, close
+		// old client, commit new state. Steps in this order so
+		// the brief overlap (~ms) has both relays alive rather
+		// than neither.
+		relaySess.mu.Lock()
+		if relaySess.fallbackCancel != nil {
+			relaySess.fallbackCancel()
+		}
+		fallbackCtx, fallbackCancel := context.WithCancel(daemonCtx)
+		relaySess.fallbackCancel = fallbackCancel
+		oldClient := relaySess.client
+		relaySess.client = newClient
+		relaySess.url = newURL
+		relaySess.mu.Unlock()
+		go clientsync.RunRelayFallback(fallbackCtx, dev, reapply, newProxies, time.Now())
+		if oldClient != nil {
+			_ = oldClient.Close()
+		}
+		slog.Info("relays_changed: swap complete", "url", newURL, "peers", len(newProxies))
 	}
 	// Bytes reporter aggregates per-peer wg counters into one cumulative
 	// pair the controller writes as a connection_events bandwidth_sample
@@ -219,13 +324,21 @@ func runUp(cmd *cobra.Command, _ []string) error {
 		return device.SumBytes(stats)
 	}
 
-	daemonCtx, daemonCancel := context.WithCancel(cmd.Context())
-	defer daemonCancel()
 	go clientsync.RunHeartbeat(daemonCtx, heartbeater, resp.GetSelf().GetId(), discover, reportBytes)
 	go clientsync.RunWatchPeers(daemonCtx, adapter, dev, priv, cache, resp.GetSelf().GetId(), refresh, onRelaysChanged)
 	if relayClient != nil {
-		reapply := &deviceReapplier{dev: dev, base: cfg}
-		go clientsync.RunRelayFallback(daemonCtx, dev, reapply, relayProxies, time.Now())
+		// Initial fallback goroutine: under daemonCtx so process
+		// exit cancels it, but ALSO under a per-launch context
+		// stored in relaySess.fallbackCancel so the §4 P2 stage
+		// 4b-2 swap can stop+restart it without taking down the
+		// whole daemon. (reapply is defined in the swap handler
+		// above; reusing it here keeps both the initial fallback
+		// and any post-swap fallback wired to the same base cfg.)
+		fallbackCtx, fallbackCancel := context.WithCancel(daemonCtx)
+		relaySess.mu.Lock()
+		relaySess.fallbackCancel = fallbackCancel
+		relaySess.mu.Unlock()
+		go clientsync.RunRelayFallback(fallbackCtx, dev, reapply, relayProxies, time.Now())
 	}
 
 	stop := make(chan os.Signal, 1)
@@ -343,8 +456,17 @@ func pickFreeUDPPort() (uint16, error) {
 func maybeOpenRelay(ctx context.Context, resp *bamboov1.RegisterResponse, priv wg.PrivateKey, session *peerSession) (*relay.Client, clientsync.PeerRelayMap, string, error) {
 	relayURL := os.Getenv("BAMBOO_RELAY_URL")
 	if relayURL == "" {
-		// Fall through to the controller-supplied list.
-		picked, err := pickRelay(ctx, resp.GetRelayServers())
+		// Fall through to the controller-supplied list. Region
+		// preference precedence (§4 P2 stages 5 + 5.5b):
+		//   1. BAMBOO_REGION_HINT env (operator pinned per device)
+		//   2. resp.PreferredRegion (controller inferred from our
+		//      request IP via stage 5.5a's CIDR table)
+		//   3. "" (no preference; pure RTT ranking)
+		hint := os.Getenv("BAMBOO_REGION_HINT")
+		if hint == "" {
+			hint = resp.GetPreferredRegion()
+		}
+		picked, err := pickRelay(ctx, resp.GetRelayServers(), hint)
 		if err != nil {
 			slog.Warn("relay picker: no usable relay; continuing direct-only", "err", err)
 			return nil, nil, "", nil
@@ -357,34 +479,51 @@ func maybeOpenRelay(ctx context.Context, resp *bamboov1.RegisterResponse, priv w
 		slog.Info("relay picker: chose", "region", picked.GetRegion(), "hostname", picked.GetHostname())
 	}
 
-	token, err := mintRelayToken(ctx, resp.GetSelf().GetId(), priv.PublicKey().Base64(), session)
-	if err != nil {
-		return nil, nil, "", fmt.Errorf("mint relay token: %w", err)
-	}
-	selfKey, err := decodePubKey(priv.PublicKey().Base64())
+	c, proxies, err := openRelayAtURL(ctx, relayURL, resp.GetSelf().GetId(), resp.GetPeers(), priv, session)
 	if err != nil {
 		return nil, nil, "", err
 	}
+	slog.Info("relay opened", "url", relayURL, "peers", len(proxies))
+	return c, proxies, relayURL, nil
+}
 
+// openRelayAtURL is the dial-and-AddPeer-for-each-peer dance,
+// extracted so the §4 P2 stage 4b-2 mid-session swap path reuses
+// it without duplicating the token-mint + per-peer loop. Caller
+// supplies the relay URL (env override OR picker choice) and the
+// peer set to register; returns the live client + the peer-pubkey
+// → local-proxy-address map ready to feed wg's endpoint overrides.
+//
+// On any failure the partially-constructed client is closed before
+// returning so a half-up relay can't leak listener ports.
+func openRelayAtURL(ctx context.Context, relayURL, selfID string, peers []*bamboov1.Peer, priv wg.PrivateKey, session *peerSession) (*relay.Client, clientsync.PeerRelayMap, error) {
+	token, err := mintRelayToken(ctx, selfID, priv.PublicKey().Base64(), session)
+	if err != nil {
+		return nil, nil, fmt.Errorf("mint relay token: %w", err)
+	}
+	selfKey, err := decodePubKey(priv.PublicKey().Base64())
+	if err != nil {
+		return nil, nil, err
+	}
 	c, err := relay.Dial(ctx, relayURL, selfKey, token, "127.0.0.1:51820")
 	if err != nil {
-		return nil, nil, "", fmt.Errorf("relay dial: %w", err)
+		return nil, nil, fmt.Errorf("relay dial: %w", err)
 	}
-
-	proxies := make(clientsync.PeerRelayMap, len(resp.GetPeers()))
-	for _, p := range resp.GetPeers() {
+	proxies := make(clientsync.PeerRelayMap, len(peers))
+	for _, p := range peers {
 		peerKey, err := decodePubKey(p.GetWireguardPublicKey())
 		if err != nil {
-			return nil, nil, "", fmt.Errorf("peer %s pubkey: %w", p.GetId(), err)
+			_ = c.Close()
+			return nil, nil, fmt.Errorf("peer %s pubkey: %w", p.GetId(), err)
 		}
 		proxyAddr, err := c.AddPeer(peerKey)
 		if err != nil {
-			return nil, nil, "", fmt.Errorf("relay add peer %s: %w", p.GetId(), err)
+			_ = c.Close()
+			return nil, nil, fmt.Errorf("relay add peer %s: %w", p.GetId(), err)
 		}
 		proxies[p.GetWireguardPublicKey()] = proxyAddr
 	}
-	slog.Info("relay opened", "url", relayURL, "peers", len(proxies))
-	return c, proxies, relayURL, nil
+	return c, proxies, nil
 }
 
 // deviceReapplier wraps the bamboo CLI's device + base config so the

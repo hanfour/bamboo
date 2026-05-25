@@ -62,6 +62,16 @@ public final class ConnectionViewModel: ObservableObject {
         UserDefaults.bambooStandard.string(forKey: "hostname") ?? currentHostname()
     @Published public var relayURL: String =
         UserDefaults.bambooStandard.string(forKey: "relayURL") ?? ""
+    /// §4 P2 stage 5 region-affinity hint. When set (e.g.
+    /// "ap-northeast-1", matching the region label in the relay
+    /// registry), the RelayPicker prefers a same-region relay over
+    /// a lower-RTT out-of-region one within
+    /// RelayPicker.regionToleranceSeconds. Empty ⇒ pure RTT
+    /// ranking (pre-stage-5 behaviour). The hint also rides into
+    /// the §4 P2 stage 4b RelaysChanged handler so a runtime relay
+    /// re-shuffle respects the same preference.
+    @Published public var regionHint: String =
+        UserDefaults.bambooStandard.string(forKey: "regionHint") ?? ""
     /// Comma-/whitespace-separated CIDR list for the "advertise as
     /// subnet router" field (issue #136). The string lives in the
     /// `@Published` storage; parsed into `[String]` only at connect
@@ -101,6 +111,12 @@ public final class ConnectionViewModel: ObservableObject {
     /// against this to decide whether to log "still preferred"
     /// vs "picker now prefers different".
     private var currentRelayURL: String?
+    /// §4 P2 stage 5.5b: controller-inferred region hint from
+    /// the most recent register response. Used as fallback when
+    /// the user's Settings regionHint is empty. Stored here
+    /// because handleRelaysChanged runs long after `resp` has
+    /// gone out of scope.
+    private var serverRegionHint: String = ""
     private var statusTask: Task<Void, Never>?
 
     // Latest known tunnel config; held so we can rebuild + reapply
@@ -383,6 +399,7 @@ public final class ConnectionViewModel: ObservableObject {
         persistSettingIfNonEmpty(preAuthKey, forKey: "preAuthKey")
         persistSettingIfNonEmpty(hostname, forKey: "hostname")
         persistSettingIfNonEmpty(relayURL, forKey: "relayURL")
+        persistSettingIfNonEmpty(regionHint, forKey: "regionHint")
         persistSettingIfNonEmpty(advertiseRoutes, forKey: "advertiseRoutes")
         // Unconditional set: the bool toggle has explicit on/off
         // semantics (no "preserve previous value" concept like the
@@ -490,7 +507,12 @@ public final class ConnectionViewModel: ObservableObject {
                     log.warning("relay: not a valid ws/wss URL — relayURL=\(trimmedRelayURL, privacy: .public); fix in Settings")
                 }
             } else if let servers = resp.relayServers, !servers.isEmpty {
-                if let picked = await RelayPicker.pickLowestRTT(from: servers),
+                // §4 P2 stage 5.5b: capture the server-supplied hint
+                // so handleRelaysChanged can use it later when the
+                // resp value has gone out of scope.
+                self.serverRegionHint = resp.preferredRegion ?? ""
+                let hint = effectiveRegionHint()
+                if let picked = await RelayPicker.pickLowestRTT(from: servers, preferredRegion: hint),
                    let url = RelayPicker.relayWSSURL(picked) {
                     resolvedRelayURL = url
                     log.log("relay picker: chose region=\(picked.region, privacy: .public) hostname=\(picked.hostname, privacy: .public)")
@@ -715,13 +737,30 @@ public final class ConnectionViewModel: ObservableObject {
     /// honoring that override matters because an operator who
     /// typed a relay into Settings expects that exact relay, not
     /// "whatever the picker preferred this minute".
+    /// effectiveRegionHint returns the region preference to feed
+    /// the RelayPicker, with §4 P2 stage 5.5b precedence:
+    ///   1. User's Settings regionHint (trimmed)
+    ///   2. serverRegionHint captured from the most recent register
+    ///      response (controller's stage 5.5a IP→region inference)
+    ///   3. "" — no preference; picker falls back to pure RTT
+    ///
+    /// Local hint wins so an operator who explicitly picked
+    /// "us-west-1" in Settings doesn't get overridden by a server-
+    /// side table that matched a broader CIDR.
+    private func effectiveRegionHint() -> String {
+        let local = regionHint.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !local.isEmpty { return local }
+        return serverRegionHint
+    }
+
     private func handleRelaysChanged(_ servers: [BambooClient.RelayServer]) async {
         let pinned = !relayURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         if pinned {
             log.log("relays_changed: ignoring (user pinned relayURL in Settings)")
             return
         }
-        guard let picked = await RelayPicker.pickLowestRTT(from: servers) else {
+        let hint = effectiveRegionHint()
+        guard let picked = await RelayPicker.pickLowestRTT(from: servers, preferredRegion: hint) else {
             log.log("relays_changed: no usable relay; would degrade to direct-only on next reconnect")
             return
         }

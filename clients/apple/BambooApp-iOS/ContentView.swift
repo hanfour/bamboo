@@ -120,11 +120,25 @@ private struct SettingsView: View {
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                 }
-                Section("Relay (optional)") {
+                Section {
                     TextField("wss://relay.example/relay", text: $connection.relayURL)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                         .keyboardType(.URL)
+                    // §4 P2 stage 5 region-affinity. Empty ⇒ pure RTT
+                    // ranking. When set to a region label that matches
+                    // one in the relay registry, the picker prefers a
+                    // same-region relay over a lower-RTT cross-region
+                    // one within 50ms. Ignored when Relay URL above is
+                    // set (operator pin takes precedence over geo bias).
+                    TextField("Region hint (e.g. ap-northeast-1)",
+                              text: $connection.regionHint)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                } header: {
+                    Text("Relay (optional)")
+                } footer: {
+                    Text("Region hint applies only when Relay URL is empty — it nudges the auto-picker toward your region without forcing a specific relay.")
                 }
                 Section {
                     TextField("10.0.0.0/24, 192.168.86.0/24", text: $connection.advertiseRoutes)
