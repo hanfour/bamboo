@@ -120,6 +120,21 @@ type EndpointDiscoverer func() []string
 // applying whatever AllowedIps were learned at the previous register.
 type Refresher func(ctx context.Context) (*bamboov1.RegisterResponse, error)
 
+// RelaysChangedHandler runs when the controller emits a
+// RelaysChanged event on the WatchPeers stream (§4 P2 multi-relay
+// stage 4b). The argument is the FRESH eligible-relay list — the
+// caller in up.go re-runs pickRelay against it and logs which
+// relay it would prefer next time around.
+//
+// Stage 4b ships the OBSERVE path: receive event, run picker, log
+// the result. Actually swapping the live RelayClient mid-session
+// (close + reopen + reset every peer's proxy port) is stage 4b-2
+// — too much wiring change to bundle here.
+//
+// A nil handler disables the side-channel; the event is logged at
+// info level and dropped.
+type RelaysChangedHandler func(ctx context.Context, servers []*bamboov1.RelayServer)
+
 // RunHeartbeat periodically pings the controller until ctx is canceled.
 // When an endpoint discoverer is supplied it re-discovers on every
 // tick so the controller learns about NAT-mapping changes between
@@ -167,6 +182,7 @@ func RunWatchPeers(
 	cache *PeerCache,
 	peerID string,
 	refresh Refresher,
+	onRelaysChanged RelaysChangedHandler,
 ) {
 	backoff := initialBackoff
 	for {
@@ -199,6 +215,22 @@ func RunWatchPeers(
 				}
 				slog.Warn("watch stream broken; reconnecting", "err", err)
 				break
+			}
+			if rc := event.GetRelaysChanged(); rc != nil {
+				// §4 P2 multi-relay stage 4b. Controller broadcasts
+				// the fresh eligible list whenever the set changes
+				// (admin enable/disable, or the health reaper flips
+				// a relay in/out of eligibility). We log the count
+				// + hand the list to onRelaysChanged for re-picking;
+				// the handler in up.go runs pickRelay against the
+				// new list and logs which one it would prefer.
+				// Mid-session swap is stage 4b-2.
+				servers := rc.GetRelayServers()
+				slog.Info("relays changed", "count", len(servers))
+				if onRelaysChanged != nil {
+					onRelaysChanged(ctx, servers)
+				}
+				continue
 			}
 			if pc := event.GetPolicyChanged(); pc != nil {
 				slog.Info("policy changed", "revision", pc.GetPolicyRevision())

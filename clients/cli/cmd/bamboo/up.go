@@ -118,7 +118,7 @@ func runUp(cmd *cobra.Command, _ []string) error {
 	// swaps individual peers from direct to relay when their direct
 	// endpoint stops handshaking. Peers with no direct endpoint at
 	// all start on relay immediately.
-	relayClient, relayProxies, err := maybeOpenRelay(cmd.Context(), resp, priv, session)
+	relayClient, relayProxies, currentRelayURL, err := maybeOpenRelay(cmd.Context(), resp, priv, session)
 	if err != nil {
 		slog.Warn("relay setup failed; continuing without relay", "err", err)
 	}
@@ -171,6 +171,41 @@ func runUp(cmd *cobra.Command, _ []string) error {
 		return registerWithController(refreshCtx, priv, session, wgPort)
 	}
 	discover := func() []string { return discoverEndpoints(wgPort) }
+	// onRelaysChanged is the §4 P2 multi-relay stage 4b observer.
+	// When the controller pushes a fresh eligible-relay list, we
+	// re-run the picker that ran at bring-up and log what it would
+	// choose now vs what we're currently using. The MVP is observe-
+	// only: a future stage 4b-2 will actually reopen RelayClient
+	// with the new pick and re-add every peer's proxy port.
+	//
+	// The env-var override is honored — if BAMBOO_RELAY_URL was set
+	// at bring-up, the operator pinned this client and we don't
+	// second-guess them. currentRelayURL captures whichever URL
+	// maybeOpenRelay actually dialed (env-var OR picker choice OR
+	// "" for direct-only mesh).
+	pinned := os.Getenv("BAMBOO_RELAY_URL") != ""
+	onRelaysChanged := func(handlerCtx context.Context, servers []*bamboov1.RelayServer) {
+		if pinned {
+			slog.Info("relays_changed: ignoring (BAMBOO_RELAY_URL pinned by operator)")
+			return
+		}
+		picked, err := pickRelay(handlerCtx, servers)
+		if err != nil {
+			slog.Warn("relays_changed: picker found no usable relay", "err", err)
+			return
+		}
+		if picked == nil {
+			slog.Info("relays_changed: empty eligible list; would degrade to direct-only on next reconnect")
+			return
+		}
+		newURL := relayWSSURL(picked)
+		if newURL == currentRelayURL {
+			slog.Info("relays_changed: picker still prefers current relay", "url", newURL)
+			return
+		}
+		slog.Info("relays_changed: picker now prefers different relay (mid-session swap is stage 4b-2)",
+			"current", currentRelayURL, "preferred", newURL, "region", picked.GetRegion())
+	}
 	// Bytes reporter aggregates per-peer wg counters into one cumulative
 	// pair the controller writes as a connection_events bandwidth_sample
 	// row. Failures (stats unavailable, device not yet brought up) yield
@@ -187,7 +222,7 @@ func runUp(cmd *cobra.Command, _ []string) error {
 	daemonCtx, daemonCancel := context.WithCancel(cmd.Context())
 	defer daemonCancel()
 	go clientsync.RunHeartbeat(daemonCtx, heartbeater, resp.GetSelf().GetId(), discover, reportBytes)
-	go clientsync.RunWatchPeers(daemonCtx, adapter, dev, priv, cache, resp.GetSelf().GetId(), refresh)
+	go clientsync.RunWatchPeers(daemonCtx, adapter, dev, priv, cache, resp.GetSelf().GetId(), refresh, onRelaysChanged)
 	if relayClient != nil {
 		reapply := &deviceReapplier{dev: dev, base: cfg}
 		go clientsync.RunRelayFallback(daemonCtx, dev, reapply, relayProxies, time.Now())
@@ -300,18 +335,23 @@ func pickFreeUDPPort() (uint16, error) {
 //
 // Returning a nil client is NOT an error; it just means clients
 // behind symmetric NAT will fail to handshake with NATed peers.
-func maybeOpenRelay(ctx context.Context, resp *bamboov1.RegisterResponse, priv wg.PrivateKey, session *peerSession) (*relay.Client, clientsync.PeerRelayMap, error) {
+// maybeOpenRelay returns the live relay client, the per-peer proxy
+// map, and the dial URL that was used. The URL is surfaced so the
+// §4 P2 stage 4b RelaysChanged handler can compare "what we're on
+// now" vs "what the picker would prefer now" without re-deriving
+// the chosen URL from the relay.Client (which doesn't store it).
+func maybeOpenRelay(ctx context.Context, resp *bamboov1.RegisterResponse, priv wg.PrivateKey, session *peerSession) (*relay.Client, clientsync.PeerRelayMap, string, error) {
 	relayURL := os.Getenv("BAMBOO_RELAY_URL")
 	if relayURL == "" {
 		// Fall through to the controller-supplied list.
 		picked, err := pickRelay(ctx, resp.GetRelayServers())
 		if err != nil {
 			slog.Warn("relay picker: no usable relay; continuing direct-only", "err", err)
-			return nil, nil, nil
+			return nil, nil, "", nil
 		}
 		if picked == nil {
 			// No relays in the response — direct-only mesh.
-			return nil, nil, nil
+			return nil, nil, "", nil
 		}
 		relayURL = relayWSSURL(picked)
 		slog.Info("relay picker: chose", "region", picked.GetRegion(), "hostname", picked.GetHostname())
@@ -319,32 +359,32 @@ func maybeOpenRelay(ctx context.Context, resp *bamboov1.RegisterResponse, priv w
 
 	token, err := mintRelayToken(ctx, resp.GetSelf().GetId(), priv.PublicKey().Base64(), session)
 	if err != nil {
-		return nil, nil, fmt.Errorf("mint relay token: %w", err)
+		return nil, nil, "", fmt.Errorf("mint relay token: %w", err)
 	}
 	selfKey, err := decodePubKey(priv.PublicKey().Base64())
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, "", err
 	}
 
 	c, err := relay.Dial(ctx, relayURL, selfKey, token, "127.0.0.1:51820")
 	if err != nil {
-		return nil, nil, fmt.Errorf("relay dial: %w", err)
+		return nil, nil, "", fmt.Errorf("relay dial: %w", err)
 	}
 
 	proxies := make(clientsync.PeerRelayMap, len(resp.GetPeers()))
 	for _, p := range resp.GetPeers() {
 		peerKey, err := decodePubKey(p.GetWireguardPublicKey())
 		if err != nil {
-			return nil, nil, fmt.Errorf("peer %s pubkey: %w", p.GetId(), err)
+			return nil, nil, "", fmt.Errorf("peer %s pubkey: %w", p.GetId(), err)
 		}
 		proxyAddr, err := c.AddPeer(peerKey)
 		if err != nil {
-			return nil, nil, fmt.Errorf("relay add peer %s: %w", p.GetId(), err)
+			return nil, nil, "", fmt.Errorf("relay add peer %s: %w", p.GetId(), err)
 		}
 		proxies[p.GetWireguardPublicKey()] = proxyAddr
 	}
 	slog.Info("relay opened", "url", relayURL, "peers", len(proxies))
-	return c, proxies, nil
+	return c, proxies, relayURL, nil
 }
 
 // deviceReapplier wraps the bamboo CLI's device + base config so the
