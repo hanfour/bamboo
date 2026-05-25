@@ -555,6 +555,17 @@
       "admin": "Admin",
       "member": "Member"
     },
+    "sessionCard": {
+      "title": "Session",
+      "signedInAt": "Signed in",
+      "expiresAt": "Expires",
+      "provider": "via {provider}",
+      "providerUnknown": "via OIDC",
+      "agePrefix": "Signed in {value} ago{provider}.",
+      "expiresIn": "Session expires in {value}.",
+      "expiresPast": "Session has expired.",
+      "signOut": "Sign out of this session"
+    },
     "preAuthKeysCard": {
       "title": "Pre-auth keys",
       "description": "Mint and revoke the keys that new devices paste into their bamboo client on first connection.",

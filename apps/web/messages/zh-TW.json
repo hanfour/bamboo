@@ -555,6 +555,17 @@
       "admin": "管理員",
       "member": "成員"
     },
+    "sessionCard": {
+      "title": "登入工作階段",
+      "signedInAt": "登入時間",
+      "expiresAt": "到期時間",
+      "provider": "（{provider} 登入）",
+      "providerUnknown": "（OIDC 登入）",
+      "agePrefix": "{value}前登入{provider}。",
+      "expiresIn": "工作階段將於 {value} 後到期。",
+      "expiresPast": "工作階段已到期。",
+      "signOut": "登出此工作階段"
+    },
     "preAuthKeysCard": {
       "title": "Pre-auth keys",
       "description": "管理租戶可發行的連線金鑰，給新節點首次連線使用。",
