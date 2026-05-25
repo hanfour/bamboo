@@ -18,7 +18,12 @@
   "auth": {
     "signIn": "Sign in",
     "signOut": "Sign out",
-    "loggedInAs": "Signed in as {email}"
+    "loggedInAs": "Signed in as {email}",
+    "menu": {
+      "aria": "Account menu",
+      "settings": "Settings",
+      "tenant": "Tenant"
+    }
   },
   "landing": {
     "title": "bamboo",
