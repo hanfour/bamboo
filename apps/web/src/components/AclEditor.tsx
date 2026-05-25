@@ -29,7 +29,7 @@ import type { PolicyHistoryRow, PolicySimulation } from '@/lib/types';
 // Simulator covers the editor's job without dragging in ~300KB of
 // JS. If admin usage grows we can upgrade to CodeMirror as a
 // follow-up.
-type Tab = 'source' | 'preview' | 'versions';
+type Tab = 'source' | 'preview' | 'versions' | 'examples';
 
 export function AclEditor({
   hclSource,
@@ -76,6 +76,15 @@ export function AclEditor({
           currentHclSource={hclSource}
         />
       )}
+      {tab === 'examples' && (
+        <ExamplesTab
+          onLoad={(code) => {
+            setDraft(code);
+            setEditing(true);
+            setTab('source');
+          }}
+        />
+      )}
     </section>
   );
 }
@@ -101,6 +110,7 @@ function TabBar({
     { id: 'source', label: t('source'), badge: editing ? t('editing') : undefined },
     { id: 'preview', label: t('preview') },
     { id: 'versions', label: t('versions') + (versionCount ? ` · ${versionCount}` : '') },
+    { id: 'examples', label: t('examples') },
   ];
   return (
     <div className="flex items-end gap-6 border-b border-ink-800">
@@ -648,5 +658,154 @@ function DiffCell({ side, row }: { side: 'old' | 'new'; row: DiffRow }) {
         {text || ' '}
       </pre>
     </div>
+  );
+}
+
+// EXAMPLES is the curated set of starter HCL policies surfaced by
+// the Examples tab. Comments inside the HCL are intentionally in
+// English — they are valid HCL (// comments) and they live in the
+// policy itself after the operator clicks "Use this example", so
+// translating them would either inject non-ASCII into the saved
+// policy or require runtime string substitution. The card's title
+// + description ARE translatable since they're chrome around the
+// snippet.
+const EXAMPLES: { id: string; code: string }[] = [
+  {
+    id: 'openMesh',
+    code: `// Open mesh — every peer can reach every other peer.
+// This is the default a new tenant starts with; tighten it
+// before going to production.
+
+acl_rule {
+  action       = "allow"
+  sources      = ["*"]
+  destinations = ["*"]
+}
+`,
+  },
+  {
+    id: 'devProd',
+    code: `// Dev / prod isolation — two environments, no cross-traffic.
+//
+// Replace the example emails with real ones, then approve peers
+// on the Peers page with the matching tag. Members of group:dev
+// can issue "tag:dev"; same for prod.
+
+groups = {
+  "group:dev"  = ["dev@example.com"]
+  "group:prod" = ["ops@example.com"]
+}
+
+tagOwners = {
+  "tag:dev"  = ["group:dev"]
+  "tag:prod" = ["group:prod"]
+}
+
+// Dev peers reach each other.
+acl_rule {
+  action       = "allow"
+  sources      = ["tag:dev"]
+  destinations = ["tag:dev"]
+}
+
+// Prod peers reach each other.
+acl_rule {
+  action       = "allow"
+  sources      = ["tag:prod"]
+  destinations = ["tag:prod"]
+}
+`,
+  },
+  {
+    id: 'exitNode',
+    code: `// Single exit node — one tagged peer forwards traffic for
+// everyone. Mark the chosen peer as an exit node on the Peers
+// page (Drawer → Advertise → Advertise exit node), then approve
+// "tag:exit" on its row.
+
+tagOwners = {
+  "tag:exit" = ["*"]
+}
+
+// Anyone in the tenant may use the exit node.
+acl_rule {
+  action       = "allow"
+  sources      = ["*"]
+  destinations = ["tag:exit"]
+}
+`,
+  },
+];
+
+// ExamplesTab renders the curated starter templates as a vertical
+// stack of cards. "Use this example" loads the HCL into the
+// editor draft + switches to Source in editing mode so the
+// operator can tweak before Save; "Copy" puts it on the
+// clipboard for paste-into-existing-policy workflows.
+function ExamplesTab({ onLoad }: { onLoad: (code: string) => void }) {
+  const t = useTranslations('acl.examples');
+  return (
+    <div className="space-y-3">
+      <p className="text-sm text-bamboo-200/70">{t('description')}</p>
+      <div className="space-y-3">
+        {EXAMPLES.map((ex) => (
+          <ExampleCard key={ex.id} id={ex.id} code={ex.code} onLoad={onLoad} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ExampleCard({
+  id,
+  code,
+  onLoad,
+}: {
+  id: string;
+  code: string;
+  onLoad: (code: string) => void;
+}) {
+  const t = useTranslations('acl.examples');
+  const [copied, setCopied] = useState(false);
+
+  function copy() {
+    void navigator.clipboard.writeText(code).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    });
+  }
+
+  return (
+    <article className="space-y-2 rounded-lg border border-ink-800 bg-ink-950 p-4">
+      <header className="flex flex-wrap items-baseline justify-between gap-2">
+        <div className="space-y-1">
+          <h3 className="text-sm font-medium text-bamboo-50">
+            {t(`templates.${id}.title`)}
+          </h3>
+          <p className="text-xs text-bamboo-200/70">
+            {t(`templates.${id}.description`)}
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={copy}
+            className="rounded-md border border-bamboo-200/30 px-2.5 py-1 text-xs text-bamboo-100 transition-colors hover:border-bamboo-200/60 hover:text-bamboo-50"
+          >
+            {copied ? t('copied') : t('copy')}
+          </button>
+          <button
+            type="button"
+            onClick={() => onLoad(code)}
+            className="rounded-md border border-bamboo-300/40 bg-bamboo-50 px-2.5 py-1 text-xs font-medium text-ink-950 transition-colors hover:bg-bamboo-100"
+          >
+            {t('useThis')}
+          </button>
+        </div>
+      </header>
+      <pre className="overflow-x-auto rounded border border-ink-800 bg-ink-900/40 p-3 font-mono text-[11px] leading-relaxed text-bamboo-100">
+        <code>{code}</code>
+      </pre>
+    </article>
   );
 }

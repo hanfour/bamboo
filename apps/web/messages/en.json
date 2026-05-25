@@ -262,7 +262,28 @@
       "source": "Source",
       "preview": "Preview",
       "versions": "Versions",
+      "examples": "Examples",
       "editing": "Editing"
+    },
+    "examples": {
+      "description": "Starter HCL templates. \"Use this example\" loads the snippet into the editor in draft mode — review and Save when you're ready.",
+      "copy": "Copy",
+      "copied": "Copied",
+      "useThis": "Use this example",
+      "templates": {
+        "openMesh": {
+          "title": "Open mesh",
+          "description": "Allow every peer to reach every other peer. The default; tighten before production."
+        },
+        "devProd": {
+          "title": "Dev / prod isolation",
+          "description": "Two tagged groups that talk to themselves but not to each other. Bring your own emails."
+        },
+        "exitNode": {
+          "title": "Single exit node",
+          "description": "One tagged peer forwards traffic for the whole tenant; everyone else is unrestricted."
+        }
+      }
     },
     "editor": {
       "edit": "Edit",
