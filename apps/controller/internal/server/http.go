@@ -13,6 +13,8 @@ import (
 	"strings"
 	"time"
 
+	"os"
+
 	"github.com/google/uuid"
 	"github.com/hanfour/bamboo/apps/controller/internal/auth"
 	"github.com/hanfour/bamboo/apps/controller/internal/clickhouse"
@@ -52,6 +54,13 @@ type HTTPServer struct {
 	coord       *handlers.CoordinatorHandler
 	metrics     *metrics.Registry
 	publisher   *webhooks.Publisher
+	// regionMap resolves a client IP to a region label for the §4 P2
+	// stage 5.5 server-side region detection. Populated from the
+	// BAMBOO_REGION_CIDRS env var at NewHTTPServer time; empty
+	// (zero entries) when no env is set, in which case every
+	// resolveRegion call returns "" and the register response
+	// omits preferredRegion.
+	regionMap   *regionMap
 	secret      []byte
 	baseURL     string
 	ttl         time.Duration
@@ -105,6 +114,16 @@ func NewHTTPServer(
 		baseURL: baseURL,
 		ttl:     ttl,
 	}
+	// §4 P2 stage 5.5: build the IP→region table from
+	// BAMBOO_REGION_CIDRS (e.g.
+	// "us-east-1=10.0.0.0/8,ap-northeast-1=172.16.0.0/12").
+	// Empty env ⇒ empty matcher, every resolveRegion returns ""
+	// and the register response omits preferredRegion.
+	rm, warnings := parseRegionMap(os.Getenv("BAMBOO_REGION_CIDRS"))
+	for _, w := range warnings {
+		slog.Warn(w)
+	}
+	h.regionMap = rm
 	// Webhook publisher (§4 P2). The audit repo hook fires on every
 	// successful Insert; the publisher's bounded channel + worker
 	// goroutine handle delivery off the audit-write path. The
