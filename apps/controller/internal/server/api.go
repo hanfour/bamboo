@@ -504,6 +504,14 @@ func (h *HTTPServer) authenticate(r *http.Request) (*authnContext, error) {
 		if user.TenantID != claims.TenantID {
 			return nil, errors.New("tenant membership mismatch")
 		}
+		// Slice 3b: per-user session version. Reject when the
+		// token was minted before an admin bumped the user's
+		// counter. claims.SV == user.SessionVersion == 0 on the
+		// untouched-rollout path, so this is a no-op until an
+		// admin invokes the sign-out-all endpoint.
+		if claims.SV < user.SessionVersion {
+			return nil, errors.New("session revoked (force sign-out)")
+		}
 	}
 	// Revocation denylist. Tokens minted before slice 3a have no
 	// jti claim — we skip the check there so legacy in-flight

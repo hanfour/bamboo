@@ -33,6 +33,14 @@ type SessionClaims struct {
 	// than rejecting, so in-flight legacy tokens stay valid until
 	// their natural TTL.
 	JTI uuid.UUID `json:"jti,omitempty"`
+	// SV is the user's session version at token-issue time (see
+	// migration 00017). The auth middleware rejects when
+	// claims.SV < user.session_version — admins use this to nuke
+	// every active session for a user in one row UPDATE, without
+	// needing each individual jti. Zero on slice-3a tokens; an
+	// untouched user row also has session_version=0, so the
+	// check is a no-op until the first bump.
+	SV int `json:"sv,omitempty"`
 }
 
 // ErrInvalidToken is returned by VerifySessionToken on any failure.

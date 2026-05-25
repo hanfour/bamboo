@@ -140,6 +140,7 @@ func NewHTTPServer(
 	mux.HandleFunc("/auth/", h.routeAuth)
 	mux.HandleFunc("/auth/sign-out", h.handleSignOut)
 	mux.HandleFunc("/api/v1/admin/relays", h.routeAdminRelays)
+	mux.HandleFunc("/api/v1/admin/users/", h.routeAdminUsers)
 	mux.HandleFunc("/api/v1/relay-token", h.routeRelayToken)
 	mux.HandleFunc("/api/v1/", h.routeAPI)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
@@ -860,6 +861,7 @@ func (h *HTTPServer) handleCallback(w http.ResponseWriter, r *http.Request, prov
 	token, err := auth.IssueSessionToken(h.secret, auth.SessionClaims{
 		UserID:   user.ID,
 		TenantID: tenant.ID,
+		SV:       user.SessionVersion,
 	}, h.ttl)
 	if err != nil {
 		http.Error(w, "issue token: "+err.Error(), http.StatusInternalServerError)

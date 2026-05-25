@@ -29,8 +29,13 @@ type User struct {
 	OIDCProvider string
 	OIDCSubject  string
 	IsAdmin      bool
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
+	// SessionVersion is the user's session-revocation generation
+	// counter (slice 3b, migration 00017). Auth middleware rejects
+	// JWTs whose sv claim is less than this value, so bumping the
+	// column invalidates every outstanding session for the user.
+	SessionVersion int
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
 }
 
 // UpsertOIDC creates or updates a user keyed by OIDC identity. Used by the
@@ -45,10 +50,10 @@ func (r *Users) UpsertOIDC(ctx context.Context, u *User) (*User, error) {
 		    email        = EXCLUDED.email,
 		    display_name = EXCLUDED.display_name,
 		    updated_at   = now()
-		RETURNING id, tenant_id, email, display_name, oidc_provider, oidc_subject, is_admin, created_at, updated_at
+		RETURNING id, tenant_id, email, display_name, oidc_provider, oidc_subject, is_admin, session_version, created_at, updated_at
 	`, u.TenantID, u.Email, u.DisplayName, u.OIDCProvider, u.OIDCSubject, u.IsAdmin).Scan(
 		&out.ID, &out.TenantID, &out.Email, &out.DisplayName,
-		&out.OIDCProvider, &out.OIDCSubject, &out.IsAdmin,
+		&out.OIDCProvider, &out.OIDCSubject, &out.IsAdmin, &out.SessionVersion,
 		&out.CreatedAt, &out.UpdatedAt,
 	)
 	if err != nil {
@@ -62,18 +67,42 @@ func (r *Users) UpsertOIDC(ctx context.Context, u *User) (*User, error) {
 func (r *Users) GetByID(ctx context.Context, id uuid.UUID) (*User, error) {
 	var u User
 	err := r.pool.QueryRow(ctx, `
-		SELECT id, tenant_id, email, display_name, oidc_provider, oidc_subject, is_admin, created_at, updated_at
+		SELECT id, tenant_id, email, display_name, oidc_provider, oidc_subject, is_admin, session_version, created_at, updated_at
 		FROM users
 		WHERE id = $1 AND deleted_at IS NULL
 	`, id).Scan(
 		&u.ID, &u.TenantID, &u.Email, &u.DisplayName,
-		&u.OIDCProvider, &u.OIDCSubject, &u.IsAdmin,
+		&u.OIDCProvider, &u.OIDCSubject, &u.IsAdmin, &u.SessionVersion,
 		&u.CreatedAt, &u.UpdatedAt,
 	)
 	if err != nil {
 		return nil, asNotFound(err)
 	}
 	return &u, nil
+}
+
+// BumpSessionVersion increments session_version for the user and
+// returns the new value. Pairs with the auth-middleware check that
+// rejects JWTs whose sv claim is below the stored value — one row
+// UPDATE nukes every outstanding session for the user.
+//
+// Idempotent semantics differ from Insert: a caller that bumps
+// twice ends up at +2 (callers wanting "force-revoke now and don't
+// double-count" should rely on the new return value rather than
+// re-issuing the call).
+func (r *Users) BumpSessionVersion(ctx context.Context, userID uuid.UUID) (int, error) {
+	var next int
+	err := r.pool.QueryRow(ctx, `
+		UPDATE users
+		   SET session_version = session_version + 1,
+		       updated_at      = now()
+		 WHERE id = $1 AND deleted_at IS NULL
+		RETURNING session_version
+	`, userID).Scan(&next)
+	if err != nil {
+		return 0, asNotFound(err)
+	}
+	return next, nil
 }
 
 // ListByTenant returns every active (non-deleted) user in the tenant,
