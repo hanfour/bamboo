@@ -204,6 +204,78 @@ func (r *AuditLogs) ListByResource(ctx context.Context, tenantID uuid.UUID, reso
 	return out, rows.Err()
 }
 
+// StreamByTenantInRange iterates audit_log rows for one tenant
+// between [since, until), oldest-first, invoking the callback per
+// row. The callback owns whatever consuming the row needs to do
+// (write CSV, fold into a summary, etc.); returning a non-nil
+// error aborts the stream and propagates the error to the caller.
+//
+// Streaming (not a slice) so a multi-week export can't OOM the
+// controller — a year of busy-tenant audit could easily be 1M+
+// rows. Caller is responsible for capping `limit` to something
+// the response stream can carry within the HTTP server's
+// WriteTimeout.
+//
+// Order is ASC by occurred_at — exports are read top-to-bottom
+// chronologically so reviewers can correlate events without
+// re-sorting in their spreadsheet. (The audit feed UI uses
+// ListByTenant's DESC order; the two consumers have different
+// expectations.)
+//
+// limit <= 0 ⇒ no rows returned (defensive: a caller passing 0
+// almost certainly forgot to compute the cap, and "stream
+// everything" is what auditExportMaxRows + the handler are for).
+func (r *AuditLogs) StreamByTenantInRange(
+	ctx context.Context,
+	tenantID uuid.UUID,
+	since, until time.Time,
+	limit int,
+	visit func(*AuditEvent) error,
+) error {
+	if limit <= 0 {
+		return nil
+	}
+	rows, err := r.pool.Query(ctx, `
+		SELECT a.id, a.tenant_id, a.actor_id, a.actor_type, a.action,
+		       a.resource_type, a.resource_id, a.diff,
+		       host(a.ip_address), a.user_agent, a.occurred_at,
+		       COALESCE(u.email, '')
+		  FROM audit_log a
+		  LEFT JOIN users u
+		         ON u.id = a.actor_id
+		        AND a.actor_type = 'user'
+		 WHERE a.tenant_id = $1
+		   AND a.occurred_at >= $2
+		   AND a.occurred_at < $3
+		 ORDER BY a.occurred_at ASC
+		 LIMIT $4
+	`, tenantID, since, until, limit)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var e AuditEvent
+		var ip *string
+		var diff []byte
+		if err := rows.Scan(
+			&e.ID, &e.TenantID, &e.ActorID, &e.ActorType, &e.Action,
+			&e.ResourceType, &e.ResourceID, &diff, &ip, &e.UserAgent, &e.OccurredAt,
+			&e.ActorEmail,
+		); err != nil {
+			return err
+		}
+		if len(diff) > 0 {
+			e.Diff = diff
+		}
+		e.IPAddress = ip
+		if err := visit(&e); err != nil {
+			return err
+		}
+	}
+	return rows.Err()
+}
+
 func nullableJSON(b json.RawMessage) any {
 	if len(b) == 0 {
 		return nil
