@@ -48,7 +48,12 @@ struct ContentView: View {
 
             if showSettings {
                 Divider()
-                Group {
+                // VStack rather than Group so we're not bound by the
+                // 10-child TupleView limit — adding the stage 5
+                // regionHint field bumped us past it, which surfaced
+                // as a "TableColumn could not be inferred" red
+                // herring from the SwiftUI result builder fallback.
+                VStack(alignment: .leading, spacing: 8) {
                     LabelledField(label: "Controller URL", text: $connection.controllerURL)
                     LabelledField(label: "Tenant slug", text: $connection.tenantSlug)
 
@@ -84,6 +89,15 @@ struct ContentView: View {
 
                     LabelledField(label: "Pre-auth key (fallback)", text: $connection.preAuthKey)
                     LabelledField(label: "Relay URL (optional)", text: $connection.relayURL)
+                    // §4 P2 stage 5 region-affinity. Empty ⇒ pure RTT
+                    // ranking (pre-stage-5 behaviour). When set to a
+                    // region label that matches one in the relay
+                    // registry, the picker prefers a same-region relay
+                    // over a lower-RTT cross-region one within 50ms.
+                    // Ignored when Relay URL above is set (operator pin
+                    // takes precedence over geo bias).
+                    LabelledField(label: "Region hint (optional, e.g. ap-northeast-1)",
+                                  text: $connection.regionHint)
                     LabelledField(label: "Advertise routes (CIDRs, comma-separated; admin must approve)",
                                   text: $connection.advertiseRoutes)
                     Toggle("Offer this device as an exit node (admin approval required)",
