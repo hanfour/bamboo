@@ -26,6 +26,9 @@ export default async function SettingsPage() {
  tenantId={me.tenantId}
  tenantSlug={me.tenantSlug}
  isAdmin={Boolean(me.isAdmin)}
+ issuedAt={me.issuedAt}
+ expiresAt={me.expiresAt}
+ oidcProvider={me.oidcProvider}
  />
  );
 }
@@ -35,11 +38,17 @@ function SettingsView({
  tenantId,
  tenantSlug,
  isAdmin,
+ issuedAt,
+ expiresAt,
+ oidcProvider,
 }: {
  email: string;
  tenantId: string;
  tenantSlug: string;
  isAdmin: boolean;
+ issuedAt?: string;
+ expiresAt?: string;
+ oidcProvider?: string;
 }) {
  const t = useTranslations('settings');
  return (
@@ -57,6 +66,14 @@ function SettingsView({
  <Section title={t('account.title')}>
  <Field label={t('account.email')} value={email} />
  <Field label={t('account.role')} value={<RoleBadge admin={isAdmin} />} />
+ </Section>
+
+ <Section title={t('sessionCard.title')}>
+ <SessionCard
+ issuedAt={issuedAt}
+ expiresAt={expiresAt}
+ oidcProvider={oidcProvider}
+ />
  </Section>
 
  <Section title={t('preAuthKeysCard.title')}>
@@ -166,6 +183,81 @@ function APITokensCard() {
  </div>
  </Link>
  );
+}
+
+// CONTROLLER_BASE mirrors the TopBar value — sign-out is an HTTP
+// (not Next) endpoint so we hit the controller directly. Server-side
+// env so it's evaluated at request time, not bundled into the client.
+const CONTROLLER_BASE = process.env.BAMBOO_API_URL ?? 'http://localhost:8081';
+
+// SessionCard renders three lines: who/when of the current session,
+// time-to-expiry, and a sign-out link. Durations are rendered at
+// server-render time and do not tick — acceptable for v1 (refresh
+// works), simpler than introducing a client component.
+function SessionCard({
+ issuedAt,
+ expiresAt,
+ oidcProvider,
+}: {
+ issuedAt?: string;
+ expiresAt?: string;
+ oidcProvider?: string;
+}) {
+ const t = useTranslations('settings.sessionCard');
+ const now = Date.now();
+ const issuedMs = issuedAt ? new Date(issuedAt).getTime() : NaN;
+ const expiresMs = expiresAt ? new Date(expiresAt).getTime() : NaN;
+ const provider = formatProvider(oidcProvider, t);
+ return (
+ <div className="space-y-3 rounded-lg border border-ink-800 bg-ink-950 p-4 dark:bg-ink-950">
+ <div className="space-y-1 text-sm text-bamboo-100">
+ {Number.isFinite(issuedMs) ? (
+ <p>{t('agePrefix', { value: formatDuration(now - issuedMs), provider })}</p>
+ ) : null}
+ {Number.isFinite(expiresMs) ? (
+ expiresMs > now ? (
+ <p className="text-bamboo-200/70">
+ {t('expiresIn', { value: formatDuration(expiresMs - now) })}
+ </p>
+ ) : (
+ <p className="text-amber-300">{t('expiresPast')}</p>
+ )
+ ) : null}
+ </div>
+ <a
+ href={`${CONTROLLER_BASE}/auth/sign-out`}
+ className="inline-flex items-center text-xs font-medium text-bamboo-700 transition-colors hover:text-bamboo-800 dark:text-bamboo-300 dark:hover:text-bamboo-200"
+ >
+ {t('signOut')} →
+ </a>
+ </div>
+ );
+}
+
+function formatProvider(
+ provider: string | undefined,
+ t: ReturnType<typeof useTranslations>,
+): string {
+ if (!provider) return t('providerUnknown');
+ // Capitalize known providers ("google" → "Google") for the prose
+ // slot; unknown providers (dev-fallback, future SAML) pass through
+ // unchanged so the operator can still identify the source.
+ const known: Record<string, string> = { google: 'Google', github: 'GitHub' };
+ const label = known[provider] ?? provider;
+ return t('provider', { provider: label });
+}
+
+// formatDuration collapses a positive millisecond delta into the
+// largest non-zero unit ("3h", "21m", "12s"). Matches the s/m/h/d
+// vocabulary used by formatRelative in UsersTable so the two
+// surfaces feel coherent.
+function formatDuration(ms: number): string {
+ if (!Number.isFinite(ms) || ms < 0) return '—';
+ const s = Math.round(ms / 1000);
+ if (s < 60) return `${s}s`;
+ if (s < 3600) return `${Math.round(s / 60)}m`;
+ if (s < 86_400) return `${Math.round(s / 3600)}h`;
+ return `${Math.round(s / 86_400)}d`;
 }
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
