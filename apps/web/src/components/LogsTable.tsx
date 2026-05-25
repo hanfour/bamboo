@@ -15,11 +15,7 @@ import type { LogEvent } from '@/lib/types';
 export function LogsTable({ events }: { events: LogEvent[] }) {
  const t = useTranslations('logs');
  if (events.length === 0) {
- return (
- <p className="rounded-lg border border-dashed border-bamboo-200/30 p-8 text-center text-sm text-bamboo-200/60 dark:text-bamboo-200/40">
- {t('empty')}
- </p>
- );
+ return <LogsEmptyState />;
  }
  return (
  <div className="overflow-x-auto rounded-lg border border-ink-800">
@@ -102,4 +98,25 @@ function formatTimestamp(iso: string): string {
  const d = new Date(iso);
  if (Number.isNaN(d.getTime())) return '—';
  return d.toISOString().replace('T', ' ').replace(/\..+$/, ' UTC');
+}
+
+// LogsEmptyState replaces the prior one-line dashed-border empty
+// state. Same vocabulary as UsersEmptyState / the DNS page empty
+// card — title + body + hint inside a soft warm-bordered surface.
+// A brand-new tenant with no traffic yet lands on something
+// informative ("here's when this fills up") rather than a single
+// grey sentence that reads as broken.
+function LogsEmptyState() {
+ const t = useTranslations('logs.emptyCard');
+ return (
+ <div className="max-w-2xl space-y-3 rounded-lg border border-bamboo-200/30 bg-ink-900/40 p-6">
+ <h2 className="text-base font-medium tracking-tight text-bamboo-50">
+ {t('title')}
+ </h2>
+ <p className="text-sm leading-relaxed text-bamboo-200/70">
+ {t('body')}
+ </p>
+ <p className="text-xs text-bamboo-200/60">{t('hint')}</p>
+ </div>
+ );
 }
