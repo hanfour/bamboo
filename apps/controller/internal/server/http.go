@@ -10,10 +10,10 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"os"
+	"strconv"
 	"strings"
 	"time"
-
-	"os"
 
 	"github.com/google/uuid"
 	"github.com/hanfour/bamboo/apps/controller/internal/auth"
@@ -422,6 +422,114 @@ func (h *HTTPServer) reapExpiredInvitesOnce(ctx context.Context) {
 	}
 }
 
+// auditRetentionInterval is how often the audit-log retention
+// reaper sweeps for rows past their retention window. Hourly is
+// far less frequent than the 5-minute invite reaper because the
+// audit table is large + slow-growing — sweeping more often would
+// burn IOPS for no benefit. Package-scoped non-const so tests can
+// override.
+var auditRetentionInterval = 1 * time.Hour
+
+// auditRetentionDays is the default retention window (in days)
+// when BAMBOO_AUDIT_RETENTION_DAYS is unset. 365 picked from SOC 2
+// recommendation: a year of audit covers an annual audit cycle
+// + a quarter of overlap for incident review. Operators with
+// stricter requirements (HIPAA 6yr, financial 7yr) set the env
+// var; operators wanting aggressive cleanup set a smaller value.
+//
+// Zero or negative parsed value disables the reaper entirely —
+// equivalent to "keep audit forever, I'll manage it out-of-band".
+const auditRetentionDaysDefault = 365
+
+// auditRetentionWindow reads BAMBOO_AUDIT_RETENTION_DAYS and
+// returns the retention window. Returns 0 (zero duration) when
+// retention is explicitly disabled (env=0) or unparseable, so the
+// reaper can treat zero as "don't sweep". Logs a warning for an
+// unparseable value so the operator sees the typo rather than
+// silently falling back to the default.
+func auditRetentionWindow() time.Duration {
+	raw := os.Getenv("BAMBOO_AUDIT_RETENTION_DAYS")
+	if raw == "" {
+		return time.Duration(auditRetentionDaysDefault) * 24 * time.Hour
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil {
+		slog.Warn("audit retention: BAMBOO_AUDIT_RETENTION_DAYS unparseable; reaper disabled",
+			"value", raw, "err", err)
+		return 0
+	}
+	if n <= 0 {
+		return 0
+	}
+	return time.Duration(n) * 24 * time.Hour
+}
+
+// StartAuditRetentionReaper launches the background goroutine that
+// deletes audit_log rows older than the configured retention
+// window. Pairs with #182's append-only triggers — immutability
+// + retention together are the SOC 2 audit log story.
+//
+// Disabled (no-op goroutine) when:
+//   - BAMBOO_AUDIT_RETENTION_DAYS=0 (operator explicitly opts out)
+//   - the value is unparseable (warned at startup)
+//   - h or h.audits is nil (test fixture without a DB)
+//
+// The goroutine exits when ctx is canceled. Each sweep is one
+// `DELETE FROM audit_log WHERE occurred_at < now() - window`
+// inside a transaction with SET LOCAL bamboo.allow_audit_delete
+// (see #182). Hourly cadence — audit table is large, doesn't
+// need more frequent sweeps.
+func (h *HTTPServer) StartAuditRetentionReaper(ctx context.Context) {
+	if h == nil || h.audits == nil {
+		return
+	}
+	window := auditRetentionWindow()
+	if window == 0 {
+		slog.Info("audit retention: disabled (BAMBOO_AUDIT_RETENTION_DAYS=0 or unparseable)")
+		return
+	}
+	slog.Info("audit retention: enabled", "window_days", int(window/24/time.Hour))
+	go func() {
+		// One immediate sweep on startup so a controller restart
+		// after a long downtime catches up the backlog within the
+		// first minute rather than waiting an hour for the first
+		// tick.
+		h.reapAuditOnce(ctx, window)
+		t := time.NewTicker(auditRetentionInterval)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				h.reapAuditOnce(ctx, window)
+			}
+		}
+	}()
+}
+
+// reapAuditOnce deletes one batch of expired audit rows. Errors
+// are logged but don't abort the reaper goroutine — a transient
+// DB failure retries on the next tick.
+//
+// The DELETE itself is unbounded by row count: pgx will buffer a
+// large delete plan in memory but the transaction commits or
+// rolls back as one unit. At the cadence + window we run, daily
+// volumes are O(thousands) — well under any practical concern.
+// If audit insert rate ever spikes (e.g. high-volume webhook
+// flap), a future PR can add a LIMIT + loop.
+func (h *HTTPServer) reapAuditOnce(ctx context.Context, window time.Duration) {
+	cutoff := time.Now().UTC().Add(-window)
+	deleted, err := h.audits.DeleteOlderThan(ctx, cutoff)
+	if err != nil {
+		slog.Warn("audit retention: delete", "err", err, "cutoff", cutoff)
+		return
+	}
+	if deleted > 0 {
+		slog.Info("audit retention: swept", "deleted", deleted, "cutoff", cutoff)
+	}
+}
+
 // Run blocks until ctx is canceled or the listener errors.
 func (h *HTTPServer) Run(ctx context.Context) error {
 	// Start the webhook delivery worker so audit events fired during
@@ -430,6 +538,7 @@ func (h *HTTPServer) Run(ctx context.Context) error {
 	// below also waits for ctx cancellation so they unwind together.
 	h.StartPublisher(ctx)
 	h.StartInviteReaper(ctx)
+	h.StartAuditRetentionReaper(ctx)
 	h.StartRelayHealthReaper(ctx)
 	errCh := make(chan error, 1)
 	go func() {
