@@ -329,11 +329,24 @@
       "role": "角色",
       "provider": "登入方式",
       "createdAt": "加入時間",
-      "lastSeen": "最後活動"
+      "lastSeen": "最後活動",
+      "actions": "操作"
     },
     "role": {
       "admin": "管理員",
       "member": "成員"
+    },
+    "actions": {
+      "erase": "抹除",
+      "signOutAll": "登出全部",
+      "confirmErase": "確認抹除 {email}？無法復原。",
+      "confirmSignOutAll": "確認讓 {email} 的所有工作階段強制登出？對方下次請求就會被踢回登入頁。",
+      "confirmSignOutAllSelf": "確認登出你自己所有工作階段 —— 包含目前這個。下次請求會被踢回登入頁。",
+      "confirmYes": "確認",
+      "cancel": "取消",
+      "working": "處理中…",
+      "dismiss": "關閉",
+      "selfPlaceholder": "（你自己）"
     },
     "provider": {
       "google": "Google",

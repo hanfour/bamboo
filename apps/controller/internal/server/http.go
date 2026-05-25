@@ -271,6 +271,17 @@ func normalizeRoute(path string) string {
 			return "/api/v1/preauth-keys/{id}/revoke"
 		}
 	}
+	// /api/v1/admin/users/{id}/{action} — collapse the UUID slot
+	// so Prometheus label cardinality stays bounded across whatever
+	// admin user actions live under this prefix.
+	if rest, ok := strings.CutPrefix(path, "/api/v1/admin/users/"); ok && rest != "" {
+		if strings.HasSuffix(rest, "/erase") {
+			return "/api/v1/admin/users/{id}/erase"
+		}
+		if strings.HasSuffix(rest, "/sign-out-all") {
+			return "/api/v1/admin/users/{id}/sign-out-all"
+		}
+	}
 	// /auth/<provider>/{start,callback}, /auth/sign-out
 	if strings.HasPrefix(path, "/auth/") {
 		if path == "/auth/sign-out" {
