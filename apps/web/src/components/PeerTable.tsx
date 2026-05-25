@@ -5,6 +5,7 @@
 import { useState } from 'react';
 import { useTranslations } from 'next-intl';
 import type { Peer } from '@/lib/types';
+import { PeerRowMenu } from './PeerRowMenu';
 
 type Props = {
  peers: Peer[];
@@ -55,6 +56,7 @@ export function PeerTable({ peers, selectedId, onSelect }: Props) {
  <th className="px-3 py-3 font-medium">{t('columns.os')}</th>
  <th className="px-3 py-3 font-medium">{t('columns.status')}</th>
  <th className="px-3 py-3 font-medium">{t('columns.lastSeen')}</th>
+ <th className="w-10 px-3 py-3 font-medium" aria-label={t('columns.actions')} />
  </tr>
  </thead>
  <tbody className="divide-y divide-ink-800/70">
@@ -130,6 +132,9 @@ export function PeerTable({ peers, selectedId, onSelect }: Props) {
  </td>
  <td className="px-3 py-3 align-top text-xs text-bamboo-200/60">
  {p.lastSeenAt ? formatRelative(p.lastSeenAt) : '—'}
+ </td>
+ <td className="px-3 py-3 text-right align-top">
+ <PeerRowMenu peer={p} />
  </td>
  </tr>
  );
