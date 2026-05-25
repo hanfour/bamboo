@@ -4,7 +4,7 @@
 
 import { useState, useTransition } from 'react';
 import { useTranslations } from 'next-intl';
-import { eraseUserAction } from '@/lib/actions';
+import { eraseUserAction, signOutAllSessionsAction } from '@/lib/actions';
 import type { User } from '@/lib/types';
 
 // UsersTable mirrors PeerTable's visual vocabulary (hairline border,
@@ -75,11 +75,13 @@ export function UsersTable({
  </td>
  {meIsAdmin && (
  <td className="px-4 py-3 text-xs">
- {u.id === meId ? (
- <span className="text-bamboo-200/40">{t('actions.selfPlaceholder')}</span>
- ) : (
- <EraseUserButton id={u.id} email={u.email} />
- )}
+ <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+ {/* sign-out-all is allowed on self (the admin can
+ invalidate their own other-device sessions); erase
+ is blocked on self server-side, hidden client-side */}
+ <SignOutAllSessionsButton id={u.id} email={u.email} isSelf={u.id === meId} />
+ {u.id === meId ? null : <EraseUserButton id={u.id} email={u.email} />}
+ </div>
  </td>
  )}
  </tr>
@@ -87,6 +89,89 @@ export function UsersTable({
  </tbody>
  </table>
  </div>
+ );
+}
+
+// SignOutAllSessionsButton fires the slice-3b force-sign-out via
+// /api/v1/admin/users/{id}/sign-out-all (#218). Two-step confirm
+// matching the EraseUserButton vocabulary; the dialog warns when
+// the target is the caller (the click will sign the admin out of
+// the current session on the next request).
+//
+// Backend response is 200 with the new sessionVersion; we just
+// revalidate the list (the UI doesn't surface the counter today,
+// the audit log is where operators verify the action landed).
+function SignOutAllSessionsButton({
+ id,
+ email,
+ isSelf,
+}: {
+ id: string;
+ email: string;
+ isSelf: boolean;
+}) {
+ const t = useTranslations('users.actions');
+ const [confirming, setConfirming] = useState(false);
+ const [error, setError] = useState<string | null>(null);
+ const [pending, startTransition] = useTransition();
+
+ if (error) {
+ return (
+ <div className="space-y-1">
+ <span className="text-red-400">{error}</span>
+ <button
+ type="button"
+ onClick={() => setError(null)}
+ className="text-bamboo-200/60 underline hover:text-bamboo-50"
+ >
+ {t('dismiss')}
+ </button>
+ </div>
+ );
+ }
+
+ if (confirming) {
+ return (
+ <div className="flex items-center gap-2">
+ <span className="text-amber-400">
+ {isSelf ? t('confirmSignOutAllSelf') : t('confirmSignOutAll', { email })}
+ </span>
+ <button
+ type="button"
+ disabled={pending}
+ onClick={() =>
+ startTransition(async () => {
+ const res = await signOutAllSessionsAction(id);
+ if (!res.ok) {
+ setError(res.error ?? 'unknown error');
+ }
+ setConfirming(false);
+ })
+ }
+ className="font-medium text-amber-400 underline hover:text-amber-300 disabled:opacity-50"
+ >
+ {pending ? t('working') : t('confirmYes')}
+ </button>
+ <button
+ type="button"
+ disabled={pending}
+ onClick={() => setConfirming(false)}
+ className="text-bamboo-200/60 underline hover:text-bamboo-50 disabled:opacity-50"
+ >
+ {t('cancel')}
+ </button>
+ </div>
+ );
+ }
+
+ return (
+ <button
+ type="button"
+ onClick={() => setConfirming(true)}
+ className="text-bamboo-200/60 underline hover:text-amber-400"
+ >
+ {t('signOutAll')}
+ </button>
  );
 }
 
