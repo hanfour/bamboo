@@ -235,8 +235,22 @@ func runUp(cmd *cobra.Command, _ []string) error {
 	// set at bring-up, the operator pinned this client and we
 	// don't second-guess them. regionHint biases the picker
 	// toward a same-region relay (§4 P2 stage 5).
+	//
+	// §4 P2 stage 5.5b: when the user didn't set a local hint,
+	// fall back to whatever the controller inferred from our
+	// register-time request IP (resp.GetPreferredRegion()).
+	// Local hint wins so an operator who explicitly chose
+	// "us-west-1" doesn't get overridden by a server table
+	// matching a wider CIDR to "us-east-1". Empty on both sides
+	// ⇒ pure RTT ranking, same as before stage 5.
 	pinned := os.Getenv("BAMBOO_RELAY_URL") != ""
 	regionHint := os.Getenv("BAMBOO_REGION_HINT")
+	if regionHint == "" {
+		regionHint = resp.GetPreferredRegion()
+		if regionHint != "" {
+			slog.Info("region hint: using controller-inferred", "region", regionHint)
+		}
+	}
 	reapply := &deviceReapplier{dev: dev, base: cfg}
 	onRelaysChanged := func(handlerCtx context.Context, servers []*bamboov1.RelayServer) {
 		if pinned {
@@ -442,10 +456,17 @@ func pickFreeUDPPort() (uint16, error) {
 func maybeOpenRelay(ctx context.Context, resp *bamboov1.RegisterResponse, priv wg.PrivateKey, session *peerSession) (*relay.Client, clientsync.PeerRelayMap, string, error) {
 	relayURL := os.Getenv("BAMBOO_RELAY_URL")
 	if relayURL == "" {
-		// Fall through to the controller-supplied list. BAMBOO_REGION_HINT
-		// biases the picker toward a same-region relay within tolerance
-		// (stage 5); empty ⇒ pure RTT ranking.
-		picked, err := pickRelay(ctx, resp.GetRelayServers(), os.Getenv("BAMBOO_REGION_HINT"))
+		// Fall through to the controller-supplied list. Region
+		// preference precedence (§4 P2 stages 5 + 5.5b):
+		//   1. BAMBOO_REGION_HINT env (operator pinned per device)
+		//   2. resp.PreferredRegion (controller inferred from our
+		//      request IP via stage 5.5a's CIDR table)
+		//   3. "" (no preference; pure RTT ranking)
+		hint := os.Getenv("BAMBOO_REGION_HINT")
+		if hint == "" {
+			hint = resp.GetPreferredRegion()
+		}
+		picked, err := pickRelay(ctx, resp.GetRelayServers(), hint)
 		if err != nil {
 			slog.Warn("relay picker: no usable relay; continuing direct-only", "err", err)
 			return nil, nil, "", nil

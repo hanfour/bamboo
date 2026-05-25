@@ -390,9 +390,19 @@ type RegisterResponse struct {
 	// policy_revision is monotonically increasing and used for cache invalidation.
 	PolicyRevision int64 `protobuf:"varint,3,opt,name=policy_revision,json=policyRevision,proto3" json:"policy_revision,omitempty"`
 	// relay_servers are DERP-style relays the client may use as fallback.
-	RelayServers  []*RelayServer `protobuf:"bytes,4,rep,name=relay_servers,json=relayServers,proto3" json:"relay_servers,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	RelayServers []*RelayServer `protobuf:"bytes,4,rep,name=relay_servers,json=relayServers,proto3" json:"relay_servers,omitempty"`
+	// preferred_region is the controller's best guess at the client's
+	// region (§4 P2 multi-relay stage 5.5). Derived from the client's
+	// request IP against an operator-supplied CIDR table. Empty when no
+	// table is configured or no CIDR matches — clients then fall back
+	// to pure RTT ranking or their own local region hint.
+	//
+	// Clients precedence: local hint (env / Settings) wins over this
+	// server-supplied value. The server hint is the "fleet-wide
+	// default"; an individual operator may still override per-device.
+	PreferredRegion string `protobuf:"bytes,5,opt,name=preferred_region,json=preferredRegion,proto3" json:"preferred_region,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *RegisterResponse) Reset() {
@@ -451,6 +461,13 @@ func (x *RegisterResponse) GetRelayServers() []*RelayServer {
 		return x.RelayServers
 	}
 	return nil
+}
+
+func (x *RegisterResponse) GetPreferredRegion() string {
+	if x != nil {
+		return x.PreferredRegion
+	}
+	return ""
 }
 
 type RelayServer struct {
@@ -1370,12 +1387,13 @@ const file_bamboo_v1_coordinator_proto_rawDesc = "" +
 	"\x0eclient_version\x18\x06 \x01(\tR\rclientVersion\x12\x1c\n" +
 	"\tendpoints\x18\a \x03(\tR\tendpointsB\f\n" +
 	"\n" +
-	"credential\"\xc4\x01\n" +
+	"credential\"\xef\x01\n" +
 	"\x10RegisterResponse\x12#\n" +
 	"\x04self\x18\x01 \x01(\v2\x0f.bamboo.v1.PeerR\x04self\x12%\n" +
 	"\x05peers\x18\x02 \x03(\v2\x0f.bamboo.v1.PeerR\x05peers\x12'\n" +
 	"\x0fpolicy_revision\x18\x03 \x01(\x03R\x0epolicyRevision\x12;\n" +
-	"\rrelay_servers\x18\x04 \x03(\v2\x16.bamboo.v1.RelayServerR\frelayServers\"\x84\x01\n" +
+	"\rrelay_servers\x18\x04 \x03(\v2\x16.bamboo.v1.RelayServerR\frelayServers\x12)\n" +
+	"\x10preferred_region\x18\x05 \x01(\tR\x0fpreferredRegion\"\x84\x01\n" +
 	"\vRelayServer\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x16\n" +
 	"\x06region\x18\x02 \x01(\tR\x06region\x12\x1a\n" +

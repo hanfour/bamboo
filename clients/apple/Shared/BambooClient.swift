@@ -130,10 +130,18 @@ public struct BambooClient {
         /// still decodes — empty / missing ⇒ direct-only mesh
         /// unless the user typed a relayURL in Settings.
         public var relayServers: [RelayServer]?
+        /// Controller-inferred region hint (§4 P2 multi-relay
+        /// stage 5.5b). Set when the operator configured
+        /// BAMBOO_REGION_CIDRS on the controller AND our request
+        /// IP matched an entry. Local Settings hint wins —
+        /// this is the fleet-wide default for clients that
+        /// didn't pin one themselves. Optional / nilable so a
+        /// controller without stage 5.5a still decodes.
+        public var preferredRegion: String?
 
         enum CodingKeys: String, CodingKey {
             case self_ = "self"
-            case peers, policyRevision, peerSessionToken, peerSessionExpiresAt, relayServers
+            case peers, policyRevision, peerSessionToken, peerSessionExpiresAt, relayServers, preferredRegion
         }
     }
 
