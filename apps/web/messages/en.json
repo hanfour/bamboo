@@ -574,6 +574,16 @@
       "title": "Relay servers",
       "description": "Shared infrastructure that forwards WireGuard packets for peers behind symmetric NAT. The controller probes each one every 30s and flags unreachable ones.",
       "link": "Go to Relay servers"
+    },
+    "auditExportCard": {
+      "title": "Audit log export",
+      "description": "Download a CSV of this tenant's audit log for SOC 2 incident review or GDPR Article 15 subject-access. One row per audited event; diff column carries the raw JSON.",
+      "range": {
+        "last7d": "Last 7 days",
+        "last30d": "Last 30 days",
+        "last90d": "Last 90 days"
+      },
+      "hint": "Capped at 50,000 rows per download. For longer history, chunk by date range via /api/audit-export?since=…&until=…."
     }
   },
   "invite": {

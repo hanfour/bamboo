@@ -574,6 +574,16 @@
       "title": "Relay 伺服器",
       "description": "共用基礎設施，協助位於對稱 NAT 後的節點轉發 WireGuard 封包。Controller 每 30 秒探測一次，無法到達者會自動隱藏。",
       "link": "前往 Relay 伺服器"
+    },
+    "auditExportCard": {
+      "title": "稽核日誌匯出",
+      "description": "下載本租戶的稽核日誌 CSV，可用於 SOC 2 事件審查或 GDPR Article 15 subject-access。每筆事件一列，diff 欄位帶原始 JSON。",
+      "range": {
+        "last7d": "近 7 天",
+        "last30d": "近 30 天",
+        "last90d": "近 90 天"
+      },
+      "hint": "單次下載上限 5 萬列。要更長歷史請按日期區段呼叫 /api/audit-export?since=…&until=…。"
     }
   },
   "invite": {
