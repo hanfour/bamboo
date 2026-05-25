@@ -138,6 +138,10 @@ func NewHTTPServer(
 	mux.HandleFunc("/auth/", h.routeAuth)
 	mux.HandleFunc("/auth/sign-out", h.handleSignOut)
 	mux.HandleFunc("/api/v1/admin/relays", h.routeAdminRelays)
+	// Prefix handler for /api/v1/admin/users/{id}/erase. Defaults to
+	// 404 for unmatched sub-paths under /admin/users/ so a typo
+	// surfaces as missing rather than as a misrouted endpoint.
+	mux.HandleFunc("/api/v1/admin/users/", h.routeAdminUsersSub)
 	mux.HandleFunc("/api/v1/relay-token", h.routeRelayToken)
 	mux.HandleFunc("/api/v1/", h.routeAPI)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
@@ -266,6 +270,12 @@ func normalizeRoute(path string) string {
 	if rest, ok := strings.CutPrefix(path, "/api/v1/preauth-keys/"); ok && rest != "" {
 		if strings.HasSuffix(rest, "/revoke") {
 			return "/api/v1/preauth-keys/{id}/revoke"
+		}
+	}
+	// /api/v1/admin/users/{id}/erase
+	if rest, ok := strings.CutPrefix(path, "/api/v1/admin/users/"); ok && rest != "" {
+		if strings.HasSuffix(rest, "/erase") {
+			return "/api/v1/admin/users/{id}/erase"
 		}
 	}
 	// /auth/<provider>/{start,callback}, /auth/sign-out

@@ -107,6 +107,80 @@ func (r *Users) ListByTenant(ctx context.Context, tenantID uuid.UUID) ([]*User, 
 	return out, rows.Err()
 }
 
+// Erase performs a GDPR Article 17 right-to-erasure on the
+// target user (§4 P2 compliance). In one transaction:
+//
+//  1. Fetch the user's email so we can scrub invitations
+//     addressed to the same email below.
+//  2. Redact user_invitations matching that email (set to a
+//     deterministic placeholder so re-erasure of the same
+//     email is idempotent and the partial-unique-index on
+//     pending invites isn't blocked).
+//  3. Hard-DELETE the user row. Cascade FKs handle the rest:
+//     peers.user_id → NULL (peer survives, owner shown as "—"),
+//     pre_auth_keys.created_by → NULL, acl_policies.applied_by
+//     → NULL, user_invitations.invited_by/accepted_by → NULL,
+//     user_group_members → CASCADE delete.
+//
+// audit_log.actor_id has no FK to users (per the 00001 schema
+// comment "not FK so deleted users still appear"), so the
+// LEFT JOIN in ListByTenant naturally returns empty email for
+// historical events authored by the erased user — exactly the
+// GDPR-compliant rendering.
+//
+// Returns ErrNotFound when no row matches, including the
+// already-erased case (idempotent — caller treats both the same).
+//
+// Audit-log entry for the erasure itself is the CALLER's
+// responsibility: this function runs the data plane; the
+// admin handler writes "user.erase" with the actor=admin so
+// the audit trail records WHO erased WHOM, by uuid (the
+// erased user's email is hashed in the audit diff so the
+// row stays verifiable without re-introducing the PII).
+func (r *Users) Erase(ctx context.Context, userID uuid.UUID) error {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var email string
+	if err := tx.QueryRow(ctx,
+		`SELECT email FROM users WHERE id = $1 AND deleted_at IS NULL`,
+		userID,
+	).Scan(&email); err != nil {
+		return asNotFound(err)
+	}
+
+	// Redact invitations addressed to this email. Use a fixed
+	// placeholder so a second erasure of the same email (e.g.
+	// they re-invited + immediately re-erased) doesn't violate
+	// the partial-unique-index on (tenant_id, email) WHERE
+	// pending — it would, because the placeholder is the same.
+	// But invitations addressed to an erased email can't be
+	// pending (they're either revoked or accepted — accepted's
+	// user row was just deleted; revoked is fine). So in practice
+	// only revoked/accepted rows get the placeholder, and the
+	// partial-unique-index excludes them.
+	if _, err := tx.Exec(ctx,
+		`UPDATE user_invitations SET email = '<erased>' WHERE email = $1`,
+		email,
+	); err != nil {
+		return err
+	}
+
+	// The DELETE is what GDPR Article 17 actually requires.
+	// Cascade FKs (declared in 00001) handle the dependent rows.
+	if _, err := tx.Exec(ctx,
+		`DELETE FROM users WHERE id = $1`,
+		userID,
+	); err != nil {
+		return err
+	}
+
+	return tx.Commit(ctx)
+}
+
 // GetByEmail returns a user within the given tenant by email.
 func (r *Users) GetByEmail(ctx context.Context, tenantID uuid.UUID, email string) (*User, error) {
 	var u User
