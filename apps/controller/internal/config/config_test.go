@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 const validBody = `
@@ -74,4 +75,65 @@ func TestLoad_envOverride(t *testing.T) {
 	if cfg.Database.URL != "postgres://from-env" {
 		t.Errorf("Database.URL = %q, want postgres://from-env", cfg.Database.URL)
 	}
+}
+
+// TestApplyEnvOverrides_ReleaseFeed pins the three BAMBOO_RELEASE_FEED_*
+// env vars surface into the Config struct as expected, including the
+// 5-minute floor on interval (rate-limit headroom against GitHub's
+// 60-req/hr unauthenticated quota).
+func TestApplyEnvOverrides_ReleaseFeed(t *testing.T) {
+	t.Run("defaults when unset", func(t *testing.T) {
+		t.Setenv("BAMBOO_RELEASE_FEED_ENABLED", "")
+		t.Setenv("BAMBOO_RELEASE_FEED_REPO", "")
+		t.Setenv("BAMBOO_RELEASE_FEED_INTERVAL", "")
+		var c Config
+		c.applyEnvOverrides()
+		if !c.ReleaseFeed.Enabled {
+			t.Errorf("Enabled default = false, want true")
+		}
+		if c.ReleaseFeed.Repo != "hanfour/bamboo" {
+			t.Errorf("Repo default = %q, want hanfour/bamboo", c.ReleaseFeed.Repo)
+		}
+		if c.ReleaseFeed.Interval != time.Hour {
+			t.Errorf("Interval default = %v, want 1h", c.ReleaseFeed.Interval)
+		}
+	})
+	t.Run("env overrides", func(t *testing.T) {
+		t.Setenv("BAMBOO_RELEASE_FEED_ENABLED", "false")
+		t.Setenv("BAMBOO_RELEASE_FEED_REPO", "myorg/mybamboo")
+		t.Setenv("BAMBOO_RELEASE_FEED_INTERVAL", "30m")
+		var c Config
+		c.applyEnvOverrides()
+		if c.ReleaseFeed.Enabled {
+			t.Errorf("Enabled = true, want false")
+		}
+		if c.ReleaseFeed.Repo != "myorg/mybamboo" {
+			t.Errorf("Repo = %q, want myorg/mybamboo", c.ReleaseFeed.Repo)
+		}
+		if c.ReleaseFeed.Interval != 30*time.Minute {
+			t.Errorf("Interval = %v, want 30m", c.ReleaseFeed.Interval)
+		}
+	})
+	t.Run("interval clamps to 5m floor", func(t *testing.T) {
+		t.Setenv("BAMBOO_RELEASE_FEED_ENABLED", "")
+		t.Setenv("BAMBOO_RELEASE_FEED_REPO", "")
+		t.Setenv("BAMBOO_RELEASE_FEED_INTERVAL", "1m")
+		var c Config
+		c.applyEnvOverrides()
+		c.validate() //nolint:errcheck // testing clamp side-effect only
+		if c.ReleaseFeed.Interval != 5*time.Minute {
+			t.Errorf("Interval = %v after clamp, want 5m", c.ReleaseFeed.Interval)
+		}
+	})
+	t.Run("invalid repo disables feed", func(t *testing.T) {
+		t.Setenv("BAMBOO_RELEASE_FEED_ENABLED", "true")
+		t.Setenv("BAMBOO_RELEASE_FEED_REPO", "no-slash-no-repo")
+		t.Setenv("BAMBOO_RELEASE_FEED_INTERVAL", "")
+		var c Config
+		c.applyEnvOverrides()
+		c.validate() //nolint:errcheck // testing disable side-effect only
+		if c.ReleaseFeed.Enabled {
+			t.Errorf("Enabled = true after invalid repo, want false")
+		}
+	})
 }

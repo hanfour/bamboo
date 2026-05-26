@@ -5,8 +5,11 @@ package config
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"strconv"
+	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -19,13 +22,24 @@ func parseInt(s string) (int, error) { return strconv.Atoi(s) }
 
 // Config is the top-level controller configuration.
 type Config struct {
-	Server     ServerConfig     `yaml:"server"`
-	Database   DatabaseConfig   `yaml:"database"`
-	Redis      RedisConfig      `yaml:"redis"`
-	ClickHouse ClickHouseConfig `yaml:"clickhouse"`
-	Auth       AuthConfig       `yaml:"auth"`
-	WGSync     WGSyncConfig     `yaml:"wgsync"`
-	SMTP       SMTPConfig       `yaml:"smtp"`
+	Server      ServerConfig      `yaml:"server"`
+	Database    DatabaseConfig    `yaml:"database"`
+	Redis       RedisConfig       `yaml:"redis"`
+	ClickHouse  ClickHouseConfig  `yaml:"clickhouse"`
+	Auth        AuthConfig        `yaml:"auth"`
+	WGSync      WGSyncConfig      `yaml:"wgsync"`
+	SMTP        SMTPConfig        `yaml:"smtp"`
+	ReleaseFeed ReleaseFeedConfig `yaml:"release_feed"`
+}
+
+// ReleaseFeedConfig drives the GitHub-releases poller that powers
+// the PeerTable version-upgrade indicator. Operators in air-gapped
+// deployments should set Enabled=false; everyone else leaves the
+// defaults and gets the indicator for free.
+type ReleaseFeedConfig struct {
+	Enabled  bool          `yaml:"enabled"`
+	Repo     string        `yaml:"repo"`
+	Interval time.Duration `yaml:"interval"`
 }
 
 // SMTPConfig configures the optional outbound SMTP relay used for
@@ -248,10 +262,49 @@ func (c *Config) applyEnvOverrides() {
 	if v := os.Getenv("BAMBOO_WG_ONLINE_WINDOW"); v != "" {
 		c.WGSync.OnlineWindow = v
 	}
+	// Release feed defaults; env overrides apply on top.
+	if c.ReleaseFeed.Repo == "" {
+		c.ReleaseFeed.Repo = "hanfour/bamboo"
+	}
+	if c.ReleaseFeed.Interval == 0 {
+		c.ReleaseFeed.Interval = time.Hour
+	}
+	// Enabled defaults to true UNLESS the env explicitly opts out.
+	c.ReleaseFeed.Enabled = true
+	if v := os.Getenv("BAMBOO_RELEASE_FEED_ENABLED"); v != "" {
+		c.ReleaseFeed.Enabled = v == "true" || v == "1"
+	}
+	if v := os.Getenv("BAMBOO_RELEASE_FEED_REPO"); v != "" {
+		c.ReleaseFeed.Repo = v
+	}
+	if v := os.Getenv("BAMBOO_RELEASE_FEED_INTERVAL"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			c.ReleaseFeed.Interval = d
+		}
+	}
 }
 
 // validate enforces minimum required fields.
 func (c *Config) validate() error {
+	// Release feed: clamp interval to 5m floor + validate the repo
+	// shape. A bad repo disables the feed entirely so the operator
+	// gets "no badge" instead of "every fetch errors". Run first so
+	// callers that only need the side-effects (tests, partial configs)
+	// always get a normalised ReleaseFeed regardless of other errors.
+	if c.ReleaseFeed.Enabled {
+		if c.ReleaseFeed.Interval < 5*time.Minute {
+			slog.Warn("release_feed: interval below 5m floor, clamping",
+				"requested", c.ReleaseFeed.Interval, "floor", 5*time.Minute)
+			c.ReleaseFeed.Interval = 5 * time.Minute
+		}
+		// Shape: exactly one "/", non-empty on both sides.
+		parts := strings.Split(c.ReleaseFeed.Repo, "/")
+		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+			slog.Warn("release_feed: invalid repo, disabling",
+				"repo", c.ReleaseFeed.Repo)
+			c.ReleaseFeed.Enabled = false
+		}
+	}
 	if c.Server.GRPCAddr == "" {
 		return fmt.Errorf("server.grpc_addr is required")
 	}
