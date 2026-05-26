@@ -137,6 +137,17 @@ func NewHTTPServer(
 	h.publisher = webhooks.New(h.webhooks, nil)
 	h.audits.SetHook(h.publisher)
 
+	// Per-tenant gauges run on each /metrics scrape via the
+	// prometheus.Collector interface. Failure to register a
+	// duplicate collector would mean the metrics package itself is
+	// double-allocating — fatal at startup, not silent at scrape
+	// time. Production NewHTTPServer is called once per process; the
+	// e2e fixture (which spins fresh HTTPServers per test) also
+	// instantiates a fresh Registry so no collision.
+	tenantCollector := metrics.NewTenantCollector(pool)
+	if err := tenantCollector.Register(h.metrics); err != nil {
+		slog.Warn("metrics: tenant collector registration failed", "err", err)
+	}
 	mux.HandleFunc("/auth/", h.routeAuth)
 	mux.HandleFunc("/auth/sign-out", h.handleSignOut)
 	mux.HandleFunc("/api/v1/admin/relays", h.routeAdminRelays)
