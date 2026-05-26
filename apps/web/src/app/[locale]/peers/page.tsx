@@ -56,7 +56,8 @@ export default async function PeersPage({
 
  return (
  <Peers
- peers={peers.value}
+ peers={peers.value.peers}
+ latestClientVersion={peers.value.latestClientVersion}
  selectedPeer={selectedPeer}
  selectedEvents={selectedEvents}
  selectedConnectionEvents={selectedConnectionEvents}
@@ -70,6 +71,7 @@ export default async function PeersPage({
 
 function Peers({
  peers,
+ latestClientVersion,
  selectedPeer,
  selectedEvents,
  selectedConnectionEvents,
@@ -79,6 +81,7 @@ function Peers({
  tenantSlug,
 }: {
  peers: Peer[];
+ latestClientVersion?: string;
  selectedPeer: FetchResult<Peer> | null;
  selectedEvents: PeerEvent[];
  selectedConnectionEvents: PeerConnectionEvent[];
@@ -113,6 +116,7 @@ function Peers({
  </header>
  <PeersView
  peers={peers}
+ latestClientVersion={latestClientVersion}
  selectedPeer={selectedPeer}
  selectedEvents={selectedEvents}
  selectedConnectionEvents={selectedConnectionEvents}

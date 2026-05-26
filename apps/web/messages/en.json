@@ -106,6 +106,7 @@
       "owner": "Owner",
       "tags": "Tags",
       "os": "OS",
+      "clientVersion": "Client ver",
       "status": "Status",
       "lastSeen": "Last seen",
       "actions": "Actions"
@@ -122,6 +123,8 @@
       "errorPrefix": "Failed:"
     },
     "ownerUnknown": "—",
+    "upgradeAvailable": "{current} → {latest} available",
+    "noVersion": "—",
     "status": {
       "online": "Online",
       "offline": "Offline",

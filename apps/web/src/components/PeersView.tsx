@@ -12,6 +12,12 @@ import { PendingPeersList } from './PendingPeersList';
 
 type Props = {
   peers: Peer[];
+  // latestClientVersion: tenant's controller view of the newest
+  // stable client release, surfaced once at the page level so the
+  // PeerTable cell can compare every row against the same value.
+  // Absent when the controller's release-feed poller is disabled or
+  // stale; the cell treats both as "no badge".
+  latestClientVersion?: string;
   selectedPeer: FetchResult<Peer> | null;
   selectedEvents: PeerEvent[];
   selectedConnectionEvents: PeerConnectionEvent[];
@@ -31,6 +37,7 @@ type Props = {
 // the row, but it doesn't belong in the active-membership view.
 export function PeersView({
   peers,
+  latestClientVersion,
   selectedPeer,
   selectedEvents,
   selectedConnectionEvents,
@@ -64,7 +71,12 @@ export function PeersView({
   return (
     <div className="space-y-8">
       {pending.length > 0 && <PendingPeersList peers={pending} />}
-      <PeerTable peers={active} selectedId={selectedId} onSelect={(id) => setSelected(id)} />
+      <PeerTable
+        peers={active}
+        latestClientVersion={latestClientVersion}
+        selectedId={selectedId}
+        onSelect={(id) => setSelected(id)}
+      />
       <PeerDrawer
         peerResult={selectedPeer}
         events={selectedEvents}

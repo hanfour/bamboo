@@ -32,6 +32,7 @@ import type {
   LogEvent,
   Peer,
   PeerEvent,
+  PeersResponse,
   PolicyHistoryRow,
   PreAuthKey,
   User,
@@ -55,6 +56,11 @@ type ApiPeer = {
   tags: string[];
   os: string;
   clientVersion: string;
+  // upgradeAvailable: controller sets this true when clientVersion is
+  // strictly behind the release-feed's latest tag. Absent on pre-#226
+  // controllers and when the peer is up-to-date / feed disabled.
+  // Wire shape is `true | absent` (omitempty on false) — never null.
+  upgradeAvailable?: boolean;
   status: 'online' | 'offline' | 'disabled';
   wireguardPublicKey?: string;
   endpoints?: string[];
@@ -96,6 +102,7 @@ function apiPeerToPeer(p: ApiPeer): Peer {
     tags: p.tags ?? [],
     os: p.os,
     clientVersion: p.clientVersion,
+    upgradeAvailable: p.upgradeAvailable,
     status: p.status,
     wireguardPublicKey: p.wireguardPublicKey,
     endpoints: p.endpoints ?? [],
@@ -223,10 +230,22 @@ export async function fetchMe(): Promise<ApiMe> {
   return { authenticated: false, tenantId: '', tenantSlug: TENANT };
 }
 
-export async function fetchPeers(): Promise<FetchResult<Peer[]>> {
-  const r = await fetchResult<{ peers: ApiPeer[] }>('/api/v1/peers');
+export async function fetchPeers(): Promise<FetchResult<PeersResponse>> {
+  // Wire shape: { peers: ApiPeer[], latestClientVersion?: string }.
+  // The list-versus-detail asymmetry — only the list carries
+  // latestClientVersion — keeps the per-peer GET free of a field
+  // that's identical across every row of the same tenant snapshot.
+  const r = await fetchResult<{ peers: ApiPeer[]; latestClientVersion?: string | null }>(
+    '/api/v1/peers',
+  );
   if (r.kind !== 'ok') return r;
-  return { kind: 'ok', value: r.value.peers.map(apiPeerToPeer) };
+  return {
+    kind: 'ok',
+    value: {
+      peers: r.value.peers.map(apiPeerToPeer),
+      latestClientVersion: r.value.latestClientVersion ?? undefined,
+    },
+  };
 }
 
 // fetchPeer is the per-id read used by the drawer; same variants as

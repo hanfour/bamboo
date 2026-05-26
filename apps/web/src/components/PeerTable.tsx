@@ -9,6 +9,12 @@ import { PeerRowMenu } from './PeerRowMenu';
 
 type Props = {
  peers: Peer[];
+ // latestClientVersion is the tenant's controller view of the newest
+ // stable client release, threaded in once at the page level so every
+ // row compares against the same value. Absent (undefined) when the
+ // release-feed poller is disabled or stale — both states surface as
+ // "no badge anywhere" in the cell.
+ latestClientVersion?: string;
  selectedId?: string;
  onSelect: (id: string) => void;
 };
@@ -27,7 +33,7 @@ type Props = {
 // - Tags are borderless ghost text — Tailscale-style underlined
 // chips would compete with row hover, and Muji-leaning means
 // less chrome.
-export function PeerTable({ peers, selectedId, onSelect }: Props) {
+export function PeerTable({ peers, latestClientVersion, selectedId, onSelect }: Props) {
  const t = useTranslations('peers');
  const [expandedId, setExpandedId] = useState<string | null>(null);
 
@@ -54,6 +60,9 @@ export function PeerTable({ peers, selectedId, onSelect }: Props) {
  <th className="px-3 py-3 font-medium">{t('columns.owner')}</th>
  <th className="px-3 py-3 font-medium">{t('columns.tags')}</th>
  <th className="px-3 py-3 font-medium">{t('columns.os')}</th>
+ <th className="hidden px-3 py-3 font-medium lg:table-cell">
+ {t('columns.clientVersion')}
+ </th>
  <th className="px-3 py-3 font-medium">{t('columns.status')}</th>
  <th className="px-3 py-3 font-medium">{t('columns.lastSeen')}</th>
  <th className="w-10 px-3 py-3 font-medium" aria-label={t('columns.actions')} />
@@ -123,6 +132,13 @@ export function PeerTable({ peers, selectedId, onSelect }: Props) {
  </div>
  </td>
  <td className="px-3 py-3 align-top text-xs text-bamboo-200/60">{p.os}</td>
+ <td className="hidden px-3 py-3 align-top lg:table-cell">
+ <ClientVersionCell
+ version={p.clientVersion}
+ latest={latestClientVersion}
+ upgradeAvailable={p.upgradeAvailable}
+ />
+ </td>
  <td className="px-3 py-3 align-top">
  <StatusBadge
  status={p.status}
@@ -157,6 +173,54 @@ function DnsNameCell({ name }: { name: string | undefined }) {
  <span className="font-mono text-xs">
  <span className="text-bamboo-100">{name}</span>
  <span className="text-bamboo-200/40">.bamboo</span>
+ </span>
+ );
+}
+
+// ClientVersionCell renders the peer's reported client version with
+// an optional amber upgrade hint. Three visual states:
+//   1. version absent     — em-dash placeholder ('peers.noVersion'),
+//                           same vocabulary as DnsNameCell's empty
+//                           legacy-row state. Happens for very-old
+//                           peers that registered before the
+//                           clientVersion column existed.
+//   2. up-to-date / ahead — mono version string, no glyph. Implicit
+//                           "you're fine"; absence of the amber arrow
+//                           is the affordance.
+//   3. upgrade available  — version + amber "↑ <latest>" inline glyph
+//                           and a tooltip rendering the ICU template.
+//                           Amber-300 chosen over red so the surface
+//                           reads as advisory, not failure (a slightly
+//                           old client still works).
+//
+// The column is hidden below lg via Tailwind's hidden lg:table-cell on
+// the <th> and <td> to keep the min-w-[860px] horizontal scroll from
+// growing on narrow viewports.
+function ClientVersionCell({
+ version,
+ latest,
+ upgradeAvailable,
+}: {
+ version?: string;
+ latest?: string;
+ upgradeAvailable?: boolean;
+}) {
+ const t = useTranslations('peers');
+ if (!version) {
+ return <span className="text-bamboo-200/40">{t('noVersion')}</span>;
+ }
+ if (!upgradeAvailable || !latest) {
+ return <span className="font-mono text-xs">{version}</span>;
+ }
+ return (
+ <span className="font-mono text-xs">
+  {version}{' '}
+  <span
+   className="text-amber-300"
+   aria-label={t('upgradeAvailable', { current: version, latest })}
+  >
+   ↑ {latest}
+  </span>
  </span>
  );
 }
