@@ -104,10 +104,10 @@ func NewHTTPServer(
 		revoked:     repo.NewRevokedSessions(pool),
 		// Default mailer is the no-op sender — server boot calls
 		// SetMailer to wire in the real SMTP relay when configured.
-		mailer:     mail.New(config.SMTPConfig{}),
-		traces:     clickhouse.NewTraces(ch),
-		anomalies:  clickhouse.NewAnomalies(ch),
-		connEvents: clickhouse.NewConnectionEvents(ch),
+		mailer:      mail.New(config.SMTPConfig{}),
+		traces:      clickhouse.NewTraces(ch),
+		anomalies:   clickhouse.NewAnomalies(ch),
+		connEvents:  clickhouse.NewConnectionEvents(ch),
 		coord:       coord,
 		releaseFeed: feed,
 		// metrics.NewRegistry constructs a fresh prometheus.Registry
