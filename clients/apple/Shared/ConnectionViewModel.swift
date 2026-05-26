@@ -458,7 +458,7 @@ public final class ConnectionViewModel: ObservableObject {
                 hostname: hostname,
                 wireguardPublicKey: publicKey,
                 os: currentOSName(),
-                clientVersion: "0.0.1",
+                clientVersion: BundleVersion.current,
                 preAuthKeySecret: preAuthKey.isEmpty ? nil : preAuthKey,
                 tenantSlug: tenantSlug,
                 endpoints: discoveredEndpoints.isEmpty ? nil : discoveredEndpoints,
@@ -950,7 +950,7 @@ public final class ConnectionViewModel: ObservableObject {
                 hostname: hostname,
                 wireguardPublicKey: privateKey.publicKey.base64Key,
                 os: currentOSName(),
-                clientVersion: "0.0.1",
+                clientVersion: BundleVersion.current,
                 preAuthKeySecret: nil,
                 tenantSlug: tenantSlug,
                 endpoints: nil
