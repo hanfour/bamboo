@@ -162,6 +162,12 @@ func TestAugmentUpgradeAvailable(t *testing.T) {
 			latest: "0.1.4",
 			want:   []bool{false, true},
 		},
+		{
+			name:   "non-semver peer version never flagged",
+			peers:  []apiPeerJSON{{ClientVersion: "dev"}, {ClientVersion: "canary"}},
+			latest: "0.1.4",
+			want:   []bool{false, false},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

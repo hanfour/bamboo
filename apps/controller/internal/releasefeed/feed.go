@@ -61,6 +61,26 @@ func newWithBaseURL(repo string, interval time.Duration, baseURL string) *Feed {
 	}
 }
 
+// Repo returns the configured GitHub repo (owner/name). Used by the
+// controller's startup log so the operator can confirm at boot which
+// upstream the poller is hitting.
+func (f *Feed) Repo() string {
+	if f == nil {
+		return ""
+	}
+	return f.repo
+}
+
+// Interval returns the configured poll cadence. Used by the
+// controller's startup log so an operator setting an unusually long
+// interval can see the configured value in the boot trail.
+func (f *Feed) Interval() time.Duration {
+	if f == nil {
+		return 0
+	}
+	return f.interval
+}
+
 // Latest reports the last-known-good upstream tag (without the
 // leading "v") and whether it is currently considered fresh.
 // Returns ("", false) on a nil receiver — disabled deployments.

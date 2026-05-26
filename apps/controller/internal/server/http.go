@@ -607,16 +607,19 @@ func (h *HTTPServer) reapRevokedSessionsOnce(ctx context.Context) {
 	}
 }
 
-// StartReleaseFeedPoller launches the background goroutine that polls
-// GitHub for the latest bamboo client release. It is a thin wrapper
-// around releasefeed.Feed.Run so the start-up sequence in Run stays
-// uniform with the other background workers. The goroutine is nil-safe
-// (disabled deployments pass feed=nil to NewHTTPServer and this call
-// becomes a no-op). Exits when ctx is canceled.
+// StartReleaseFeedPoller spawns the GitHub releases poller goroutine
+// in the background. Nil-safe: a disabled deployment (feed=nil from
+// NewHTTPServer) gets a silent no-op. Idempotent in correctness but
+// not in resource cost — calling twice spawns two pollers both
+// writing under the Feed's internal RWMutex; harmless but wasteful.
+// Production only calls this once via HTTPServer.Run.
 func (h *HTTPServer) StartReleaseFeedPoller(ctx context.Context) {
-	if h == nil || h.releaseFeed == nil {
+	if h.releaseFeed == nil {
 		return
 	}
+	slog.Info("release feed: poller started",
+		"repo", h.releaseFeed.Repo(),
+		"interval", h.releaseFeed.Interval())
 	go h.releaseFeed.Run(ctx)
 }
 

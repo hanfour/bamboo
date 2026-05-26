@@ -803,9 +803,11 @@ type apiPeerJSON struct {
 	ConnectionPathAt    *time.Time `json:"connectionPathAt,omitempty"`
 	ConnectionLatencyMs *int32     `json:"connectionLatencyMs,omitempty"`
 	// UpgradeAvailable is true iff the peer's ClientVersion is
-	// strictly behind the release-feed's latest tag. Omitempty so a
-	// disabled feed produces the same JSON shape as "this peer is
-	// already up-to-date" — Web treats both as no badge.
+	// strictly behind the release-feed's latest tag. Omitempty
+	// elides the false case so a disabled feed produces the same
+	// JSON shape as "already up-to-date". On the wire, `false` and
+	// "not present" are indistinguishable — frontends MUST treat
+	// the absent case as false, never rely on the distinction.
 	UpgradeAvailable bool `json:"upgradeAvailable,omitempty"`
 }
 
