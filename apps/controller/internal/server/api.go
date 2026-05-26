@@ -802,6 +802,11 @@ type apiPeerJSON struct {
 	ConnectionPath      *string    `json:"connectionPath,omitempty"`
 	ConnectionPathAt    *time.Time `json:"connectionPathAt,omitempty"`
 	ConnectionLatencyMs *int32     `json:"connectionLatencyMs,omitempty"`
+	// UpgradeAvailable is true iff the peer's ClientVersion is
+	// strictly behind the release-feed's latest tag. Omitempty so a
+	// disabled feed produces the same JSON shape as "this peer is
+	// already up-to-date" — Web treats both as no badge.
+	UpgradeAvailable bool `json:"upgradeAvailable,omitempty"`
 }
 
 // emptyIfNil normalizes a nil []string to an empty slice so the
@@ -868,17 +873,35 @@ func peerToJSON(p *repo.Peer) apiPeerJSON {
 	}
 }
 
+// augmentUpgradeAvailable fills in UpgradeAvailable on each row.
+// Pulled out as a pure function so api_test.go can cover the
+// per-peer flagging matrix without standing up a real DB harness.
+// Empty latest disables the flag entirely (disabled / stale feed).
+func augmentUpgradeAvailable(peers []apiPeerJSON, latest string) {
+	if latest == "" {
+		return
+	}
+	for i := range peers {
+		peers[i].UpgradeAvailable = upgradeAvailable(peers[i].ClientVersion, latest)
+	}
+}
+
 func (h *HTTPServer) apiPeers(w http.ResponseWriter, r *http.Request, tenant *repo.Tenant) {
 	peers, err := h.peers.ListByTenant(r.Context(), tenant.ID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
+	latest, _ := h.releaseFeed.Latest() // ("", false) on nil / disabled / stale
 	out := make([]apiPeerJSON, 0, len(peers))
 	for _, p := range peers {
 		out = append(out, peerToJSON(p))
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"peers": out})
+	augmentUpgradeAvailable(out, latest)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"peers":               out,
+		"latestClientVersion": latest, // "" when disabled / stale
+	})
 }
 
 // apiPeer returns a single peer by id, scoped to the request tenant.
