@@ -4,6 +4,8 @@ package server
 
 import (
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
@@ -220,5 +222,117 @@ func TestAuditEventToCSVRow_NilPointers(t *testing.T) {
 	}
 	if row[idx("diff")] != "" {
 		t.Errorf("diff empty fallback failed: %q", row[idx("diff")])
+	}
+}
+
+// TestSanitizeCSVField pins the formula-injection neutralisation
+// (OWASP CSV Injection). A regression here would re-open the
+// auto-execution vector on Excel / LibreOffice / Sheets — the
+// whole point of this defence is that exported audit CSVs are
+// the payload for SOC 2 / GDPR reviewers, not just internal
+// inspection.
+func TestSanitizeCSVField(t *testing.T) {
+	cases := map[string]string{
+		"":                     "",
+		"normal text":          "normal text",
+		"=cmd|'/c calc'!A1":    "'=cmd|'/c calc'!A1",
+		"+SUM(A1:A99)":         "'+SUM(A1:A99)",
+		"-2+3":                 "'-2+3",
+		"@SUM(1+9)":            "'@SUM(1+9)",
+		"\t=evil":              "'\t=evil",
+		"\r=evil":              "'\r=evil",
+		"alice@example.com":    "alice@example.com",
+		"peer.register":        "peer.register",
+		`{"hostname":"x"}`:     `{"hostname":"x"}`,
+		"name with = inside":   "name with = inside",
+	}
+	for in, want := range cases {
+		if got := sanitizeCSVField(in); got != want {
+			t.Errorf("sanitizeCSVField(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// TestAuditEventToCSVRow_FormulaSanitization confirms the
+// sanitisation is wired through the row builder for every
+// user-controllable column. A field-position regression here
+// would silently re-expose the formula-injection vector even if
+// the helper itself stays correct.
+func TestAuditEventToCSVRow_FormulaSanitization(t *testing.T) {
+	hostile := "=cmd|'/c calc'!A0"
+	ua := "=BAD"
+	ip := "-1"
+	ev := &repo.AuditEvent{
+		OccurredAt:   time.Date(2026, 5, 15, 10, 30, 0, 0, time.UTC),
+		ActorType:    "user",
+		ActorEmail:   hostile,
+		Action:       hostile,
+		ResourceType: hostile,
+		IPAddress:    &ip,
+		UserAgent:    &ua,
+		Diff:         json.RawMessage(`=danger`),
+	}
+	row := auditEventToCSVRow(ev)
+	idx := func(col string) int {
+		for i, c := range auditExportHeader {
+			if c == col {
+				return i
+			}
+		}
+		t.Fatalf("column %q not in header", col)
+		return -1
+	}
+	want := "'" + hostile
+	for _, col := range []string{"actor_email", "action", "resource_type"} {
+		if got := row[idx(col)]; got != want {
+			t.Errorf("%s = %q, want %q (formula-prefixed)", col, got, want)
+		}
+	}
+	if got := row[idx("ip_address")]; got != "'-1" {
+		t.Errorf("ip_address = %q, want %q", got, "'-1")
+	}
+	if got := row[idx("user_agent")]; got != "'=BAD" {
+		t.Errorf("user_agent = %q, want %q", got, "'=BAD")
+	}
+	if got := row[idx("diff")]; got != "'=danger" {
+		t.Errorf("diff = %q, want %q", got, "'=danger")
+	}
+}
+
+// TestRouteAdminAuditExport_MethodNotAllowed pins the 405 path.
+// The handler short-circuits non-GET before touching auth, so
+// this works without a configured server — and a regression
+// (e.g. accidentally accepting POST) would change the API
+// contract the Next proxy + clients depend on.
+func TestRouteAdminAuditExport_MethodNotAllowed(t *testing.T) {
+	h := &HTTPServer{
+		secret: []byte("test-secret-with-at-least-32-bytes-padding"),
+	}
+	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodPatch} {
+		t.Run(method, func(t *testing.T) {
+			req := httptest.NewRequest(method, "/api/v1/admin/audit-log.csv", nil)
+			rec := httptest.NewRecorder()
+			h.routeAdminAuditExport(rec, req)
+			if rec.Code != http.StatusMethodNotAllowed {
+				t.Errorf("got %d, want 405 (%s)", rec.Code, method)
+			}
+		})
+	}
+}
+
+// TestRouteAdminAuditExport_RequiresAuth pins the auth gate.
+// An unauthenticated GET must surface as 401 BEFORE any DB
+// lookup, mirroring routeAdminUsers / routeAdminRelays. The
+// same shape — empty HTTPServer + no cookie — is sufficient
+// because authenticate fails before users.GetByID is called.
+func TestRouteAdminAuditExport_RequiresAuth(t *testing.T) {
+	h := &HTTPServer{
+		secret: []byte("test-secret-with-at-least-32-bytes-padding"),
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/audit-log.csv", nil)
+	rec := httptest.NewRecorder()
+	h.routeAdminAuditExport(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("got %d, want 401", rec.Code)
 	}
 }
