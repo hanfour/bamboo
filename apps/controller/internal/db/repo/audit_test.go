@@ -59,7 +59,19 @@ func TestAuditLogs_Insert_PopulatesOccurredAt(t *testing.T) {
 	}
 
 	// Case (b): caller pre-sets OccurredAt — must round-trip.
-	pinned := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	//
+	// The pinned value is intentionally close to now() rather than
+	// a historical date. The tenant cleanup in t.Cleanup cascades
+	// audit_log.tenant_id → NULL (per 00001), not DELETE, so the
+	// row survives this test's scope. A historical pinned value
+	// would later be eaten by TestAuditLogs_DeleteOlderThan's
+	// retention sweep (cutoff = now-30d, no tenant filter), tipping
+	// its expected count from 1 to 2.
+	//
+	// Postgres timestamptz has microsecond precision; truncate to
+	// micros so Equal() doesn't fail on the trailing nanoseconds
+	// Go time.Now() carries that the DB rounds away.
+	pinned := time.Now().UTC().Truncate(time.Microsecond)
 	ev2 := &repo.AuditEvent{
 		TenantID:     &tenant.ID,
 		ActorType:    "system",
