@@ -82,12 +82,14 @@ func (h *HTTPServer) routeAdminAuditExport(w http.ResponseWriter, r *http.Reques
 	// rows in a Go slice before writing. The handler owns the CSV
 	// header + framing; the repo owns the DB cursor.
 	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
-	// RFC 6266 filename — fixed prefix + ISO date so the browser
-	// download name is predictable. The tenant slug is left out
-	// so it doesn't leak via the file's metadata if forwarded.
+	// RFC 6266 filename — fixed prefix + ISO date of the export's
+	// upper bound (until) so a user downloading a historical window
+	// gets a filename that matches the content, not "today". The
+	// tenant slug is left out so it doesn't leak via the file's
+	// metadata if forwarded.
 	w.Header().Set("Content-Disposition", fmt.Sprintf(
 		`attachment; filename="audit-%s.csv"`,
-		time.Now().UTC().Format("2006-01-02"),
+		until.UTC().Format("2006-01-02"),
 	))
 	w.WriteHeader(http.StatusOK)
 
@@ -116,9 +118,12 @@ func (h *HTTPServer) routeAdminAuditExport(w http.ResponseWriter, r *http.Reques
 		slog.Warn("audit export: stream", "err", streamErr, "tenant_id", user.TenantID, "written", written)
 		return
 	}
-	if written == limit {
+	// Only log when we hit the server-side hard cap — a user
+	// passing a smaller `limit` and reaching it is their own choice,
+	// not a truncation worth surfacing in ops logs.
+	if written == auditExportMaxRows {
 		slog.Info("audit export: hit row cap",
-			"tenant_id", user.TenantID, "limit", limit,
+			"tenant_id", user.TenantID, "limit", auditExportMaxRows,
 			"since", since, "until", until,
 			"hint", "chunk by narrower date range to fetch the rest")
 	}
@@ -211,16 +216,51 @@ func auditEventToCSVRow(ev *repo.AuditEvent) []string {
 		// quotes / newlines, so no further escape needed here.
 		diff = string(ev.Diff)
 	}
+	// CSV / Formula Injection defence (OWASP) — see
+	// sanitizeCSVField. Applied to every field that may carry
+	// user-controllable input so an exported file opened in
+	// Excel / LibreOffice / Google Sheets doesn't auto-execute
+	// =cmd|'/c calc'!A1 -style payloads. occurred_at +
+	// actor_type are server-generated formats / enums and don't
+	// need sanitisation; UUIDs ditto.
 	return []string{
 		ev.OccurredAt.UTC().Format(time.RFC3339Nano),
 		ev.ActorType,
-		ev.ActorEmail,
+		sanitizeCSVField(ev.ActorEmail),
 		actorID,
-		ev.Action,
-		ev.ResourceType,
+		sanitizeCSVField(ev.Action),
+		sanitizeCSVField(ev.ResourceType),
 		resourceID,
-		ip,
-		userAgent,
-		diff,
+		sanitizeCSVField(ip),
+		sanitizeCSVField(userAgent),
+		sanitizeCSVField(diff),
 	}
+}
+
+// sanitizeCSVField defends against CSV / Formula Injection
+// (OWASP) by neutralising leading characters that Excel,
+// LibreOffice Calc, and Google Sheets interpret as formula
+// opcodes. Prefixes the value with an apostrophe — the
+// universal "treat as text" hint these tools all honour.
+//
+// Triggers on =, +, -, @ (formula leaders) plus TAB and CR
+// (whitespace leaders that some parsers strip before re-
+// evaluating the next char as a formula leader). The empty
+// string passes through unchanged.
+//
+// Cost is a one-byte prefix on the rare malicious row. The
+// alternative — refusing to export rows that look hostile —
+// would silently drop legitimate audit data whose action /
+// resource_type / diff happens to start with one of these
+// characters, which is the wrong tradeoff for a compliance
+// export.
+func sanitizeCSVField(s string) string {
+	if s == "" {
+		return s
+	}
+	switch s[0] {
+	case '=', '+', '-', '@', '\t', '\r':
+		return "'" + s
+	}
+	return s
 }
