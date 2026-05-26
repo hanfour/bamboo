@@ -15,7 +15,7 @@ backlog.
 | Prior P0 item | State |
 |---|---|
 | Users page + role model | ✅ Shipped (PRs #76+ around invite + OIDC) |
-| Machine row enhancements | ✅ Owner column + DNS expand shipped (PRs #115, #130). Version-upgrade indicator still missing — small follow-up |
+| Machine row enhancements | ✅ Owner column + DNS expand shipped (PRs #115, #130). Version-upgrade indicator shipped via PRs [#224](https://github.com/hanfour/bamboo/pull/224)–[#227](https://github.com/hanfour/bamboo/pull/227) (2026-05-26) |
 | Settings page skeleton | ✅ Shipped (PR #95-ish) |
 | Top-nav IA expansion (4 → 6 items) | ✅ Sidebar now carries 7 items including DNS |
 | ACL real enforcement | ❌ Still UI-only → re-filed as **#132** |
@@ -164,7 +164,12 @@ Out of immediate scope, captured for direction only.
 Not features, but visible-to-user polish items. Most landed in the same
 sprint as §4.
 
-- ❌ **Version-upgrade indicator on PeerTable** ("this client is on 0.1.2, latest is 0.1.4"). Still missing — needs client-version reporting on heartbeat + a latest-known-version source (release-feed or hard-coded ldflag). Future sprint.
+- ✅ **Version-upgrade indicator on PeerTable** ("this client is on 0.1.2, latest is 0.1.4"). Shipped as a stack of four PRs (2026-05-26):
+  [#224](https://github.com/hanfour/bamboo/pull/224) — `internal/releasefeed/` pkg (GitHub releases poller, nil-safe `*Feed`, 10-failure staleness ceiling, 1 MB body cap) + `internal/server/version_compare.go` (strict `<` semver via `golang.org/x/mod/semver`) + `ReleaseFeedConfig` (`*bool` Enabled for tri-state YAML/env, 5m interval floor);
+  [#225](https://github.com/hanfour/bamboo/pull/225) — Apple `BundleVersion.swift` reads `CFBundleShortVersionString`, both `clientVersion: "0.0.1"` hard-codes in `ConnectionViewModel.swift` swap to `BundleVersion.current`;
+  [#226](https://github.com/hanfour/bamboo/pull/226) — controller wires `*Feed` via `StartReleaseFeedPoller` (sibling of `StartAuditRetentionReaper` etc.); `apiPeers` embeds top-level `latestClientVersion` + per-peer `upgradeAvailable`;
+  [#227](https://github.com/hanfour/bamboo/pull/227) — Web `PeerTable` "Client ver" column between OS and Status (`hidden lg:table-cell`), amber `↑ {latest}` for behind peers with SR `aria-label`.
+  Verified locally: GitHub feed fetched `0.1.8` as latest; peer at `0.0.1` correctly flagged, peers at `0.1.10` (ahead) not flagged.
 - ✅ **Users + Logs page informative empty states** — soft warm-bordered cards matching the DNS page vocabulary. [#216](https://github.com/hanfour/bamboo/pull/216).
 - ✅ **ACL editor Examples tab** — curated starter HCL (open mesh, dev/prod isolation, single exit node). [#213](https://github.com/hanfour/bamboo/pull/213).
 - ✅ **Kebab menu row actions on PeerTable** — Disable/Enable + Delete promoted from the drawer to the row. [#215](https://github.com/hanfour/bamboo/pull/215).
