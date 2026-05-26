@@ -138,6 +138,7 @@ func buildHTTPMuxWithCH(pool *db.Pool, coord *handlers.CoordinatorHandler, ch *c
 		"http://127.0.0.1",
 		1*time.Hour,
 		coord,
+		nil, // release feed disabled in tests
 	)
 	httpSrv.StartPublisher(context.Background())
 	return httpSrv.Handler(), httpSrv

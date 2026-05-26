@@ -24,6 +24,7 @@ import (
 	"github.com/hanfour/bamboo/apps/controller/internal/handlers"
 	"github.com/hanfour/bamboo/apps/controller/internal/mail"
 	"github.com/hanfour/bamboo/apps/controller/internal/metrics"
+	"github.com/hanfour/bamboo/apps/controller/internal/releasefeed"
 	"github.com/hanfour/bamboo/apps/controller/internal/webhooks"
 )
 
@@ -55,6 +56,7 @@ type HTTPServer struct {
 	coord       *handlers.CoordinatorHandler
 	metrics     *metrics.Registry
 	publisher   *webhooks.Publisher
+	releaseFeed *releasefeed.Feed
 	// regionMap resolves a client IP to a region label for the §4 P2
 	// stage 5.5 server-side region detection. Populated from the
 	// BAMBOO_REGION_CIDRS env var at NewHTTPServer time; empty
@@ -82,6 +84,7 @@ func NewHTTPServer(
 	baseURL string,
 	ttl time.Duration,
 	coord *handlers.CoordinatorHandler,
+	feed *releasefeed.Feed,
 ) *HTTPServer {
 	mux := http.NewServeMux()
 	h := &HTTPServer{
@@ -105,7 +108,8 @@ func NewHTTPServer(
 		traces:     clickhouse.NewTraces(ch),
 		anomalies:  clickhouse.NewAnomalies(ch),
 		connEvents: clickhouse.NewConnectionEvents(ch),
-		coord:      coord,
+		coord:       coord,
+		releaseFeed: feed,
 		// metrics.NewRegistry constructs a fresh prometheus.Registry
 		// scoped to this HTTPServer so tests stay isolated. version
 		// + commit default to "unknown"; the production wiring calls
@@ -603,6 +607,19 @@ func (h *HTTPServer) reapRevokedSessionsOnce(ctx context.Context) {
 	}
 }
 
+// StartReleaseFeedPoller launches the background goroutine that polls
+// GitHub for the latest bamboo client release. It is a thin wrapper
+// around releasefeed.Feed.Run so the start-up sequence in Run stays
+// uniform with the other background workers. The goroutine is nil-safe
+// (disabled deployments pass feed=nil to NewHTTPServer and this call
+// becomes a no-op). Exits when ctx is canceled.
+func (h *HTTPServer) StartReleaseFeedPoller(ctx context.Context) {
+	if h == nil || h.releaseFeed == nil {
+		return
+	}
+	go h.releaseFeed.Run(ctx)
+}
+
 // Run blocks until ctx is canceled or the listener errors.
 func (h *HTTPServer) Run(ctx context.Context) error {
 	// Start the webhook delivery worker so audit events fired during
@@ -614,6 +631,7 @@ func (h *HTTPServer) Run(ctx context.Context) error {
 	h.StartAuditRetentionReaper(ctx)
 	h.StartRelayHealthReaper(ctx)
 	h.StartRevokedSessionsReaper(ctx)
+	h.StartReleaseFeedPoller(ctx)
 	errCh := make(chan error, 1)
 	go func() {
 		slog.Info("HTTP server listening", "addr", h.addr)
