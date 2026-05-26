@@ -352,6 +352,7 @@ targets:
       - path: Shared/RelayPicker.swift
       - path: Shared/BambooClient.swift
       - path: Shared/PeerWatcher.swift
+      - path: Shared/BundleVersion.swift
     settings:
       base:
         # Tests don't ship; sign locally with whatever the developer
