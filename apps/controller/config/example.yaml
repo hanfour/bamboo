@@ -33,3 +33,8 @@ auth:
       client_id: ""
       # Override via OIDC_GITHUB_CLIENT_SECRET.
       client_secret: ""
+
+# release_feed:                  # Defaults: enabled=true, repo=hanfour/bamboo, interval=1h
+#   enabled: false               # Set false for air-gapped deployments (no api.github.com reachability)
+#   repo: hanfour/bamboo         # Override for a fork or mirror (owner/repo shape)
+#   interval: 1h                 # Poll cadence. Minimum 5m (rate-limit floor).

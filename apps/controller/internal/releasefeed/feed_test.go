@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -54,9 +55,9 @@ func TestFeed_FirstFetchSuccess(t *testing.T) {
 // outage doesn't drop the badge — operators see the last known
 // good value through the failure window.
 func TestFeed_FailureKeepsPriorValue(t *testing.T) {
-	var failNext bool
+	var failNext atomic.Bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if failNext {
+		if failNext.Load() {
 			http.Error(w, "boom", http.StatusInternalServerError)
 			return
 		}
@@ -67,7 +68,7 @@ func TestFeed_FailureKeepsPriorValue(t *testing.T) {
 	if err := f.fetchOnce(context.Background()); err != nil {
 		t.Fatalf("first fetch: %v", err)
 	}
-	failNext = true
+	failNext.Store(true)
 	if err := f.fetchOnce(context.Background()); err == nil {
 		t.Fatalf("second fetch: expected error, got nil")
 	}

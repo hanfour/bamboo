@@ -312,8 +312,8 @@ func (c *Config) validate() error {
 		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
 			slog.Warn("release_feed: invalid repo, disabling",
 				"repo", c.ReleaseFeed.Repo)
-			disabled := false
-			c.ReleaseFeed.Enabled = &disabled
+			off := false
+			c.ReleaseFeed.Enabled = &off
 		}
 	}
 	if c.Server.GRPCAddr == "" {

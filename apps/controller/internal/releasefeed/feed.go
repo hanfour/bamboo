@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -41,8 +42,6 @@ type Feed struct {
 
 	mu                  sync.RWMutex
 	latest              string
-	lastFetch           time.Time
-	lastErr             error
 	consecutiveFailures int
 }
 
@@ -105,8 +104,10 @@ func (f *Feed) Run(ctx context.Context) {
 }
 
 // fetchOnce performs one HTTP call against the GitHub API and
-// updates the cached state. Exported only via Run for production;
-// tests drive it directly.
+// updates the cached state. Called only by Run in production;
+// tests in the same package call it directly to drive specific
+// sequences (failure / success / malformed-body) without waiting
+// on Run's ticker.
 func (f *Feed) fetchOnce(ctx context.Context) error {
 	url := fmt.Sprintf("%s/repos/%s/releases/latest", f.baseURL, f.repo)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
@@ -115,6 +116,7 @@ func (f *Feed) fetchOnce(ctx context.Context) error {
 	}
 	req.Header.Set("User-Agent", "bamboo-controller")
 	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
 	resp, err := f.httpClient.Do(req)
 	if err != nil {
 		return f.recordFailure(err)
@@ -126,7 +128,7 @@ func (f *Feed) fetchOnce(ctx context.Context) error {
 	var body struct {
 		TagName string `json:"tag_name"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&body); err != nil {
 		return f.recordFailure(err)
 	}
 	if body.TagName == "" {
@@ -140,15 +142,12 @@ func (f *Feed) recordSuccess(tag string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.latest = tag
-	f.lastFetch = time.Now()
-	f.lastErr = nil
 	f.consecutiveFailures = 0
 }
 
 func (f *Feed) recordFailure(err error) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.lastErr = err
 	f.consecutiveFailures++
 	return err
 }

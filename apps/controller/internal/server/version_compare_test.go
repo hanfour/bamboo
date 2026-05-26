@@ -23,6 +23,7 @@ func TestUpgradeAvailable(t *testing.T) {
 		{"malformed peer", "dev", "0.1.4", false},
 		{"v-prefixed peer", "v0.1.3", "0.1.4", true},
 		{"pre-release behind stable", "0.1.4-rc1", "0.1.4", true},
+		{"malformed latest", "0.1.4", "nightly", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
