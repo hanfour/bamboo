@@ -37,9 +37,18 @@ type Config struct {
 // deployments should set Enabled=false; everyone else leaves the
 // defaults and gets the indicator for free.
 type ReleaseFeedConfig struct {
-	Enabled  bool          `yaml:"enabled"`
+	// Enabled is a pointer so we can distinguish "YAML left it unset"
+	// (nil → default-on) from "YAML explicitly set false". Use IsEnabled()
+	// instead of reading the pointer directly.
+	Enabled  *bool         `yaml:"enabled"`
 	Repo     string        `yaml:"repo"`
 	Interval time.Duration `yaml:"interval"`
+}
+
+// IsEnabled reports whether the release-feed poller should run,
+// treating nil (YAML absent + env absent) as the default-on case.
+func (c ReleaseFeedConfig) IsEnabled() bool {
+	return c.Enabled == nil || *c.Enabled
 }
 
 // SMTPConfig configures the optional outbound SMTP relay used for
@@ -269,10 +278,11 @@ func (c *Config) applyEnvOverrides() {
 	if c.ReleaseFeed.Interval == 0 {
 		c.ReleaseFeed.Interval = time.Hour
 	}
-	// Enabled defaults to true UNLESS the env explicitly opts out.
-	c.ReleaseFeed.Enabled = true
+	// BAMBOO_RELEASE_FEED_ENABLED overrides YAML when set; nil means
+	// "use the IsEnabled() default-true".
 	if v := os.Getenv("BAMBOO_RELEASE_FEED_ENABLED"); v != "" {
-		c.ReleaseFeed.Enabled = v == "true" || v == "1"
+		enabled := v == "true" || v == "1"
+		c.ReleaseFeed.Enabled = &enabled
 	}
 	if v := os.Getenv("BAMBOO_RELEASE_FEED_REPO"); v != "" {
 		c.ReleaseFeed.Repo = v
@@ -291,7 +301,7 @@ func (c *Config) validate() error {
 	// gets "no badge" instead of "every fetch errors". Run first so
 	// callers that only need the side-effects (tests, partial configs)
 	// always get a normalised ReleaseFeed regardless of other errors.
-	if c.ReleaseFeed.Enabled {
+	if c.ReleaseFeed.IsEnabled() {
 		if c.ReleaseFeed.Interval < 5*time.Minute {
 			slog.Warn("release_feed: interval below 5m floor, clamping",
 				"requested", c.ReleaseFeed.Interval, "floor", 5*time.Minute)
@@ -302,7 +312,8 @@ func (c *Config) validate() error {
 		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
 			slog.Warn("release_feed: invalid repo, disabling",
 				"repo", c.ReleaseFeed.Repo)
-			c.ReleaseFeed.Enabled = false
+			disabled := false
+			c.ReleaseFeed.Enabled = &disabled
 		}
 	}
 	if c.Server.GRPCAddr == "" {

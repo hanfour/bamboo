@@ -88,7 +88,7 @@ func TestApplyEnvOverrides_ReleaseFeed(t *testing.T) {
 		t.Setenv("BAMBOO_RELEASE_FEED_INTERVAL", "")
 		var c Config
 		c.applyEnvOverrides()
-		if !c.ReleaseFeed.Enabled {
+		if !c.ReleaseFeed.IsEnabled() {
 			t.Errorf("Enabled default = false, want true")
 		}
 		if c.ReleaseFeed.Repo != "hanfour/bamboo" {
@@ -104,7 +104,7 @@ func TestApplyEnvOverrides_ReleaseFeed(t *testing.T) {
 		t.Setenv("BAMBOO_RELEASE_FEED_INTERVAL", "30m")
 		var c Config
 		c.applyEnvOverrides()
-		if c.ReleaseFeed.Enabled {
+		if c.ReleaseFeed.IsEnabled() {
 			t.Errorf("Enabled = true, want false")
 		}
 		if c.ReleaseFeed.Repo != "myorg/mybamboo" {
@@ -132,8 +132,19 @@ func TestApplyEnvOverrides_ReleaseFeed(t *testing.T) {
 		var c Config
 		c.applyEnvOverrides()
 		c.validate() //nolint:errcheck // testing disable side-effect only
-		if c.ReleaseFeed.Enabled {
+		if c.ReleaseFeed.IsEnabled() {
 			t.Errorf("Enabled = true after invalid repo, want false")
+		}
+	})
+	t.Run("yaml-disabled honoured when env unset", func(t *testing.T) {
+		t.Setenv("BAMBOO_RELEASE_FEED_ENABLED", "")
+		t.Setenv("BAMBOO_RELEASE_FEED_REPO", "")
+		t.Setenv("BAMBOO_RELEASE_FEED_INTERVAL", "")
+		f := false
+		c := Config{ReleaseFeed: ReleaseFeedConfig{Enabled: &f}}
+		c.applyEnvOverrides()
+		if c.ReleaseFeed.IsEnabled() {
+			t.Errorf("YAML enabled=false was clobbered, want preserved")
 		}
 	})
 }
