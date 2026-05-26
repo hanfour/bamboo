@@ -22,6 +22,11 @@ export type Peer = {
   tags: string[];
   os: string;
   clientVersion: string;
+  // upgradeAvailable is set by the controller when the peer's
+  // clientVersion is strictly behind the release-feed's latest tag.
+  // Omitted otherwise (legacy controller, peer up-to-date / ahead,
+  // feed disabled, or feed stale — all surface as "no badge").
+  upgradeAvailable?: boolean;
   status: PeerStatus;
   wireguardPublicKey?: string;
   endpoints: string[];
@@ -86,6 +91,17 @@ export type Peer = {
   // default traffic through (the chosen exit node). Absent when the
   // peer isn't using one — most common case.
   usingExitNodePeerId?: string;
+};
+
+// PeersResponse mirrors the shape returned by GET /api/v1/peers.
+// Carries the latest known stable client release alongside the peer
+// list so the UI can render a single source of truth for the version
+// badge without an extra round-trip. Empty / absent latestClientVersion
+// means the controller's release-feed poller is disabled or has gone
+// stale — the Web UI treats both as "no badge anywhere".
+export type PeersResponse = {
+  peers: Peer[];
+  latestClientVersion?: string;
 };
 
 // FetchResult is a discriminated union for read paths so the UI can
