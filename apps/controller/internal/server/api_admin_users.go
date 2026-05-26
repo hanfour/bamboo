@@ -201,11 +201,12 @@ func (h *HTTPServer) adminUserErase(w http.ResponseWriter, r *http.Request, acto
 		return
 	}
 
-	// Capture the wall-clock erasure time once so the response
-	// and the audit row carry the same timestamp. repo.AuditLogs
-	// .Insert uses pool.Exec + DB-side `now()` for the column;
-	// it doesn't scan back into ev.OccurredAt, so reading that
-	// field after Insert would return the Go zero value (year 1).
+	// Capture the wall-clock erasure time once and pin it on the
+	// AuditEvent. AuditLogs.Insert (since #222 follow-up) persists
+	// a non-zero OccurredAt verbatim instead of letting the DB
+	// default to `now()`, so the response's erasedAt and the
+	// stored audit row's occurred_at are byte-exactly equal —
+	// auditors can join the receipt to the audit row by timestamp.
 	erasedAt := time.Now().UTC()
 
 	// Audit row for the erasure itself. Stored after the DELETE

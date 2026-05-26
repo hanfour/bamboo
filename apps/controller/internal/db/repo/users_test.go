@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/hanfour/bamboo/apps/controller/internal/db/repo"
@@ -196,5 +197,177 @@ func TestUsers_BumpSessionVersion_NotFound(t *testing.T) {
 	_, err := users.BumpSessionVersion(ctx, uuid.New())
 	if !errors.Is(err, repo.ErrNotFound) {
 		t.Errorf("BumpSessionVersion(missing) err = %v, want ErrNotFound", err)
+	}
+}
+
+// TestUsers_Erase_AlreadyErasedReturnsNotFound pins the #208
+// idempotent contract the handler relies on: re-erasing a user
+// whose row is already gone surfaces as ErrNotFound (which the
+// handler then translates to 404) rather than a bare DB error.
+// Regression in #222 review: the handler used to map this to
+// 500, contradicting its own docstring.
+func TestUsers_Erase_AlreadyErasedReturnsNotFound(t *testing.T) {
+	pool := requireDB(t)
+	ctx := context.Background()
+
+	tenants := repo.NewTenants(pool)
+	users := repo.NewUsers(pool)
+
+	slug := fmt.Sprintf("er1-%s", uuid.NewString()[:8])
+	tenant, err := tenants.Create(ctx, "Er1", slug, "100.64.220.0/24")
+	if err != nil {
+		t.Fatalf("create tenant: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, tenant.ID)
+	})
+
+	user, err := users.UpsertOIDC(ctx, &repo.User{
+		TenantID:     tenant.ID,
+		Email:        "er1@example.com",
+		OIDCProvider: "test",
+		OIDCSubject:  uuid.NewString(),
+	})
+	if err != nil {
+		t.Fatalf("upsert user: %v", err)
+	}
+
+	if err := users.Erase(ctx, user.ID); err != nil {
+		t.Fatalf("first Erase: %v", err)
+	}
+	// Second call simulates the concurrent-erase / retry race the
+	// handler's errors.Is branch fixes.
+	err = users.Erase(ctx, user.ID)
+	if !errors.Is(err, repo.ErrNotFound) {
+		t.Errorf("second Erase err = %v, want ErrNotFound", err)
+	}
+}
+
+// TestUsers_Erase_CrossTenantInvitationUntouched is the
+// teeth-bearing GDPR-blast-radius test. Same email lives in two
+// tenants; erasing the user in tenant A must NOT mutate tenant
+// B's invitation row. Regression in #222: the original WHERE
+// clause was email-only, no tenant scope.
+func TestUsers_Erase_CrossTenantInvitationUntouched(t *testing.T) {
+	pool := requireDB(t)
+	ctx := context.Background()
+
+	tenants := repo.NewTenants(pool)
+	users := repo.NewUsers(pool)
+	invs := repo.NewUserInvitations(pool)
+
+	slugA := fmt.Sprintf("erA-%s", uuid.NewString()[:8])
+	slugB := fmt.Sprintf("erB-%s", uuid.NewString()[:8])
+	tenantA, err := tenants.Create(ctx, "ErA", slugA, "100.64.221.0/24")
+	if err != nil {
+		t.Fatalf("create tenant A: %v", err)
+	}
+	tenantB, err := tenants.Create(ctx, "ErB", slugB, "100.64.222.0/24")
+	if err != nil {
+		t.Fatalf("create tenant B: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM tenants WHERE id IN ($1, $2)`, tenantA.ID, tenantB.ID)
+	})
+
+	const sharedEmail = "ops@example.com"
+	userA, err := users.UpsertOIDC(ctx, &repo.User{
+		TenantID:     tenantA.ID,
+		Email:        sharedEmail,
+		OIDCProvider: "test",
+		OIDCSubject:  uuid.NewString(),
+	})
+	if err != nil {
+		t.Fatalf("upsert userA: %v", err)
+	}
+
+	// Invitation in tenant B for the same email — must survive
+	// the erase in tenant A.
+	invB, err := invs.Create(ctx, &repo.UserInvitation{
+		ID:        uuid.New(),
+		TenantID:  tenantB.ID,
+		Email:     sharedEmail,
+		TokenHash: "stand-in-hash",
+		ExpiresAt: time.Now().Add(24 * time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("create invB: %v", err)
+	}
+
+	if err := users.Erase(ctx, userA.ID); err != nil {
+		t.Fatalf("Erase(userA): %v", err)
+	}
+
+	gotB, err := invs.GetByID(ctx, invB.ID)
+	if err != nil {
+		t.Fatalf("GetByID(invB): %v", err)
+	}
+	if gotB.Email != sharedEmail {
+		t.Errorf("invB.Email = %q, want %q (cross-tenant scrub leaked)", gotB.Email, sharedEmail)
+	}
+}
+
+// TestUsers_Erase_MixedCaseInvitationScrubbed pins the Article-17
+// PII completeness contract: an invitation row stored with original
+// case (e.g. from manual /api/v1/invitations create) must be
+// scrubbed even when the users row was OIDC-normalised to lower.
+// Regression in #222: original WHERE was case-sensitive equality.
+func TestUsers_Erase_MixedCaseInvitationScrubbed(t *testing.T) {
+	pool := requireDB(t)
+	ctx := context.Background()
+
+	tenants := repo.NewTenants(pool)
+	users := repo.NewUsers(pool)
+	invs := repo.NewUserInvitations(pool)
+
+	slug := fmt.Sprintf("erC-%s", uuid.NewString()[:8])
+	tenant, err := tenants.Create(ctx, "ErC", slug, "100.64.223.0/24")
+	if err != nil {
+		t.Fatalf("create tenant: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, tenant.ID)
+	})
+
+	const lowerEmail = "han@example.com"
+	const mixedEmail = "Han@example.com"
+
+	// Invitation stored with original case; OIDC redeem path
+	// later normalises the users.email to lower (Google does
+	// this by default).
+	invMixed, err := invs.Create(ctx, &repo.UserInvitation{
+		ID:        uuid.New(),
+		TenantID:  tenant.ID,
+		Email:     mixedEmail,
+		TokenHash: "stand-in-hash",
+		ExpiresAt: time.Now().Add(24 * time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("create invMixed: %v", err)
+	}
+
+	user, err := users.UpsertOIDC(ctx, &repo.User{
+		TenantID:     tenant.ID,
+		Email:        lowerEmail,
+		OIDCProvider: "test",
+		OIDCSubject:  uuid.NewString(),
+	})
+	if err != nil {
+		t.Fatalf("upsert user: %v", err)
+	}
+
+	if err := users.Erase(ctx, user.ID); err != nil {
+		t.Fatalf("Erase: %v", err)
+	}
+
+	got, err := invs.GetByID(ctx, invMixed.ID)
+	if err != nil {
+		t.Fatalf("GetByID(invMixed): %v", err)
+	}
+	if got.Email == mixedEmail {
+		t.Errorf("invMixed.Email = %q, want '<erased>' (case-sensitive WHERE leaked PII)", got.Email)
+	}
+	if got.Email != "<erased>" {
+		t.Errorf("invMixed.Email = %q, want '<erased>'", got.Email)
 	}
 }
