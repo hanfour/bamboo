@@ -24,6 +24,7 @@ import (
 	"github.com/hanfour/bamboo/apps/controller/internal/handlers"
 	"github.com/hanfour/bamboo/apps/controller/internal/mail"
 	"github.com/hanfour/bamboo/apps/controller/internal/metrics"
+	"github.com/hanfour/bamboo/apps/controller/internal/releasefeed"
 	"github.com/hanfour/bamboo/apps/controller/internal/webhooks"
 )
 
@@ -55,6 +56,7 @@ type HTTPServer struct {
 	coord       *handlers.CoordinatorHandler
 	metrics     *metrics.Registry
 	publisher   *webhooks.Publisher
+	releaseFeed *releasefeed.Feed
 	// regionMap resolves a client IP to a region label for the §4 P2
 	// stage 5.5 server-side region detection. Populated from the
 	// BAMBOO_REGION_CIDRS env var at NewHTTPServer time; empty
@@ -82,6 +84,7 @@ func NewHTTPServer(
 	baseURL string,
 	ttl time.Duration,
 	coord *handlers.CoordinatorHandler,
+	feed *releasefeed.Feed,
 ) *HTTPServer {
 	mux := http.NewServeMux()
 	h := &HTTPServer{
@@ -101,11 +104,12 @@ func NewHTTPServer(
 		revoked:     repo.NewRevokedSessions(pool),
 		// Default mailer is the no-op sender — server boot calls
 		// SetMailer to wire in the real SMTP relay when configured.
-		mailer:     mail.New(config.SMTPConfig{}),
-		traces:     clickhouse.NewTraces(ch),
-		anomalies:  clickhouse.NewAnomalies(ch),
-		connEvents: clickhouse.NewConnectionEvents(ch),
-		coord:      coord,
+		mailer:      mail.New(config.SMTPConfig{}),
+		traces:      clickhouse.NewTraces(ch),
+		anomalies:   clickhouse.NewAnomalies(ch),
+		connEvents:  clickhouse.NewConnectionEvents(ch),
+		coord:       coord,
+		releaseFeed: feed,
 		// metrics.NewRegistry constructs a fresh prometheus.Registry
 		// scoped to this HTTPServer so tests stay isolated. version
 		// + commit default to "unknown"; the production wiring calls
@@ -603,6 +607,22 @@ func (h *HTTPServer) reapRevokedSessionsOnce(ctx context.Context) {
 	}
 }
 
+// StartReleaseFeedPoller spawns the GitHub releases poller goroutine
+// in the background. Nil-safe: a disabled deployment (feed=nil from
+// NewHTTPServer) gets a silent no-op. Idempotent in correctness but
+// not in resource cost — calling twice spawns two pollers both
+// writing under the Feed's internal RWMutex; harmless but wasteful.
+// Production only calls this once via HTTPServer.Run.
+func (h *HTTPServer) StartReleaseFeedPoller(ctx context.Context) {
+	if h.releaseFeed == nil {
+		return
+	}
+	slog.Info("release feed: poller started",
+		"repo", h.releaseFeed.Repo(),
+		"interval", h.releaseFeed.Interval())
+	go h.releaseFeed.Run(ctx)
+}
+
 // Run blocks until ctx is canceled or the listener errors.
 func (h *HTTPServer) Run(ctx context.Context) error {
 	// Start the webhook delivery worker so audit events fired during
@@ -614,6 +634,7 @@ func (h *HTTPServer) Run(ctx context.Context) error {
 	h.StartAuditRetentionReaper(ctx)
 	h.StartRelayHealthReaper(ctx)
 	h.StartRevokedSessionsReaper(ctx)
+	h.StartReleaseFeedPoller(ctx)
 	errCh := make(chan error, 1)
 	go func() {
 		slog.Info("HTTP server listening", "addr", h.addr)

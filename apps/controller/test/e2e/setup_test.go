@@ -157,6 +157,7 @@ func buildHTTPMux(pool *db.Pool, coord *handlers.CoordinatorHandler) (http.Handl
 		"http://127.0.0.1",
 		1*time.Hour,
 		coord,
+		nil, // release feed disabled in tests
 	)
 	// Start the webhook publisher worker against a background ctx
 	// that lives for the test process. Without this the audit-hook

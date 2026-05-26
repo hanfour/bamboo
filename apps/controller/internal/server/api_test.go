@@ -131,6 +131,56 @@ func TestAuthenticate_BearerPrecedesCookieWhenBothPresent(t *testing.T) {
 	}
 }
 
+// TestAugmentUpgradeAvailable pins the per-peer flagging logic
+// used by apiPeers — covers the disabled-feed (empty latest),
+// behind / equal / ahead, and empty-client-version paths in one
+// table. The handler wiring on top is two lines and verified by
+// manual / e2e; this test exists to catch a future regression that
+// drops the per-peer assignment or misroutes the latest string.
+func TestAugmentUpgradeAvailable(t *testing.T) {
+	cases := []struct {
+		name   string
+		peers  []apiPeerJSON
+		latest string
+		want   []bool // upgrade_available per peer, same order
+	}{
+		{
+			name:   "feed disabled (empty latest) suppresses all flags",
+			peers:  []apiPeerJSON{{ClientVersion: "0.1.3"}, {ClientVersion: "0.1.4"}},
+			latest: "",
+			want:   []bool{false, false},
+		},
+		{
+			name:   "behind / equal / ahead",
+			peers:  []apiPeerJSON{{ClientVersion: "0.1.3"}, {ClientVersion: "0.1.4"}, {ClientVersion: "0.1.5"}},
+			latest: "0.1.4",
+			want:   []bool{true, false, false},
+		},
+		{
+			name:   "empty client_version never flagged",
+			peers:  []apiPeerJSON{{ClientVersion: ""}, {ClientVersion: "0.1.3"}},
+			latest: "0.1.4",
+			want:   []bool{false, true},
+		},
+		{
+			name:   "non-semver peer version never flagged",
+			peers:  []apiPeerJSON{{ClientVersion: "dev"}, {ClientVersion: "canary"}},
+			latest: "0.1.4",
+			want:   []bool{false, false},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			augmentUpgradeAvailable(tc.peers, tc.latest)
+			for i := range tc.peers {
+				if got := tc.peers[i].UpgradeAvailable; got != tc.want[i] {
+					t.Errorf("peers[%d].UpgradeAvailable = %v, want %v", i, got, tc.want[i])
+				}
+			}
+		})
+	}
+}
+
 func TestBearerToken_Helpers(t *testing.T) {
 	cases := []struct {
 		name string

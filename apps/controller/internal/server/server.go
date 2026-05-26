@@ -22,6 +22,7 @@ import (
 	"github.com/hanfour/bamboo/apps/controller/internal/events"
 	"github.com/hanfour/bamboo/apps/controller/internal/handlers"
 	"github.com/hanfour/bamboo/apps/controller/internal/mail"
+	"github.com/hanfour/bamboo/apps/controller/internal/releasefeed"
 	bamboov1 "github.com/hanfour/bamboo/proto/gen/go/bamboo/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
@@ -57,7 +58,16 @@ func New(cfg *config.Config, pool *db.Pool, ch *clickhouse.Conn) (*Server, error
 	grpcSrv, authHandler, coordHandler := buildGRPCWithAuth(pool, ch, cfg.Auth.RequireAuth, secret, revoked, users)
 	authHandler.SetOIDCConfig(cfg.Auth.OIDC.BaseURL, secret, ttl)
 
-	httpSrv := NewHTTPServer(cfg.Server.HTTPAddr, pool, providers, ch, secret, cfg.Auth.OIDC.BaseURL, ttl, coordHandler)
+	// Construct the release-feed poller iff the config enables it.
+	// New returns a non-nil *Feed; the disabled case passes nil to
+	// NewHTTPServer so handler code stays branchless (Feed.Latest is
+	// nil-safe and returns ("", false)).
+	var feed *releasefeed.Feed
+	if cfg.ReleaseFeed.IsEnabled() {
+		feed = releasefeed.New(cfg.ReleaseFeed.Repo, cfg.ReleaseFeed.Interval)
+	}
+
+	httpSrv := NewHTTPServer(cfg.Server.HTTPAddr, pool, providers, ch, secret, cfg.Auth.OIDC.BaseURL, ttl, coordHandler, feed)
 	httpSrv.SetRequireAuth(cfg.Auth.RequireAuth)
 	coordHandler.SetRequireAuth(cfg.Auth.RequireAuth)
 	// Wire SMTP. New() returns a no-op sender when SMTP is unconfigured;
