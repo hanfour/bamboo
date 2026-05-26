@@ -279,7 +279,28 @@
       "source": "原始碼",
       "preview": "模擬",
       "versions": "版本記錄",
+      "examples": "範例",
       "editing": "編輯中"
+    },
+    "examples": {
+      "description": "HCL 起手式範本。點「載入這個範例」會把片段送進編輯器為草稿，請審視後再儲存。",
+      "copy": "複製",
+      "copied": "已複製",
+      "useThis": "載入這個範例",
+      "templates": {
+        "openMesh": {
+          "title": "開放網狀（Open mesh）",
+          "description": "所有節點互通。新租戶預設值；上線前請收緊。"
+        },
+        "devProd": {
+          "title": "Dev / Prod 隔離",
+          "description": "兩個 tag 群組各自互通、彼此不通。範例 email 請換成實際的。"
+        },
+        "exitNode": {
+          "title": "單一出口節點",
+          "description": "選一個標 tag 的節點作為整租戶的出口；其他節點不受限。"
+        }
+      }
     },
     "editor": {
       "edit": "編輯",
