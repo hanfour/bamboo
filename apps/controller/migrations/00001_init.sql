@@ -11,7 +11,13 @@ CREATE TABLE tenants (
     id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name        TEXT        NOT NULL,
     slug        TEXT        NOT NULL,
-    -- Per-tenant IP allocation pool, carved out of 100.64.0.0/10.
+    -- Per-tenant IP allocation pool. The server default for new
+    -- tenants is 100.127.0.0/24 (top /24 of CGNAT 100.64.0.0/10),
+    -- chosen to minimise collision with Tailscale / Headscale meshes
+    -- on hosts that run both side-by-side — those clients allocate
+    -- sequentially from the low end of /10. Operators wanting tighter
+    -- isolation can override per-tenant; any CIDR carved out of
+    -- 100.64.0.0/10 (or a private RFC 1918 range) is valid here.
     ip_pool     CIDR        NOT NULL,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
