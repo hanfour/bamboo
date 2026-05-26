@@ -36,4 +36,9 @@ final class BundleVersionTests: XCTestCase {
         let info: [String: Any] = ["CFBundleShortVersionString": 1.23]
         XCTAssertEqual(BundleVersion.read(from: info), "0.0.0")
     }
+
+    func testEmptyStringFallsBackToSentinel() {
+        let info: [String: Any] = ["CFBundleShortVersionString": ""]
+        XCTAssertEqual(BundleVersion.read(from: info), "0.0.0")
+    }
 }
