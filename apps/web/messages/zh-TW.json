@@ -106,6 +106,7 @@
       "owner": "擁有者",
       "tags": "標籤",
       "os": "作業系統",
+      "clientVersion": "用戶端版本",
       "status": "狀態",
       "lastSeen": "最後上線",
       "actions": "操作"
@@ -122,6 +123,8 @@
       "errorPrefix": "失敗："
     },
     "ownerUnknown": "—",
+    "upgradeAvailable": "可升級 {current} → {latest}",
+    "noVersion": "—",
     "status": {
       "online": "在線",
       "offline": "離線",
