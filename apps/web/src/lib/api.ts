@@ -59,7 +59,8 @@ type ApiPeer = {
   // upgradeAvailable: controller sets this true when clientVersion is
   // strictly behind the release-feed's latest tag. Absent on pre-#226
   // controllers and when the peer is up-to-date / feed disabled.
-  upgradeAvailable?: boolean | null;
+  // Wire shape is `true | absent` (omitempty on false) — never null.
+  upgradeAvailable?: boolean;
   status: 'online' | 'offline' | 'disabled';
   wireguardPublicKey?: string;
   endpoints?: string[];
@@ -101,7 +102,7 @@ function apiPeerToPeer(p: ApiPeer): Peer {
     tags: p.tags ?? [],
     os: p.os,
     clientVersion: p.clientVersion,
-    upgradeAvailable: p.upgradeAvailable ?? undefined,
+    upgradeAvailable: p.upgradeAvailable,
     status: p.status,
     wireguardPublicKey: p.wireguardPublicKey,
     endpoints: p.endpoints ?? [],

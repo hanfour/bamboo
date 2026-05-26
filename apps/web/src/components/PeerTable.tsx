@@ -213,11 +213,14 @@ function ClientVersionCell({
  return <span className="font-mono text-xs">{version}</span>;
  }
  return (
- <span
- className="font-mono text-xs"
- title={t('upgradeAvailable', { current: version, latest })}
- >
- {version} <span className="text-amber-300">↑ {latest}</span>
+ <span className="font-mono text-xs">
+  {version}{' '}
+  <span
+   className="text-amber-300"
+   aria-label={t('upgradeAvailable', { current: version, latest })}
+  >
+   ↑ {latest}
+  </span>
  </span>
  );
 }
