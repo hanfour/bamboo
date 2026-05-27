@@ -233,18 +233,18 @@ func TestAuditEventToCSVRow_NilPointers(t *testing.T) {
 // inspection.
 func TestSanitizeCSVField(t *testing.T) {
 	cases := map[string]string{
-		"":                     "",
-		"normal text":          "normal text",
-		"=cmd|'/c calc'!A1":    "'=cmd|'/c calc'!A1",
-		"+SUM(A1:A99)":         "'+SUM(A1:A99)",
-		"-2+3":                 "'-2+3",
-		"@SUM(1+9)":            "'@SUM(1+9)",
-		"\t=evil":              "'\t=evil",
-		"\r=evil":              "'\r=evil",
-		"alice@example.com":    "alice@example.com",
-		"peer.register":        "peer.register",
-		`{"hostname":"x"}`:     `{"hostname":"x"}`,
-		"name with = inside":   "name with = inside",
+		"":                   "",
+		"normal text":        "normal text",
+		"=cmd|'/c calc'!A1":  "'=cmd|'/c calc'!A1",
+		"+SUM(A1:A99)":       "'+SUM(A1:A99)",
+		"-2+3":               "'-2+3",
+		"@SUM(1+9)":          "'@SUM(1+9)",
+		"\t=evil":            "'\t=evil",
+		"\r=evil":            "'\r=evil",
+		"alice@example.com":  "alice@example.com",
+		"peer.register":      "peer.register",
+		`{"hostname":"x"}`:   `{"hostname":"x"}`,
+		"name with = inside": "name with = inside",
 	}
 	for in, want := range cases {
 		if got := sanitizeCSVField(in); got != want {
