@@ -668,6 +668,90 @@ func TestRESTPatchPeer_StatusDisabledEmitsPeerRemoved(t *testing.T) {
 	}
 }
 
+// TestHeartbeat_DisabledPeerDoesNotEmitPeerUpdated pins two
+// closely-related bugs that together let a disabled peer leak
+// peer_updated events back onto the WatchPeers stream:
+//
+//  1. UpdateLastSeen unconditionally flipped status='online' on
+//     every heartbeat, silently undoing admin disable as soon as
+//     the next heartbeat arrived. The CASE expression in the SQL
+//     now preserves 'disabled' but still advances last_seen_at so
+//     operators can see the disabled client is alive in the field.
+//
+//  2. The Heartbeat handler's endpoint-changed branch published
+//     PeerUpdated via raw bus.Publish — no visibility check. Even
+//     with #1 fixed, a still-disabled peer that hits the endpoints
+//     update path would have leaked. The fix routes through
+//     PublishPeerUpdatedIfVisible, the same gate the PATCH paths
+//     use, so disabled / pending peers stay silent.
+//
+// Why both fixes together: with #1 alone, the heartbeat keeps
+// status=disabled but raw publish still leaks. With #2 alone, the
+// visibility check sees status=online (overwritten by #1's bug)
+// and publishes anyway. Both are needed for the admin disable to
+// actually take effect.
+func TestHeartbeat_DisabledPeerDoesNotEmitPeerUpdated(t *testing.T) {
+	f := startFixture(t)
+
+	watcher := postJSON(t, f.httpURL+"/api/v1/peers/register", map[string]any{
+		"hostname":           "leak-watcher",
+		"wireguardPublicKey": randomPubKey(t),
+		"tenantSlug":         f.tenantSlug,
+	})
+	target := postJSON(t, f.httpURL+"/api/v1/peers/register", map[string]any{
+		"hostname":           "leak-target",
+		"wireguardPublicKey": randomPubKey(t),
+		"tenantSlug":         f.tenantSlug,
+	})
+	if watcher.status != http.StatusOK || target.status != http.StatusOK {
+		t.Fatalf("register w=%d t=%d", watcher.status, target.status)
+	}
+	var watcherOut, targetOut struct {
+		Self struct {
+			ID string `json:"id"`
+		} `json:"self"`
+	}
+	_ = json.Unmarshal(watcher.body, &watcherOut)
+	_ = json.Unmarshal(target.body, &targetOut)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		f.httpURL+"/api/v1/peers/watch?peerId="+watcherOut.Self.ID, nil)
+	if err != nil {
+		t.Fatalf("build watch request: %v", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("watch: %v", err)
+	}
+	defer resp.Body.Close()
+
+	// Disable target — drains the expected peer_removed first so
+	// the next readSSEEvent only sees events from the heartbeat.
+	go patchPeerStatusBackground(f.httpURL+"/api/v1/peers/"+targetOut.Self.ID, f.tenantSlug, "disabled")
+	if _, err := readSSEEvent(resp.Body, "peer_removed", 3*time.Second); err != nil {
+		t.Fatalf("draining peer_removed: %v", err)
+	}
+
+	// Heartbeat from the (now-disabled) target with a brand-new
+	// endpoint. Without the visibility gate, this would race a
+	// peer_updated onto the watcher's stream.
+	go func() {
+		_ = postJSON(nil, f.httpURL+"/api/v1/peers/heartbeat", map[string]any{
+			"peerId":              targetOut.Self.ID,
+			"knownPolicyRevision": int64(1),
+			"endpoints":           []string{"203.0.113.250:51820"},
+		})
+	}()
+
+	// Expect silence — the gate should suppress the publish.
+	got, err := readSSEEvent(resp.Body, "peer_updated", 1*time.Second)
+	if err == nil {
+		t.Errorf("got peer_updated for disabled peer (data=%q), want timeout", got)
+	}
+}
+
 // TestRESTPatchPeer_HostnameEmitsPeerUpdated verifies that PATCHing
 // hostname (no status change) publishes a peer_updated event on the
 // watch stream, so subscribers refresh their UI / MagicDNS cache
