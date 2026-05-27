@@ -4,6 +4,7 @@ import { useTranslations } from 'next-intl';
 import { Link } from '@/i18n/routing';
 import { FetchErrorState } from '@/components/FetchErrorState';
 import { fetchMe } from '@/lib/api';
+import { AuditExportCard } from './AuditExportCard';
 
 // Settings is the home for tenant + account configuration. P0-3
 // skeleton — shows tenant ID / slug, account email + role, and a
@@ -91,6 +92,12 @@ function SettingsView({
  {isAdmin && (
  <Section title={t('relaysCard.title')}>
  <RelaysCard />
+ </Section>
+ )}
+
+ {isAdmin && (
+ <Section title={t('auditExportCard.title')}>
+ <AuditExportCard />
  </Section>
  )}
  </div>
