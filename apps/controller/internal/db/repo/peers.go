@@ -249,16 +249,26 @@ func (r *Peers) GetByID(ctx context.Context, id uuid.UUID) (*Peer, error) {
 	return &p, nil
 }
 
-// UpdateLastSeen sets last_seen_at = now() and status = 'online'.
-// Returns the peer's tenant_id so the caller can scope tenant-level
-// lookups (policy, etc.) without a second round-trip. Returns
-// ErrNotFound when the peer no longer exists.
+// UpdateLastSeen sets last_seen_at = now() and flips status to
+// 'online' UNLESS the peer is currently 'disabled' — admin disable
+// must survive heartbeat traffic. Returns the peer's tenant_id so
+// the caller can scope tenant-level lookups (policy, etc.) without
+// a second round-trip. Returns ErrNotFound when the peer no longer
+// exists.
+//
+// last_seen_at still advances for disabled peers — operators want
+// to see that a disabled client is still alive in the field
+// (it'll keep heartbeating until re-enabled or its session token
+// is yanked). Only the status column is sticky.
 func (r *Peers) UpdateLastSeen(ctx context.Context, id uuid.UUID) (uuid.UUID, error) {
 	var tenantID uuid.UUID
 	err := r.pool.QueryRow(ctx, `
 		UPDATE peers
 		   SET last_seen_at = now(),
-		       status       = 'online',
+		       status       = CASE WHEN status = 'disabled'
+		                            THEN status
+		                            ELSE 'online'
+		                       END,
 		       updated_at   = now()
 		 WHERE id = $1
 		RETURNING tenant_id

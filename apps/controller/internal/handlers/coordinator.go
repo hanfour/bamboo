@@ -534,11 +534,14 @@ func (h *CoordinatorHandler) Heartbeat(ctx context.Context, req *bamboov1.Heartb
 	if endpointsChanged {
 		updated, err := h.peers.GetByID(ctx, peerID)
 		if err == nil && updated != nil {
-			h.bus.Publish(updated.TenantID, &bamboov1.WatchPeersEvent{
-				Event: &bamboov1.WatchPeersEvent_PeerUpdated{
-					PeerUpdated: &bamboov1.PeerUpdated{Peer: toProtoPeer(updated)},
-				},
-			})
+			// Route through PublishPeerUpdatedIfVisible so a disabled
+			// or pending peer's heartbeat-driven endpoint change
+			// doesn't leak as a PeerUpdated to subscribers — they
+			// already removed this peer from their WG config via the
+			// SetPeerStatus PeerRemoved (or never added it for a
+			// still-pending registration). Raw bus.Publish would
+			// re-introduce the peer in their view of the mesh.
+			h.PublishPeerUpdatedIfVisible(updated.TenantID, updated)
 		}
 	}
 
