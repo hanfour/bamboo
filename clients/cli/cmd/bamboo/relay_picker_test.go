@@ -288,15 +288,26 @@ func TestJoinErrors(t *testing.T) {
 // values aren't meaningful here (kernel handles connect before
 // any accept logic runs), so the ordering test uses the probeFn
 // seam instead.
+//
+// The accept-loop goroutine is pre-counted on the WaitGroup so
+// any `wg.Add(1)` for an incoming connection happens while the
+// counter is already non-zero — Go's WaitGroup spec requires
+// positive-delta Adds to happen-before any Wait that observed
+// zero, and without this pre-count the race detector reproducibly
+// trips under parallel CI load. The cleanup closes the listener
+// first to unblock Accept, then waits — order matters because
+// `t.Cleanup` is LIFO so the previous split-into-two version
+// ended up waiting BEFORE closing.
 func newSyntheticRelay(t *testing.T) string {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
-	t.Cleanup(func() { _ = ln.Close() })
 	var wg sync.WaitGroup
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
 		for {
 			conn, err := ln.Accept()
 			if err != nil {
@@ -309,7 +320,10 @@ func newSyntheticRelay(t *testing.T) string {
 			}(conn)
 		}
 	}()
-	t.Cleanup(wg.Wait)
+	t.Cleanup(func() {
+		_ = ln.Close()
+		wg.Wait()
+	})
 	return ln.Addr().String()
 }
 
