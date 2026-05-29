@@ -45,8 +45,9 @@ func TestRESTRegister_PropagatesAllowedIps(t *testing.T) {
 	})
 	var dev, db struct {
 		Self struct {
-			ID string `json:"id"`
-			IP string `json:"ip"`
+			ID  string `json:"id"`
+			IP  string `json:"ip"`
+			IP6 string `json:"ip6"`
 		} `json:"self"`
 	}
 	_ = json.Unmarshal(devResp.body, &dev)
@@ -99,9 +100,12 @@ func TestRESTRegister_PropagatesAllowedIps(t *testing.T) {
 	for _, p := range parsed.Peers {
 		if p.ID == db.Self.ID {
 			found = true
-			wantCIDR := db.Self.IP + "/32"
-			if len(p.AllowedIps) != 1 || p.AllowedIps[0] != wantCIDR {
-				t.Errorf("dev's view of db.allowedIps = %v, want [%s]", p.AllowedIps, wantCIDR)
+			// Dual-family emit (NAT64 Phase A §6): the controller
+			// advertises both the v4 /32 and the derived v6 /128.
+			wantV4 := db.Self.IP + "/32"
+			wantV6 := db.Self.IP6 + "/128"
+			if len(p.AllowedIps) != 2 || p.AllowedIps[0] != wantV4 || p.AllowedIps[1] != wantV6 {
+				t.Errorf("dev's view of db.allowedIps = %v, want [%s %s]", p.AllowedIps, wantV4, wantV6)
 			}
 			break
 		}
