@@ -2548,7 +2548,7 @@ func (h *HTTPServer) apiSimulatePolicy(w http.ResponseWriter, r *http.Request, a
 				Allow:          simulateAllow(parsed, src, dst),
 			}
 			if edge.Allow {
-				edge.AllowedIPs = []string{dst.IP + dstPrefixSuffix(dst.IP)}
+				edge.AllowedIPs = dstTunnelIPs(dst)
 			}
 			resp.Edges = append(resp.Edges, edge)
 		}
@@ -2582,6 +2582,22 @@ func dstPrefixSuffix(ip string) string {
 		return "/128"
 	}
 	return "/32"
+}
+
+// dstTunnelIPs renders dst's tunnel addresses the same way the
+// coordinator's enforcement path does (NAT64 Phase A §6): the v4 /32
+// plus, when present, the deterministic IPv6 ULA /128. Keeping the two
+// paths in lock-step means the simulator matrix matches what clients
+// actually receive.
+func dstTunnelIPs(dst *repo.Peer) []string {
+	out := []string{dst.IP + dstPrefixSuffix(dst.IP)}
+	// Hardcode /128 to match allowedIPsFor (handlers) literally: the
+	// ip6 column always stores a ULA IPv6, so the simulator stays
+	// byte-for-byte consistent with what the enforcement path emits.
+	if dst.IP6 != "" {
+		out = append(out, dst.IP6+"/128")
+	}
+	return out
 }
 
 // apiHistoryRecordJSON is one row of the Versions tab.
