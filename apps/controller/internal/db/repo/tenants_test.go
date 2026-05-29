@@ -79,3 +79,45 @@ func TestTenants_GetBySlug_NotFound(t *testing.T) {
 		t.Errorf("err = %v, want ErrNotFound", err)
 	}
 }
+
+func TestTenants_SetNAT64Config(t *testing.T) {
+	pool := requireDB(t)
+	tenants := repo.NewTenants(pool)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	slug := fmt.Sprintf("nat64-%s", uuid.NewString()[:8])
+	tn, err := tenants.GetOrCreate(ctx, slug, "nat64 test", "100.64.0.0/24")
+	if err != nil {
+		t.Fatalf("GetOrCreate: %v", err)
+	}
+	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, tn.ID) })
+
+	if tn.NAT64Prefix != "" || tn.DNS64Enabled {
+		t.Errorf("fresh tenant NAT64Prefix=%q DNS64Enabled=%v, want \"\"/false", tn.NAT64Prefix, tn.DNS64Enabled)
+	}
+
+	got, err := tenants.SetNAT64Config(ctx, tn.ID, "2001:db8:1234::/96", true)
+	if err != nil {
+		t.Fatalf("SetNAT64Config: %v", err)
+	}
+	if got.NAT64Prefix != "2001:db8:1234::/96" || !got.DNS64Enabled {
+		t.Errorf("after set: NAT64Prefix=%q DNS64Enabled=%v", got.NAT64Prefix, got.DNS64Enabled)
+	}
+
+	reread, err := tenants.GetByID(ctx, tn.ID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if reread.NAT64Prefix != "2001:db8:1234::/96" || !reread.DNS64Enabled {
+		t.Errorf("reread: NAT64Prefix=%q DNS64Enabled=%v", reread.NAT64Prefix, reread.DNS64Enabled)
+	}
+
+	cleared, err := tenants.SetNAT64Config(ctx, tn.ID, "", false)
+	if err != nil {
+		t.Fatalf("SetNAT64Config clear: %v", err)
+	}
+	if cleared.NAT64Prefix != "" || cleared.DNS64Enabled {
+		t.Errorf("after clear: NAT64Prefix=%q DNS64Enabled=%v", cleared.NAT64Prefix, cleared.DNS64Enabled)
+	}
+}
