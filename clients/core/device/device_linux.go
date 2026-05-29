@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"net/netip"
 
 	"github.com/hanfour/bamboo/clients/core/wg"
 	"github.com/vishvananda/netlink"
@@ -109,15 +110,29 @@ func (d *linuxDevice) ensureLink() error {
 }
 
 func (d *linuxDevice) applyAddress(cfg *wg.DeviceConfig) error {
+	if err := d.addAddr(cfg.Address); err != nil {
+		return err
+	}
+	// Dual-stack (NAT64 Phase A): add the IPv6 ULA when the controller
+	// supplied one. Zero/invalid on a pre-#232 controller — skip then.
+	if cfg.Address6.IsValid() {
+		if err := d.addAddr(cfg.Address6); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// addAddr assigns a single prefix to the link, idempotent on EEXIST.
+func (d *linuxDevice) addAddr(p netip.Prefix) error {
 	addr := &netlink.Addr{
 		IPNet: &net.IPNet{
-			IP:   cfg.Address.Addr().AsSlice(),
-			Mask: net.CIDRMask(cfg.Address.Bits(), cfg.Address.Addr().BitLen()),
+			IP:   p.Addr().AsSlice(),
+			Mask: net.CIDRMask(p.Bits(), p.Addr().BitLen()),
 		},
 	}
-	// Idempotent: ignore EEXIST.
 	if err := netlink.AddrAdd(d.link, addr); err != nil && !isExist(err) {
-		return fmt.Errorf("addr add: %w", err)
+		return fmt.Errorf("addr add %s: %w", p, err)
 	}
 	return nil
 }

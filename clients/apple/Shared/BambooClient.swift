@@ -76,6 +76,10 @@ public struct BambooClient {
         public var tenantId: String
         public var hostname: String
         public var ip: String
+        /// ip6 is the peer's deterministic IPv6 ULA (NAT64 Phase A),
+        /// derived controller-side from `ip`. Optional: a pre-#232
+        /// controller omits it (`ip6,omitempty`).
+        public var ip6: String?
         public var wireguardPublicKey: String
         public var os: String?
         public var clientVersion: String?

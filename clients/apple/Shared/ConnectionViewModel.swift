@@ -126,6 +126,7 @@ public final class ConnectionViewModel: ObservableObject {
     private var peerCache: [String: BambooClient.PeerJSON] = [:]
     private var selfPeerID: String?
     private var selfIPv4: String?
+    private var selfIPv6: String?
     // peer.id -> 127.0.0.1:<port> of the local RelayClient proxy for
     // that peer. Populated at connect() time when relay is enabled,
     // then consulted on every watch-driven rebuild so a peer_updated
@@ -571,6 +572,7 @@ public final class ConnectionViewModel: ObservableObject {
             let config = BambooTunnelConfig(
                 privateKey: privateKey.base64Key,
                 address: "\(resp.self_.ip)/32",
+                address6: resp.self_.ip6.map { "\($0)/128" },
                 dnsServers: [],
                 mtu: 1280,
                 wgListenPort: wgPort,
@@ -591,6 +593,7 @@ public final class ConnectionViewModel: ObservableObject {
             self.peerCache = seed
             self.selfPeerID = resp.self_.id
             self.selfIPv4 = resp.self_.ip
+            self.selfIPv6 = resp.self_.ip6
             // Cache the controller-computed AllowedIps separately
             // from peerCache so a later WatchPeers event (which
             // carries no AllowedIps) can't accidentally reset a peer
@@ -984,7 +987,7 @@ public final class ConnectionViewModel: ObservableObject {
             }
             map[dnsName.lowercased()] = MagicDNSPeerStore.PeerEntry(
                 ipv4: p.ip,
-                ipv6: nil,
+                ipv6: p.ip6,
                 hostname: p.hostname
             )
         }
@@ -1043,6 +1046,7 @@ public final class ConnectionViewModel: ObservableObject {
         let config = BambooTunnelConfig(
             privateKey: prevConfig.privateKey,
             address: "\(selfIPv4)/32",
+            address6: selfIPv6.map { "\($0)/128" },
             dnsServers: prevConfig.dnsServers,
             mtu: prevConfig.mtu,
             wgListenPort: prevConfig.wgListenPort,

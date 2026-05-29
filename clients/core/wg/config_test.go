@@ -281,6 +281,37 @@ func TestBuildDeviceConfig_EnforcingRejectsMalformedAllowedIps(t *testing.T) {
 	}
 }
 
+func TestBuildDeviceConfig_SelfIP6(t *testing.T) {
+	priv, _ := wg.GeneratePrivateKey()
+	resp := &bamboov1.RegisterResponse{
+		Self: &bamboov1.Peer{Ip: "100.64.0.1", Ip6: "fdba:1100::6440:1"},
+	}
+	cfg, err := wg.BuildDeviceConfig(priv, resp)
+	if err != nil {
+		t.Fatalf("BuildDeviceConfig: %v", err)
+	}
+	if cfg.Address.String() != "100.64.0.1/32" {
+		t.Errorf("Address = %s, want 100.64.0.1/32", cfg.Address)
+	}
+	if cfg.Address6.String() != "fdba:1100::6440:1/128" {
+		t.Errorf("Address6 = %s, want fdba:1100::6440:1/128", cfg.Address6)
+	}
+}
+
+func TestBuildDeviceConfig_NoIP6LeavesAddress6Invalid(t *testing.T) {
+	priv, _ := wg.GeneratePrivateKey()
+	resp := &bamboov1.RegisterResponse{
+		Self: &bamboov1.Peer{Ip: "100.64.0.1"}, // no Ip6 (legacy controller)
+	}
+	cfg, err := wg.BuildDeviceConfig(priv, resp)
+	if err != nil {
+		t.Fatalf("BuildDeviceConfig: %v", err)
+	}
+	if cfg.Address6.IsValid() {
+		t.Errorf("Address6 = %s, want zero/invalid when self has no ip6", cfg.Address6)
+	}
+}
+
 func TestDeviceConfig_WGQuick_Format(t *testing.T) {
 	priv, _ := wg.GeneratePrivateKey()
 	peerPriv, _ := wg.GeneratePrivateKey()
@@ -311,5 +342,15 @@ func TestDeviceConfig_WGQuick_Format(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("WGQuick output missing %q. got:\n%s", want, out)
 		}
+	}
+}
+
+func TestBuildDeviceConfig_MalformedSelfIP6Errors(t *testing.T) {
+	priv, _ := wg.GeneratePrivateKey()
+	resp := &bamboov1.RegisterResponse{
+		Self: &bamboov1.Peer{Ip: "100.64.0.1", Ip6: "not-an-ip"},
+	}
+	if _, err := wg.BuildDeviceConfig(priv, resp); err == nil {
+		t.Error("expected error for malformed self ip6")
 	}
 }
