@@ -193,3 +193,21 @@ func mustPrefix(t *testing.T, s string) netip.Prefix {
 	}
 	return p
 }
+
+func TestDetect_ExemptsNAT64Prefix(t *testing.T) {
+	p := netip.MustParsePrefix("64:ff9b::/96")
+	a := uuid.New()
+	b := uuid.New()
+	owners := []routes.Owner{
+		{PeerID: a, Hostname: "egress-a", CIDR: p},
+		{PeerID: b, Hostname: "egress-b", CIDR: p},
+	}
+	// Without exempt: two egresses advertising the same /96 are a duplicate.
+	if got := routes.Detect(owners); len(got) == 0 {
+		t.Error("expected a duplicate conflict when the NAT64 prefix is not exempt")
+	}
+	// With exempt: the synthesised NAT64 route produces no conflict.
+	if got := routes.Detect(owners, p); len(got) != 0 {
+		t.Errorf("expected no conflict for exempt NAT64 prefix, got %v", got)
+	}
+}

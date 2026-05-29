@@ -1881,7 +1881,19 @@ func (h *HTTPServer) apiPeerRouteConflicts(w http.ResponseWriter, r *http.Reques
 			})
 		}
 	}
-	all := routes.Detect(owners)
+	// Exempt the tenant's NAT64 translation prefix: a Phase C egress
+	// advertising <prefix>::/96 (possibly several for redundancy) is a
+	// synthesised route, not a conflict (NAT64 umbrella §5). Only when
+	// DNS64 is actually enabled — otherwise a tenant that never touched
+	// NAT64 would have 64:ff9b::/96 silently masked, hiding a genuine
+	// conflict if that range were ever advertised for another purpose.
+	var nat64Pfx netip.Prefix
+	if tenant.DNS64Enabled {
+		// ParsePrefix returns the default on "" and a zero Prefix on a
+		// parse failure; a zero Prefix is safely skipped by Detect.
+		nat64Pfx, _ = nat64.ParsePrefix(tenant.NAT64Prefix)
+	}
+	all := routes.Detect(owners, nat64Pfx)
 	out := make([]apiPeerRouteConflictJSON, 0)
 	for _, c := range all {
 		if c.Self.PeerID != id {

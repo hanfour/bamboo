@@ -104,17 +104,30 @@ type Conflict struct {
 // Zero-valued prefixes (netip.Prefix{}) are silently skipped — they
 // occur when the caller hands us an unparsable CIDR string that we
 // chose not to error on at the boundary.
-func Detect(owners []Owner) []Conflict {
+//
+// Owners whose CIDR matches an exempt prefix are skipped entirely —
+// synthesised routes such as the NAT64 translation prefix where
+// multiple egresses advertising the same /96 is intended, not a
+// conflict (NAT64 umbrella §5).
+func Detect(owners []Owner, exempt ...netip.Prefix) []Conflict {
+	isExempt := func(p netip.Prefix) bool {
+		for _, e := range exempt {
+			if p == e {
+				return true
+			}
+		}
+		return false
+	}
 	var out []Conflict
 	for i, a := range owners {
-		if !a.CIDR.IsValid() {
+		if !a.CIDR.IsValid() || isExempt(a.CIDR) {
 			continue
 		}
 		for j, b := range owners {
 			if i == j {
 				continue
 			}
-			if !b.CIDR.IsValid() {
+			if !b.CIDR.IsValid() || isExempt(b.CIDR) {
 				continue
 			}
 			// Same peer with two of its own CIDRs would also conflict
