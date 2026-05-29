@@ -19,6 +19,10 @@ type DeviceConfig struct {
 	PrivateKey PrivateKey
 	// Address is the IP this peer holds inside the mesh, with prefix length.
 	Address netip.Prefix
+	// Address6 is the peer's deterministic IPv6 ULA /128 (NAT64 Phase
+	// A), derived by the controller from Address. Zero/invalid when the
+	// controller predates ip6 (pre-#232) — callers must check IsValid.
+	Address6 netip.Prefix
 	// ListenPort is the UDP port WireGuard binds locally. Zero means
 	// "let the kernel pick".
 	ListenPort uint16
@@ -80,6 +84,17 @@ func BuildDeviceConfig(privKey PrivateKey, resp *bamboov1.RegisterResponse) (*De
 	cfg := &DeviceConfig{
 		PrivateKey: privKey,
 		Address:    selfPrefix,
+	}
+
+	// Self IPv6 ULA (NAT64 Phase A): present on a #232+ controller.
+	// A pure function of Address, always a /128; left zero when absent
+	// so the device layer skips it.
+	if ip6 := resp.GetSelf().GetIp6(); ip6 != "" {
+		addr6, err := netip.ParseAddr(ip6)
+		if err != nil {
+			return nil, fmt.Errorf("parse self ip6 %q: %w", ip6, err)
+		}
+		cfg.Address6 = netip.PrefixFrom(addr6, 128)
 	}
 
 	enforcing := resp.GetPolicyRevision() > 0
