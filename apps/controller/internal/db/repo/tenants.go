@@ -26,6 +26,7 @@ type Tenant struct {
 	Name      string
 	Slug      string
 	IPPool    string // CIDR text form, e.g. "100.64.0.0/24"
+	IP6Pool   string // CIDR text form, e.g. "fdba:1100::/64"
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
@@ -37,9 +38,9 @@ func (r *Tenants) Create(ctx context.Context, name, slug, ipPool string) (*Tenan
 	err := r.pool.QueryRow(ctx, `
 		INSERT INTO tenants (name, slug, ip_pool)
 		VALUES ($1, $2, $3::cidr)
-		RETURNING id, name, slug, ip_pool::text, created_at, updated_at
+		RETURNING id, name, slug, ip_pool::text, ip6_pool::text, created_at, updated_at
 	`, name, slug, ipPool).Scan(
-		&t.ID, &t.Name, &t.Slug, &t.IPPool, &t.CreatedAt, &t.UpdatedAt,
+		&t.ID, &t.Name, &t.Slug, &t.IPPool, &t.IP6Pool, &t.CreatedAt, &t.UpdatedAt,
 	)
 	if err != nil {
 		return nil, err
@@ -52,10 +53,10 @@ func (r *Tenants) Create(ctx context.Context, name, slug, ipPool string) (*Tenan
 func (r *Tenants) GetBySlug(ctx context.Context, slug string) (*Tenant, error) {
 	var t Tenant
 	err := r.pool.QueryRow(ctx, `
-		SELECT id, name, slug, ip_pool::text, created_at, updated_at
+		SELECT id, name, slug, ip_pool::text, ip6_pool::text, created_at, updated_at
 		FROM tenants
 		WHERE slug = $1 AND deleted_at IS NULL
-	`, slug).Scan(&t.ID, &t.Name, &t.Slug, &t.IPPool, &t.CreatedAt, &t.UpdatedAt)
+	`, slug).Scan(&t.ID, &t.Name, &t.Slug, &t.IPPool, &t.IP6Pool, &t.CreatedAt, &t.UpdatedAt)
 	if err != nil {
 		return nil, asNotFound(err)
 	}
@@ -81,10 +82,10 @@ func (r *Tenants) GetOrCreate(ctx context.Context, slug, defaultName, defaultIPP
 func (r *Tenants) GetByID(ctx context.Context, id uuid.UUID) (*Tenant, error) {
 	var t Tenant
 	err := r.pool.QueryRow(ctx, `
-		SELECT id, name, slug, ip_pool::text, created_at, updated_at
+		SELECT id, name, slug, ip_pool::text, ip6_pool::text, created_at, updated_at
 		FROM tenants
 		WHERE id = $1 AND deleted_at IS NULL
-	`, id).Scan(&t.ID, &t.Name, &t.Slug, &t.IPPool, &t.CreatedAt, &t.UpdatedAt)
+	`, id).Scan(&t.ID, &t.Name, &t.Slug, &t.IPPool, &t.IP6Pool, &t.CreatedAt, &t.UpdatedAt)
 	if err != nil {
 		return nil, asNotFound(err)
 	}
