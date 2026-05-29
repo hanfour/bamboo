@@ -987,7 +987,7 @@ public final class ConnectionViewModel: ObservableObject {
             }
             map[dnsName.lowercased()] = MagicDNSPeerStore.PeerEntry(
                 ipv4: p.ip,
-                ipv6: nil,
+                ipv6: p.ip6,
                 hostname: p.hostname
             )
         }
