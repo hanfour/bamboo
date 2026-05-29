@@ -33,6 +33,10 @@ public struct BambooPeerConfig: Codable, Equatable {
 public struct BambooTunnelConfig: Codable, Equatable {
     public let privateKey: String         // Curve25519, base64
     public let address: String            // tunnel IPv4, e.g. "100.64.0.5/32"
+    /// tunnel IPv6 ULA, e.g. "fdba:1100::6440:5/128" (NAT64 Phase A).
+    /// nil for configs built against a pre-#232 controller or restored
+    /// from a pre-dual-stack stored config.
+    public let address6: String?
     public let dnsServers: [String]
     public let mtu: UInt16?
     /// UDP port WireGuard listens on locally. The same port is used
@@ -45,12 +49,14 @@ public struct BambooTunnelConfig: Codable, Equatable {
 
     public init(privateKey: String,
                 address: String,
+                address6: String? = nil,
                 dnsServers: [String] = [],
                 mtu: UInt16? = nil,
                 wgListenPort: UInt16 = 0,
                 peers: [BambooPeerConfig] = []) {
         self.privateKey = privateKey
         self.address = address
+        self.address6 = address6
         self.dnsServers = dnsServers
         self.mtu = mtu
         self.wgListenPort = wgListenPort
@@ -61,6 +67,7 @@ public struct BambooTunnelConfig: Codable, Equatable {
 public enum TunnelConfigurationBuilderError: Error {
     case invalidPrivateKey
     case invalidAddress
+    case invalidAddress6
     case invalidPeerPublicKey(String)
     case invalidAllowedIP(String)
     case invalidEndpoint(String)
@@ -80,6 +87,14 @@ public enum TunnelConfigurationBuilder {
             throw TunnelConfigurationBuilderError.invalidAddress
         }
         interface.addresses = [address]
+        // Dual-stack (NAT64 Phase A): append the IPv6 ULA so WireGuardKit's
+        // adapter derives NEIPv6Settings alongside the v4 NEIPv4Settings.
+        if let raw6 = config.address6 {
+            guard let address6 = IPAddressRange(from: raw6) else {
+                throw TunnelConfigurationBuilderError.invalidAddress6
+            }
+            interface.addresses.append(address6)
+        }
         interface.dns = config.dnsServers.compactMap { DNSServer(from: $0) }
         if let mtu = config.mtu {
             interface.mtu = mtu
