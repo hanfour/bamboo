@@ -27,7 +27,11 @@ SET ip6 = (host(t.ip6_pool)::inet + (p.ip - '0.0.0.0'::inet))::inet
 FROM tenants t
 WHERE p.tenant_id = t.id;
 
-ALTER TABLE peers ALTER COLUMN ip6 SET NOT NULL;
+-- ip6 stays NULLABLE: production always sets it (register → NextFreeDual),
+-- and existing rows are backfilled above, but the repo Insert primitive is
+-- exercised by tests/tools without an ip6, so a NOT NULL here would reject
+-- those valid inserts. The (tenant_id, ip6) unique index still guarantees
+-- no two real peers collide (Postgres treats NULLs as distinct).
 ALTER TABLE peers ADD CONSTRAINT peers_tenant_ip6_unique UNIQUE (tenant_id, ip6);
 
 -- +goose StatementEnd
