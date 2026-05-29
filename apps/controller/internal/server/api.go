@@ -2839,11 +2839,11 @@ type apiDNSJSON struct {
 	GlobalNameservers  []string `json:"globalNameservers"`
 	SearchDomains      []string `json:"searchDomains"`
 	OverrideDNSServers bool     `json:"overrideDnsServers"`
-	// NAT64 Phase B: DNS64 synthesis config. Nat64Prefix is the resolved
-	// /96 (well-known default substituted when unset). Dns64Enabled is
+	// NAT64 Phase B: DNS64 synthesis config. NAT64Prefix is the resolved
+	// /96 (well-known default substituted when unset). DNS64Enabled is
 	// the per-tenant toggle.
-	Nat64Prefix  string    `json:"nat64Prefix"`
-	Dns64Enabled bool      `json:"dns64Enabled"`
+	NAT64Prefix  string    `json:"nat64Prefix"`
+	DNS64Enabled bool      `json:"dns64Enabled"`
 	UpdatedAt    time.Time `json:"updatedAt"`
 	UpdatedBy    string    `json:"updatedBy,omitempty"`
 }
@@ -2884,8 +2884,8 @@ func (h *HTTPServer) apiDNS(w http.ResponseWriter, r *http.Request, authn *authn
 		GlobalNameservers:  cfg.GlobalNameservers,
 		SearchDomains:      cfg.SearchDomains,
 		OverrideDNSServers: cfg.OverrideDNSServers,
-		Nat64Prefix:        nat64.ResolvePrefix(tenant.NAT64Prefix),
-		Dns64Enabled:       tenant.DNS64Enabled,
+		NAT64Prefix:        nat64.ResolvePrefix(tenant.NAT64Prefix),
+		DNS64Enabled:       tenant.DNS64Enabled,
 		UpdatedAt:          cfg.UpdatedAt,
 		UpdatedBy:          updatedBy,
 	})
@@ -2895,8 +2895,8 @@ func (h *HTTPServer) apiDNS(w http.ResponseWriter, r *http.Request, authn *authn
 // fields are pointers so an omitted field leaves the stored value
 // unchanged. nat64Prefix "" clears the override (→ well-known default).
 type apiDNSPatchReq struct {
-	Nat64Prefix  *string `json:"nat64Prefix"`
-	Dns64Enabled *bool   `json:"dns64Enabled"`
+	NAT64Prefix  *string `json:"nat64Prefix"`
+	DNS64Enabled *bool   `json:"dns64Enabled"`
 }
 
 // apiDNSPatch writes the tenant's DNS64 settings (NAT64 Phase B).
@@ -2912,15 +2912,15 @@ func (h *HTTPServer) apiDNSPatch(w http.ResponseWriter, r *http.Request, authn *
 	}
 	prefix := tenant.NAT64Prefix
 	enabled := tenant.DNS64Enabled
-	if req.Nat64Prefix != nil {
-		if _, err := nat64.ParsePrefix(*req.Nat64Prefix); err != nil {
+	if req.NAT64Prefix != nil {
+		if _, err := nat64.ParsePrefix(*req.NAT64Prefix); err != nil {
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
-		prefix = *req.Nat64Prefix
+		prefix = *req.NAT64Prefix
 	}
-	if req.Dns64Enabled != nil {
-		enabled = *req.Dns64Enabled
+	if req.DNS64Enabled != nil {
+		enabled = *req.DNS64Enabled
 	}
 	updated, err := h.tenants.SetNAT64Config(r.Context(), tenant.ID, prefix, enabled)
 	if err != nil {
@@ -2963,8 +2963,8 @@ func (h *HTTPServer) apiDNSPatch(w http.ResponseWriter, r *http.Request, authn *
 		GlobalNameservers:  cfg.GlobalNameservers,
 		SearchDomains:      cfg.SearchDomains,
 		OverrideDNSServers: cfg.OverrideDNSServers,
-		Nat64Prefix:        nat64.ResolvePrefix(updated.NAT64Prefix),
-		Dns64Enabled:       updated.DNS64Enabled,
+		NAT64Prefix:        nat64.ResolvePrefix(updated.NAT64Prefix),
+		DNS64Enabled:       updated.DNS64Enabled,
 		UpdatedAt:          cfg.UpdatedAt,
 		UpdatedBy:          updatedBy,
 	})
