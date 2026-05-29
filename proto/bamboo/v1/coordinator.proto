@@ -72,6 +72,11 @@ message Peer {
   // the row. Empty in legacy responses pre-#133 — clients should
   // treat empty as "approved" for backward compatibility.
   string approval_status = 16;
+
+  // ip6 is the peer's deterministic IPv6 ULA, derived from its IPv4
+  // (the v4's 32 bits embedded in the low 32 bits of the tenant's /64
+  // pool). Empty in legacy responses; clients ignore empty.
+  string ip6 = 17;
 }
 
 message RegisterRequest {
