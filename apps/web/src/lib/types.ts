@@ -19,6 +19,9 @@ export type Peer = {
   // registered yet.
   peerDnsName?: string;
   ip: string;
+  // ip6 is the peer's deterministic IPv6 ULA, derived from its IPv4
+  // (NAT64 Phase A). Absent for peers served by a pre-#232 controller.
+  ip6?: string;
   tags: string[];
   os: string;
   clientVersion: string;

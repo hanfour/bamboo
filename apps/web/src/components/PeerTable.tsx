@@ -242,6 +242,14 @@ function AddressCell({
  <div className="flex items-start gap-1">
  <div className="min-w-0 flex-1">
  <div className="font-mono text-xs text-bamboo-100/90">{peer.ip}</div>
+ {peer.ip6 && (
+  <div
+   aria-label="IPv6 address"
+   className="hidden font-mono text-[10px] text-bamboo-200/50 lg:block"
+  >
+   {peer.ip6}
+  </div>
+ )}
  {expanded && hasDetails && (
  <dl className="mt-1.5 space-y-1 text-[10px] text-bamboo-200/60">
  <div>
