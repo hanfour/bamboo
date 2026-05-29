@@ -339,7 +339,7 @@ func (h *CoordinatorHandler) Register(ctx context.Context, req *bamboov1.Registe
 		if err != nil {
 			return nil, status.Errorf(codes.Internal, "list used IPs: %v", err)
 		}
-		ip, err := ipalloc.NextFree(tenant.IPPool, used)
+		ip, ip6, err := ipalloc.NextFreeDual(tenant.IPPool, tenant.IP6Pool, used)
 		if err != nil {
 			return nil, status.Errorf(codes.ResourceExhausted, "ip allocation: %v", err)
 		}
@@ -377,6 +377,7 @@ func (h *CoordinatorHandler) Register(ctx context.Context, req *bamboov1.Registe
 			PeerDNSName:        dnsPtr,
 			WireGuardPublicKey: req.GetWireguardPublicKey(),
 			IP:                 ip,
+			IP6:                ip6,
 			OS:                 req.GetOs(),
 			ClientVersion:      req.GetClientVersion(),
 			Status:             "online",
@@ -769,6 +770,7 @@ func toProtoPeer(p *repo.Peer) *bamboov1.Peer {
 		Hostname:           p.Hostname,
 		WireguardPublicKey: p.WireGuardPublicKey,
 		Ip:                 p.IP,
+		Ip6:                p.IP6,
 		Os:                 p.OS,
 		ClientVersion:      p.ClientVersion,
 		Endpoints:          endpoints,

@@ -601,3 +601,47 @@ func randomB64(t *testing.T) string {
 	}
 	return base64.StdEncoding.EncodeToString(buf)
 }
+
+func TestPeers_IP6Roundtrip(t *testing.T) {
+	pool := requireDB(t)
+	tenants := repo.NewTenants(pool)
+	peers := repo.NewPeers(pool)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	slug := fmt.Sprintf("peer-ip6-%s", uuid.NewString()[:8])
+	tenant, err := tenants.GetOrCreate(ctx, slug, "ip6 test", "100.64.0.0/24")
+	if err != nil {
+		t.Fatalf("GetOrCreate tenant: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, tenant.ID)
+	})
+
+	pubkey := make([]byte, 32)
+	_, _ = rand.Read(pubkey)
+	in, err := peers.Insert(ctx, &repo.Peer{
+		TenantID:           tenant.ID,
+		Hostname:           "ip6host",
+		WireGuardPublicKey: base64.StdEncoding.EncodeToString(pubkey),
+		IP:                 "100.64.0.5",
+		IP6:                "fdba:1100::6440:5",
+		Status:             "online",
+		ApprovalStatus:     "approved",
+	})
+	if err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+	if in.IP6 != "fdba:1100::6440:5" {
+		t.Errorf("Insert returned IP6 %q, want fdba:1100::6440:5", in.IP6)
+	}
+
+	got, err := peers.GetByID(ctx, in.ID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if got.IP6 != "fdba:1100::6440:5" {
+		t.Errorf("GetByID IP6 = %q, want fdba:1100::6440:5", got.IP6)
+	}
+}

@@ -14,6 +14,8 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+
+	"github.com/hanfour/bamboo/apps/controller/internal/ipalloc/v6map"
 )
 
 // ErrPoolExhausted is returned when no free address can be found.
@@ -48,4 +50,24 @@ func NextFree(poolCIDR string, used []string) (string, error) {
 	}
 
 	return "", ErrPoolExhausted
+}
+
+// NextFreeDual allocates the next free IPv4 within v4Pool (skipping
+// usedV4) and derives the paired IPv6 from it within v6Pool. The v6 is
+// a pure function of the v4 (see v6map), so no separate v6 collision
+// scan is needed — v4 uniqueness implies v6 uniqueness.
+func NextFreeDual(v4Pool, v6Pool string, usedV4 []string) (v4, v6 string, err error) {
+	v4, err = NextFree(v4Pool, usedV4)
+	if err != nil {
+		return "", "", err
+	}
+	pool, err := netip.ParsePrefix(v6Pool)
+	if err != nil {
+		return "", "", fmt.Errorf("parse v6 pool: %w", err)
+	}
+	addr, err := netip.ParseAddr(v4)
+	if err != nil {
+		return "", "", fmt.Errorf("parse allocated v4: %w", err)
+	}
+	return v4, v6map.V6From(pool, addr).String(), nil
 }

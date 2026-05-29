@@ -65,6 +65,7 @@ type peerJSON struct {
 	TenantID           string   `json:"tenantId"`
 	Hostname           string   `json:"hostname"`
 	IP                 string   `json:"ip"`
+	IP6                string   `json:"ip6,omitempty"`
 	WireguardPublicKey string   `json:"wireguardPublicKey"`
 	OS                 string   `json:"os,omitempty"`
 	ClientVersion      string   `json:"clientVersion,omitempty"`
@@ -722,6 +723,7 @@ func protoPeerToJSON(p *bamboov1.Peer) peerJSON {
 		TenantID:           p.GetTenantId(),
 		Hostname:           p.GetHostname(),
 		IP:                 p.GetIp(),
+		IP6:                p.GetIp6(),
 		WireguardPublicKey: p.GetWireguardPublicKey(),
 		OS:                 p.GetOs(),
 		ClientVersion:      p.GetClientVersion(),

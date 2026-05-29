@@ -110,8 +110,12 @@ type Peer struct {
 	// the row. Empty in legacy responses pre-#133 — clients should
 	// treat empty as "approved" for backward compatibility.
 	ApprovalStatus string `protobuf:"bytes,16,opt,name=approval_status,json=approvalStatus,proto3" json:"approval_status,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// ip6 is the peer's deterministic IPv6 ULA, derived from its IPv4
+	// (the v4's 32 bits embedded in the low 32 bits of the tenant's /64
+	// pool). Empty in legacy responses; clients ignore empty.
+	Ip6           string `protobuf:"bytes,17,opt,name=ip6,proto3" json:"ip6,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *Peer) Reset() {
@@ -252,6 +256,13 @@ func (x *Peer) GetPeerDnsName() string {
 func (x *Peer) GetApprovalStatus() string {
 	if x != nil {
 		return x.ApprovalStatus
+	}
+	return ""
+}
+
+func (x *Peer) GetIp6() string {
+	if x != nil {
+		return x.Ip6
 	}
 	return ""
 }
@@ -1356,7 +1367,7 @@ var File_bamboo_v1_coordinator_proto protoreflect.FileDescriptor
 
 const file_bamboo_v1_coordinator_proto_rawDesc = "" +
 	"\n" +
-	"\x1bbamboo/v1/coordinator.proto\x12\tbamboo.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xa9\x04\n" +
+	"\x1bbamboo/v1/coordinator.proto\x12\tbamboo.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xbb\x04\n" +
 	"\x04Peer\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1b\n" +
 	"\ttenant_id\x18\x02 \x01(\tR\btenantId\x12\x1a\n" +
@@ -1377,7 +1388,8 @@ const file_bamboo_v1_coordinator_proto_rawDesc = "" +
 	"\vallowed_ips\x18\x0e \x03(\tR\n" +
 	"allowedIps\x12\"\n" +
 	"\rpeer_dns_name\x18\x0f \x01(\tR\vpeerDnsName\x12'\n" +
-	"\x0fapproval_status\x18\x10 \x01(\tR\x0eapprovalStatus\"\x98\x02\n" +
+	"\x0fapproval_status\x18\x10 \x01(\tR\x0eapprovalStatus\x12\x10\n" +
+	"\x03ip6\x18\x11 \x01(\tR\x03ip6\"\x98\x02\n" +
 	"\x0fRegisterRequest\x12#\n" +
 	"\fbearer_token\x18\x01 \x01(\tH\x00R\vbearerToken\x12/\n" +
 	"\x13pre_auth_key_secret\x18\x02 \x01(\tH\x00R\x10preAuthKeySecret\x12\x1a\n" +

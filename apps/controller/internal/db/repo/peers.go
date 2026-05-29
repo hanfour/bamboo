@@ -54,6 +54,7 @@ type Peer struct {
 	PeerDNSName        *string
 	WireGuardPublicKey string
 	IP                 string // text form, e.g. "100.64.0.7"
+	IP6                string // text form, e.g. "fdba:1100::6440:7"
 	OS                 string
 	ClientVersion      string
 	Status             string
@@ -168,14 +169,21 @@ func (r *Peers) Insert(ctx context.Context, p *Peer) (*Peer, error) {
 	if approval == "approved" {
 		approvedAt = time.Now().UTC()
 	}
+	// ip6 is nullable: production register always supplies it, but the
+	// repo primitive is also used (tests/tools) without one. Bind NULL
+	// for the empty case — "":inet would be a syntax error.
+	var ip6Arg any
+	if p.IP6 != "" {
+		ip6Arg = p.IP6
+	}
 	err := r.pool.QueryRow(ctx, `
 		INSERT INTO peers (
 		    tenant_id, user_id, hostname, peer_dns_name, wireguard_public_key,
-		    ip, os, client_version, status, endpoints,
+		    ip, ip6, os, client_version, status, endpoints,
 		    approval_status, approved_at, approved_by_user_id
-		) VALUES ($1, $2, $3, $4, $5, $6::inet, $7, $8, $9, $10, $11, $12, $13)
+		) VALUES ($1, $2, $3, $4, $5, $6::inet, $7::inet, $8, $9, $10, $11, $12, $13, $14)
 		RETURNING id, tenant_id, user_id, hostname, peer_dns_name, wireguard_public_key,
-		          host(ip), os, client_version, status, endpoints,
+		          host(ip), COALESCE(host(ip6), ''), os, client_version, status, endpoints,
 		          wg_endpoint, rx_bytes, tx_bytes,
 		          created_at, updated_at, last_seen_at, last_handshake_at,
 		          approval_status, approved_at, approved_by_user_id,
@@ -183,10 +191,10 @@ func (r *Peers) Insert(ctx context.Context, p *Peer) (*Peer, error) {
 		          exit_node_capable, exit_node_approved, using_exit_node_peer_id,
 		          connection_path, connection_path_at, connection_latency_ms
 	`, p.TenantID, p.UserID, p.Hostname, p.PeerDNSName, p.WireGuardPublicKey,
-		p.IP, p.OS, p.ClientVersion, p.Status, endpoints,
+		p.IP, ip6Arg, p.OS, p.ClientVersion, p.Status, endpoints,
 		approval, approvedAt, p.ApprovedByUserID).Scan(
 		&out.ID, &out.TenantID, &out.UserID, &out.Hostname, &out.PeerDNSName, &out.WireGuardPublicKey,
-		&out.IP, &out.OS, &out.ClientVersion, &out.Status, &out.Endpoints,
+		&out.IP, &out.IP6, &out.OS, &out.ClientVersion, &out.Status, &out.Endpoints,
 		&out.WGEndpoint, &out.RxBytes, &out.TxBytes,
 		&out.CreatedAt, &out.UpdatedAt, &out.LastSeenAt, &out.LastHandshakeAt,
 		&out.ApprovalStatus, &out.ApprovedAt, &out.ApprovedByUserID,
@@ -213,7 +221,7 @@ func (r *Peers) GetByID(ctx context.Context, id uuid.UUID) (*Peer, error) {
 	var ownerEmail, ownerDisplay *string
 	err := r.pool.QueryRow(ctx, `
 		SELECT peers.id, peers.tenant_id, peers.user_id, peers.hostname, peers.peer_dns_name, peers.wireguard_public_key,
-		       host(peers.ip), peers.os, peers.client_version, peers.status, peers.endpoints,
+		       host(peers.ip), COALESCE(host(peers.ip6), ''), peers.os, peers.client_version, peers.status, peers.endpoints,
 		       peers.wg_endpoint, peers.rx_bytes, peers.tx_bytes,
 		       peers.created_at, peers.updated_at, peers.last_seen_at, peers.last_handshake_at,
 		       `+peerTagsSubquery+`,
@@ -227,7 +235,7 @@ func (r *Peers) GetByID(ctx context.Context, id uuid.UUID) (*Peer, error) {
 		WHERE peers.id = $1
 	`, id).Scan(
 		&p.ID, &p.TenantID, &p.UserID, &p.Hostname, &p.PeerDNSName, &p.WireGuardPublicKey,
-		&p.IP, &p.OS, &p.ClientVersion, &p.Status, &p.Endpoints,
+		&p.IP, &p.IP6, &p.OS, &p.ClientVersion, &p.Status, &p.Endpoints,
 		&p.WGEndpoint, &p.RxBytes, &p.TxBytes,
 		&p.CreatedAt, &p.UpdatedAt, &p.LastSeenAt, &p.LastHandshakeAt,
 		&p.Tags,
@@ -285,7 +293,7 @@ func (r *Peers) FindByPubKey(ctx context.Context, tenantID uuid.UUID, pubKey str
 	var p Peer
 	err := r.pool.QueryRow(ctx, `
 		SELECT id, tenant_id, user_id, hostname, peer_dns_name, wireguard_public_key,
-		       host(ip), os, client_version, status, endpoints,
+		       host(ip), COALESCE(host(ip6), ''), os, client_version, status, endpoints,
 		       wg_endpoint, rx_bytes, tx_bytes,
 		       created_at, updated_at, last_seen_at, last_handshake_at,
 		       `+peerTagsSubquery+`,
@@ -297,7 +305,7 @@ func (r *Peers) FindByPubKey(ctx context.Context, tenantID uuid.UUID, pubKey str
 		WHERE tenant_id = $1 AND wireguard_public_key = $2
 	`, tenantID, pubKey).Scan(
 		&p.ID, &p.TenantID, &p.UserID, &p.Hostname, &p.PeerDNSName, &p.WireGuardPublicKey,
-		&p.IP, &p.OS, &p.ClientVersion, &p.Status, &p.Endpoints,
+		&p.IP, &p.IP6, &p.OS, &p.ClientVersion, &p.Status, &p.Endpoints,
 		&p.WGEndpoint, &p.RxBytes, &p.TxBytes,
 		&p.CreatedAt, &p.UpdatedAt, &p.LastSeenAt, &p.LastHandshakeAt,
 		&p.Tags,
@@ -321,7 +329,7 @@ func (r *Peers) FindByPubKey(ctx context.Context, tenantID uuid.UUID, pubKey str
 func (r *Peers) ListByTenant(ctx context.Context, tenantID uuid.UUID) ([]*Peer, error) {
 	rows, err := r.pool.Query(ctx, `
 		SELECT peers.id, peers.tenant_id, peers.user_id, peers.hostname, peers.peer_dns_name, peers.wireguard_public_key,
-		       host(peers.ip), peers.os, peers.client_version, peers.status, peers.endpoints,
+		       host(peers.ip), COALESCE(host(peers.ip6), ''), peers.os, peers.client_version, peers.status, peers.endpoints,
 		       peers.wg_endpoint, peers.rx_bytes, peers.tx_bytes,
 		       peers.created_at, peers.updated_at, peers.last_seen_at, peers.last_handshake_at,
 		       `+peerTagsSubquery+`,
@@ -346,7 +354,7 @@ func (r *Peers) ListByTenant(ctx context.Context, tenantID uuid.UUID) ([]*Peer, 
 		var ownerEmail, ownerDisplay *string
 		if err := rows.Scan(
 			&p.ID, &p.TenantID, &p.UserID, &p.Hostname, &p.PeerDNSName, &p.WireGuardPublicKey,
-			&p.IP, &p.OS, &p.ClientVersion, &p.Status, &p.Endpoints,
+			&p.IP, &p.IP6, &p.OS, &p.ClientVersion, &p.Status, &p.Endpoints,
 			&p.WGEndpoint, &p.RxBytes, &p.TxBytes,
 			&p.CreatedAt, &p.UpdatedAt, &p.LastSeenAt, &p.LastHandshakeAt,
 			&p.Tags,
