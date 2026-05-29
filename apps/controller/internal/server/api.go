@@ -21,6 +21,7 @@ import (
 	"github.com/hanfour/bamboo/apps/controller/internal/auth"
 	"github.com/hanfour/bamboo/apps/controller/internal/db/repo"
 	"github.com/hanfour/bamboo/apps/controller/internal/handlers"
+	"github.com/hanfour/bamboo/apps/controller/internal/nat64"
 	"github.com/hanfour/bamboo/apps/controller/internal/policy"
 	"github.com/hanfour/bamboo/apps/controller/internal/policy/recommend"
 	"github.com/hanfour/bamboo/apps/controller/internal/routes"
@@ -1880,7 +1881,19 @@ func (h *HTTPServer) apiPeerRouteConflicts(w http.ResponseWriter, r *http.Reques
 			})
 		}
 	}
-	all := routes.Detect(owners)
+	// Exempt the tenant's NAT64 translation prefix: a Phase C egress
+	// advertising <prefix>::/96 (possibly several for redundancy) is a
+	// synthesised route, not a conflict (NAT64 umbrella §5). Only when
+	// DNS64 is actually enabled — otherwise a tenant that never touched
+	// NAT64 would have 64:ff9b::/96 silently masked, hiding a genuine
+	// conflict if that range were ever advertised for another purpose.
+	var nat64Pfx netip.Prefix
+	if tenant.DNS64Enabled {
+		// ParsePrefix returns the default on "" and a zero Prefix on a
+		// parse failure; a zero Prefix is safely skipped by Detect.
+		nat64Pfx, _ = nat64.ParsePrefix(tenant.NAT64Prefix)
+	}
+	all := routes.Detect(owners, nat64Pfx)
 	out := make([]apiPeerRouteConflictJSON, 0)
 	for _, c := range all {
 		if c.Self.PeerID != id {
@@ -2819,28 +2832,38 @@ type apiOverviewJSON struct {
 // the user-id string when set; empty when defaults are surfaced for
 // an unwritten row.
 type apiDNSJSON struct {
-	TenantID           string    `json:"tenantId"`
-	TenantSlug         string    `json:"tenantSlug"`
-	TailnetName        string    `json:"tailnetName"`
-	MagicDNSEnabled    bool      `json:"magicDnsEnabled"`
-	GlobalNameservers  []string  `json:"globalNameservers"`
-	SearchDomains      []string  `json:"searchDomains"`
-	OverrideDNSServers bool      `json:"overrideDnsServers"`
-	UpdatedAt          time.Time `json:"updatedAt"`
-	UpdatedBy          string    `json:"updatedBy,omitempty"`
+	TenantID           string   `json:"tenantId"`
+	TenantSlug         string   `json:"tenantSlug"`
+	TailnetName        string   `json:"tailnetName"`
+	MagicDNSEnabled    bool     `json:"magicDnsEnabled"`
+	GlobalNameservers  []string `json:"globalNameservers"`
+	SearchDomains      []string `json:"searchDomains"`
+	OverrideDNSServers bool     `json:"overrideDnsServers"`
+	// NAT64 Phase B: DNS64 synthesis config. NAT64Prefix is the resolved
+	// /96 (well-known default substituted when unset). DNS64Enabled is
+	// the per-tenant toggle.
+	NAT64Prefix  string    `json:"nat64Prefix"`
+	DNS64Enabled bool      `json:"dns64Enabled"`
+	UpdatedAt    time.Time `json:"updatedAt"`
+	UpdatedBy    string    `json:"updatedBy,omitempty"`
 }
 
-// apiDNS returns the tenant's DNS settings. Read is member-readable
-// (any authed caller in the tenant can see the resolver config);
-// mutation lives in a future PUT handler that lands once the data-
-// plane MagicDNS implementation is real. Today we just expose the
-// stored values so the admin Settings → DNS page can render them.
+// apiDNS handles the tenant's DNS settings. GET is member-readable
+// (any authed caller in the tenant can see the resolver config) and
+// surfaces both the MagicDNS config and the NAT64 Phase B DNS64
+// fields. PATCH (admin-only, → apiDNSPatch) writes the DNS64 settings
+// (nat64_prefix + dns64_enabled); the broader MagicDNS-config mutation
+// remains a future handler.
 //
-// When no row exists yet, Get returns a defaults-populated record
-// with UpdatedAt zero-valued; the handler still 200s.
-func (h *HTTPServer) apiDNS(w http.ResponseWriter, r *http.Request, _ *authnContext, tenant *repo.Tenant) {
+// When no DNS-config row exists yet, Get returns a defaults-populated
+// record with UpdatedAt zero-valued; the handler still 200s.
+func (h *HTTPServer) apiDNS(w http.ResponseWriter, r *http.Request, authn *authnContext, tenant *repo.Tenant) {
+	if r.Method == http.MethodPatch {
+		h.apiDNSPatch(w, r, authn, tenant)
+		return
+	}
 	if r.Method != http.MethodGet {
-		w.Header().Set("Allow", http.MethodGet)
+		w.Header().Set("Allow", "GET, PATCH")
 		writeError(w, http.StatusMethodNotAllowed, fmt.Errorf("method not allowed"))
 		return
 	}
@@ -2861,6 +2884,87 @@ func (h *HTTPServer) apiDNS(w http.ResponseWriter, r *http.Request, _ *authnCont
 		GlobalNameservers:  cfg.GlobalNameservers,
 		SearchDomains:      cfg.SearchDomains,
 		OverrideDNSServers: cfg.OverrideDNSServers,
+		NAT64Prefix:        nat64.ResolvePrefix(tenant.NAT64Prefix),
+		DNS64Enabled:       tenant.DNS64Enabled,
+		UpdatedAt:          cfg.UpdatedAt,
+		UpdatedBy:          updatedBy,
+	})
+}
+
+// apiDNSPatchReq is the partial-update body for PATCH /api/v1/dns. Both
+// fields are pointers so an omitted field leaves the stored value
+// unchanged. nat64Prefix "" clears the override (→ well-known default).
+type apiDNSPatchReq struct {
+	NAT64Prefix  *string `json:"nat64Prefix"`
+	DNS64Enabled *bool   `json:"dns64Enabled"`
+}
+
+// apiDNSPatch writes the tenant's DNS64 settings (NAT64 Phase B).
+// Admin-only. The prefix is validated as a /96 before persistence.
+func (h *HTTPServer) apiDNSPatch(w http.ResponseWriter, r *http.Request, authn *authnContext, tenant *repo.Tenant) {
+	if !h.requireAdmin(w, r, authn, tenant, "dns.update") {
+		return
+	}
+	var req apiDNSPatchReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("decode body: %w", err))
+		return
+	}
+	prefix := tenant.NAT64Prefix
+	enabled := tenant.DNS64Enabled
+	if req.NAT64Prefix != nil {
+		if _, err := nat64.ParsePrefix(*req.NAT64Prefix); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		prefix = *req.NAT64Prefix
+	}
+	if req.DNS64Enabled != nil {
+		enabled = *req.DNS64Enabled
+	}
+	updated, err := h.tenants.SetNAT64Config(r.Context(), tenant.ID, prefix, enabled)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+
+	if h.audits != nil {
+		_ = h.audits.Insert(r.Context(), &repo.AuditEvent{
+			TenantID:     &tenant.ID,
+			ActorType:    "user",
+			ActorID:      pointerIfNonZero(claimsUserID(authn)),
+			Action:       "dns.update",
+			ResourceType: "tenant",
+			ResourceID:   &tenant.ID,
+			Diff: marshalDiffJSON(map[string]any{
+				"nat64_prefix":  nat64.ResolvePrefix(updated.NAT64Prefix),
+				"dns64_enabled": updated.DNS64Enabled,
+			}),
+		})
+	}
+
+	// Re-fetch the DNS-config row so the PATCH response is a full,
+	// consistent apiDNSJSON snapshot (same shape as GET) rather than a
+	// partial object that would zero out MagicDNS / nameserver fields.
+	cfg, err := h.dns.Get(r.Context(), tenant.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	updatedBy := ""
+	if cfg.UpdatedBy != nil {
+		updatedBy = cfg.UpdatedBy.String()
+	}
+	writeJSON(w, http.StatusOK, apiDNSJSON{
+		TenantID:           updated.ID.String(),
+		TenantSlug:         updated.Slug,
+		TailnetName:        updated.Slug,
+		MagicDNSEnabled:    cfg.MagicDNSEnabled,
+		GlobalNameservers:  cfg.GlobalNameservers,
+		SearchDomains:      cfg.SearchDomains,
+		OverrideDNSServers: cfg.OverrideDNSServers,
+		NAT64Prefix:        nat64.ResolvePrefix(updated.NAT64Prefix),
+		DNS64Enabled:       updated.DNS64Enabled,
 		UpdatedAt:          cfg.UpdatedAt,
 		UpdatedBy:          updatedBy,
 	})

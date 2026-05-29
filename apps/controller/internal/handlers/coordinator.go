@@ -13,6 +13,7 @@ import (
 	"github.com/hanfour/bamboo/apps/controller/internal/db/repo"
 	"github.com/hanfour/bamboo/apps/controller/internal/events"
 	"github.com/hanfour/bamboo/apps/controller/internal/ipalloc"
+	"github.com/hanfour/bamboo/apps/controller/internal/nat64"
 	"github.com/hanfour/bamboo/apps/controller/internal/policy"
 	bamboov1 "github.com/hanfour/bamboo/proto/gen/go/bamboo/v1"
 	"google.golang.org/grpc/codes"
@@ -435,6 +436,8 @@ func (h *CoordinatorHandler) Register(ctx context.Context, req *bamboov1.Registe
 		Peers:          make([]*bamboov1.Peer, 0, len(allPeers)),
 		PolicyRevision: currentRev,
 		RelayServers:   make([]*bamboov1.RelayServer, 0, len(relays)),
+		Dns64Enabled:   tenant.DNS64Enabled,
+		Nat64Prefix:    nat64.ResolvePrefix(tenant.NAT64Prefix),
 	}
 	for _, rs := range relays {
 		resp.RelayServers = append(resp.RelayServers, &bamboov1.RelayServer{
