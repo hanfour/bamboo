@@ -819,7 +819,7 @@ func (h *HTTPServer) handleCallback(w http.ResponseWriter, r *http.Request, prov
 		return
 	}
 
-	tenant, err := h.tenants.GetOrCreate(r.Context(), claims.Tenant, "Default Tenant", "100.64.0.0/24")
+	tenant, err := h.tenants.GetOrCreate(r.Context(), claims.Tenant, "Default Tenant", repo.DefaultTenantCIDR)
 	if err != nil {
 		http.Error(w, "tenant: "+err.Error(), http.StatusInternalServerError)
 		return

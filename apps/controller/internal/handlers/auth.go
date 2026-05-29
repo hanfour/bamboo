@@ -109,7 +109,7 @@ func (h *AuthHandler) CreatePreAuthKey(ctx context.Context, req *bamboov1.Create
 		return nil, err
 	}
 	slug := tenantSlugFromMetadata(ctx)
-	tenant, err := h.tenants.GetOrCreate(ctx, slug, "Default Tenant", "100.64.0.0/24")
+	tenant, err := h.tenants.GetOrCreate(ctx, slug, "Default Tenant", repo.DefaultTenantCIDR)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "tenant resolve: %v", err)
 	}

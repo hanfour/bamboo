@@ -48,7 +48,7 @@ func (h *TelemetryHandler) ReportConnectionEvents(stream bamboov1.TelemetryServi
 		ctx,
 		tenantSlugFromMetadata(ctx),
 		"Default Tenant",
-		"100.64.0.0/24",
+		repo.DefaultTenantCIDR,
 	)
 	if err != nil {
 		return status.Errorf(codes.Internal, "tenant resolve: %v", err)

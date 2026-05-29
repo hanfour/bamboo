@@ -348,7 +348,7 @@ func (h *PolicyHandler) loadParsedPolicy(ctx context.Context, tenantID uuid.UUID
 // handler in this file.
 func (h *PolicyHandler) resolveTenant(ctx context.Context) (*repo.Tenant, error) {
 	slug := tenantSlugFromMetadata(ctx)
-	t, err := h.tenants.GetOrCreate(ctx, slug, "Default Tenant", "100.64.0.0/24")
+	t, err := h.tenants.GetOrCreate(ctx, slug, "Default Tenant", repo.DefaultTenantCIDR)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "tenant resolve: %v", err)
 	}

@@ -656,7 +656,7 @@ func (h *CoordinatorHandler) resolveCredential(ctx context.Context, req *bamboov
 	}
 
 	slug := tenantSlugFromMetadata(ctx)
-	t, terr := h.tenants.GetOrCreate(ctx, slug, "Default Tenant", "100.64.0.0/24")
+	t, terr := h.tenants.GetOrCreate(ctx, slug, "Default Tenant", repo.DefaultTenantCIDR)
 	if terr != nil {
 		return nil, nil, false, status.Errorf(codes.Internal, "tenant resolve: %v", terr)
 	}

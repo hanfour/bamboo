@@ -10,6 +10,20 @@ import (
 	"github.com/hanfour/bamboo/apps/controller/internal/db"
 )
 
+// DefaultTenantCIDR is the IPv4 overlay pool assigned to a tenant that
+// is auto-created without an explicit pool (the GetOrCreate convenience
+// path used by dev / single-tenant deployments).
+//
+// 100.127.0.0/24 is the top /24 of the CGNAT range (100.64.0.0/10). The
+// CGNAT range is also where Tailscale / Headscale allocate, and those
+// clients lay down a route covering the whole /10. Picking 100.127.x.x
+// for our default puts our peers at the far end of the range, where
+// Tailscale's sequential-from-low allocation is overwhelmingly unlikely
+// to have already handed out a colliding /32 — so a host running both
+// meshes side-by-side stays unambiguous. Operators with stricter
+// isolation needs override per-tenant via SQL. See PR #229.
+const DefaultTenantCIDR = "100.127.0.0/24"
+
 // Tenants is the repository for tenants table.
 type Tenants struct {
 	pool *db.Pool
@@ -25,7 +39,7 @@ type Tenant struct {
 	ID           uuid.UUID
 	Name         string
 	Slug         string
-	IPPool       string // CIDR text form, e.g. "100.64.0.0/24"
+	IPPool       string // CIDR text form, e.g. "100.127.0.0/24"
 	IP6Pool      string // CIDR text form, e.g. "fdba:1100::/64"
 	NAT64Prefix  string // /96 text form; "" means the well-known default (NAT64 Phase B)
 	DNS64Enabled bool   // per-tenant DNS64 toggle, default false (NAT64 Phase B)
