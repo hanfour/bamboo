@@ -87,3 +87,31 @@ func TestPeerView_InvalidIPLeavesZeroAddr(t *testing.T) {
 		t.Errorf("expected zero netip.Addr for invalid input, got %v", view.IP)
 	}
 }
+
+func TestAllowedIPsFor_DualFamilyTunnel(t *testing.T) {
+	src := &repo.Peer{IP: "100.64.0.1", IP6: "fdba:1100::6440:1", Tags: []string{"dev"}}
+	dst := &repo.Peer{IP: "100.64.0.5", IP6: "fdba:1100::6440:5", Tags: []string{"prod"}}
+	got := allowedIPsFor(nil, src, dst)
+	want := []string{"100.64.0.5/32", "fdba:1100::6440:5/128"}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Errorf("got %v, want %v (dual-family tunnel baseline)", got, want)
+	}
+}
+
+func TestAllowedIPsFor_DualFamilyBeforeRoutes(t *testing.T) {
+	src := &repo.Peer{IP: "100.64.0.1", IP6: "fdba:1100::6440:1", Tags: []string{"dev"}}
+	dst := &repo.Peer{
+		IP: "100.64.0.5", IP6: "fdba:1100::6440:5", Tags: []string{"prod"},
+		ApprovedRoutes: []string{"10.0.0.0/24"},
+	}
+	got := allowedIPsFor(nil, src, dst)
+	want := []string{"100.64.0.5/32", "fdba:1100::6440:5/128", "10.0.0.0/24"}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("got[%d]=%q, want %q (v6 must precede approved routes)", i, got[i], want[i])
+		}
+	}
+}

@@ -53,6 +53,9 @@ type ApiPeer = {
   // migration 00008.
   peerDnsName?: string | null;
   ip: string;
+  // ip6 is the peer's deterministic IPv6 ULA (NAT64 Phase A). Absent
+  // on pre-#232 controller responses; the column is `ip6,omitempty`.
+  ip6?: string;
   tags: string[];
   os: string;
   clientVersion: string;
@@ -99,6 +102,8 @@ function apiPeerToPeer(p: ApiPeer): Peer {
     // every check would need `peer.peerDnsName != null`.
     peerDnsName: p.peerDnsName ?? undefined,
     ip: p.ip,
+    // omitempty; never null on the wire — no normalization needed.
+    ip6: p.ip6,
     tags: p.tags ?? [],
     os: p.os,
     clientVersion: p.clientVersion,
