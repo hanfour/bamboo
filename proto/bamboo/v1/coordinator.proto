@@ -112,6 +112,16 @@ message RegisterResponse {
   // server-supplied value. The server hint is the "fleet-wide
   // default"; an individual operator may still override per-device.
   string preferred_region = 5;
+
+  // dns64_enabled tells the client to turn on DNS64 synthesis (NAT64
+  // Phase B). Per-tenant, default false — false / absent on a legacy
+  // controller means "leave DNS64 off".
+  bool dns64_enabled = 6;
+
+  // nat64_prefix is the resolved /96 the client synthesises into when
+  // dns64_enabled is true (the well-known 64:ff9b::/96 substituted for
+  // an unset per-tenant override). Empty on a legacy controller.
+  string nat64_prefix = 7;
 }
 
 message RelayServer {
