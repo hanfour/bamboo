@@ -29,8 +29,8 @@ func TestRegister_FirstPeerGetsBaseIP(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
-	if resp.GetSelf().GetIp() != "100.64.0.1" {
-		t.Errorf("self.ip = %q, want 100.64.0.1", resp.GetSelf().GetIp())
+	if resp.GetSelf().GetIp() != "100.127.0.1" {
+		t.Errorf("self.ip = %q, want 100.127.0.1", resp.GetSelf().GetIp())
 	}
 	if got := len(resp.GetPeers()); got != 0 {
 		t.Errorf("first peer should see 0 others, got %d", got)
@@ -55,8 +55,8 @@ func TestRegister_SecondPeerSeesFirst(t *testing.T) {
 		t.Fatalf("second Register: %v", err)
 	}
 
-	if second.GetSelf().GetIp() != "100.64.0.2" {
-		t.Errorf("second peer ip = %q, want 100.64.0.2", second.GetSelf().GetIp())
+	if second.GetSelf().GetIp() != "100.127.0.2" {
+		t.Errorf("second peer ip = %q, want 100.127.0.2", second.GetSelf().GetIp())
 	}
 	if got := len(second.GetPeers()); got != 1 {
 		t.Fatalf("second peer should see 1 other, got %d", got)

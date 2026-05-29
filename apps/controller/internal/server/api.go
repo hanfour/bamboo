@@ -698,16 +698,9 @@ func (h *HTTPServer) resolveTenant(r *http.Request, authn *authnContext) (*repo.
 	if slug == "" {
 		slug = "default"
 	}
-	// Default tenant CIDR: 100.127.0.0/24 — the top /24 of the CGNAT
-	// range (100.64.0.0/10). The CGNAT range is also where Tailscale
-	// / Headscale allocate, and those clients lay down a route covering
-	// the whole /10. Picking 100.127.x.x for our default puts our
-	// peers at the far end of the range, where Tailscale's
-	// sequential-from-low allocation is overwhelmingly unlikely to
-	// have already handed out a colliding /32 — so a host running
-	// both meshes side-by-side stays unambiguous. Operators with
-	// stricter isolation needs override per-tenant via SQL.
-	return h.tenants.GetOrCreate(r.Context(), slug, "Default Tenant", "100.127.0.0/24")
+	// Default tenant CIDR lives in repo.DefaultTenantCIDR (100.127.0.0/24,
+	// chosen to dodge Tailscale/Headscale CGNAT collisions — see PR #229).
+	return h.tenants.GetOrCreate(r.Context(), slug, "Default Tenant", repo.DefaultTenantCIDR)
 }
 
 // apiMeJSON is the wire shape for /api/v1/me.
