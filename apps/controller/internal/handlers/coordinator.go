@@ -716,8 +716,9 @@ func peerView(p *repo.Peer) policy.PeerView {
 //
 // Contents (in order):
 //
-//  1. dst's tunnel /32 (or /128 for IPv6) — the always-on baseline
-//     so src can reach dst's own bamboo address.
+//  1. dst's tunnel /32 (IPv4) plus, when dst.IP6 is set, a /128
+//     (IPv6) — the always-on baselines so src can reach dst's own
+//     bamboo address on either family.
 //
 //  2. dst's approved subnet routes (issue #136). When the admin has
 //     signed off on a subset of dst.AdvertisedRoutes, those CIDRs
@@ -735,6 +736,14 @@ func allowedIPsFor(p *policy.Policy, src, dst *repo.Peer) []string {
 		suffix = "/128"
 	}
 	out := []string{dst.IP + suffix}
+	// Dual-family (NAT64 Phase A §6): also advertise the peer's
+	// deterministic IPv6 ULA /128 so one ACL rule reaches dst on both
+	// families. dst.IP6 is always populated post-migration 00018; the
+	// guard keeps legacy/empty rows (and the v6-in-IP defensive case
+	// above) emitting a single entry.
+	if dst.IP6 != "" {
+		out = append(out, dst.IP6+"/128")
+	}
 	// Subnet router (issue #136): merge admin-approved CIDRs.
 	out = append(out, dst.ApprovedRoutes...)
 	// Exit node (issue #137): default-route reachability when src
