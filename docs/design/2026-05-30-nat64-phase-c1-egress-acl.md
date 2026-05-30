@@ -64,28 +64,32 @@ migration 00019.
 ## 4. Capability reporting
 
 Mirrors exit-node (`--advertise-exit-node` → `exit_node_capable`).
+**No proto change** — exit-node capability/approval do not ride the gRPC
+`RegisterRequest`/`Peer` proto; they flow through the REST register
+side-channel and surface on the REST `apiPeerJSON`. C1 mirrors that.
 
-- **proto** (`coordinator.proto`):
-  - `RegisterRequest` gains `bool advertise_nat64_egress` (next free
-    field number, assigned at implementation).
-  - `Peer` gains `bool nat64_egress_capable` and
-    `bool nat64_egress_approved` (next two free field numbers) so the
-    Web/admin surfaces can show both states, like exit-node.
-- **register handler:** on register, persist
-  `nat64_egress_capable = req.GetAdvertiseNat64Egress()`. As with
-  `exit_node_capable`, the capability tracks the client's last register;
-  the admin's `approved` sign-off survives a re-register that drops the
-  flag (stored separately).
-- **`toProtoPeer`:** map both new peer fields out.
+- **REST register body** (`peerRegisterRequest`): add
+  `AdvertiseNat64Egress bool json:"advertiseNat64Egress,omitempty"`.
+- **register side-channel:** after the mesh-state register completes,
+  persist `peers.nat64_egress_capable = body.AdvertiseNat64Egress` via a
+  new `peers.SetNAT64EgressCapable` (alongside the existing
+  `SetExitNodeCapable` call). The capability tracks the client's last
+  register; the admin's `approved` sign-off survives a re-register that
+  drops the flag (stored in a separate column).
+- **REST peer JSON** (`apiPeerJSON`): add `nat64EgressCapable` +
+  `nat64EgressApproved` so the Web/admin can show + gate on both states.
 
 ## 5. Admin approval
 
 Mirrors `POST /api/v1/peers/{id}/exit-node/approve`.
 
-- **Route:** `POST /api/v1/peers/{id}/nat64-egress/approve`, body
-  `{"approved": bool}`. Admin-only (`requireAdmin`, permission
-  `peer.nat64-egress.approve`). Writes an audit row
-  (`peer.nat64-egress.approve`, same helper as exit-node).
+- **Route:** `POST /api/v1/peers/{id}/nat64-egress`, body
+  `{"approved": bool}` (matches the exit-node route `{id}/exit-node` —
+  no `/approve` suffix). Admin-only (`requireAdmin`, permission
+  `peer.nat64-egress.approve`); approving requires `nat64_egress_capable`.
+  Writes an audit row (`peer.nat64-egress.approve`, same helper as
+  exit-node). Add `"nat64-egress"` to the `normalizeRoute` peer-subpath
+  list for the metrics label.
 - **repo:** `Peers.SetNAT64EgressApproved(ctx, id, approved bool) error`
   — a one-column UPDATE, identical shape to `SetExitNodeApproved`.
 - **Peer model:** add `NAT64EgressCapable bool` + `NAT64EgressApproved
@@ -153,14 +157,16 @@ selection (and, where the platform allows, ECMP across live egresses).
 `activeEgress` is computed once per register from the tenant's peer set:
 the min-ID peer with `nat64_egress_approved == true`.
 
-### 6.2 Simulate-path consistency
+### 6.2 Simulate-path consistency — not applicable for C1
 
-The admin policy simulator (`apiSimulatePolicy` → `dstTunnelIPs` in
-`server/api.go`) must surface the same egress route so the preview
-matches the data plane (the Phase B principle). The simulator has the
-tenant (`dns64_enabled`/`nat64_prefix`) and the peer set, so it computes
-the same `activeEgress` and appends `<prefix>::/96` for the active
-egress dst. A shared helper keeps enforce + simulate identical.
+The admin policy simulator (`apiSimulatePolicy` → `dstTunnelIPs`)
+currently surfaces ONLY each peer's tunnel IPs — it does not show
+`ApprovedRoutes` or the exit-node `0.0.0.0/0`/`::/0` either. So, to stay
+consistent with how the other route types are already absent from the
+simulator, C1 adds the egress route ONLY to the enforce path
+(`allowedIPsFor`), not the simulator. (Phase B's enforce/simulate
+byte-identity applied to the tunnel IPs, which both paths emit; the
+route types are an enforce-only concern.)
 
 ## 7. CLI
 
@@ -199,9 +205,7 @@ land as its own PR (PR 2) alongside the CLI flag.
   → nil. Mirror the existing `coordinator_enforce_test.go` style.
 - `activeEgress` selection unit test: min-ID among approved; nil when
   none approved.
-- simulate consistency test: the simulator emits the same `/96` for the
-  active egress (shared helper).
-- approval API test: `POST .../nat64-egress/approve` flips
+- approval API test: `POST .../nat64-egress` flips
   `nat64_egress_approved`, admin-gated, audited.
 - register capability test: `advertise_nat64_egress` → persisted
   `nat64_egress_capable`; survives a re-register dropping the flag while
@@ -215,10 +219,9 @@ land as its own PR (PR 2) alongside the CLI flag.
 
 ## 11. PR breakdown (≈2)
 
-1. **Controller** — proto (`advertise_nat64_egress`, `Peer.nat64_egress_*`)
-   + register capability + approval API + `repo` field/SELECT/writer +
-   ACL route synthesis (enforce + simulate, shared active-egress helper)
-   + unit tests.
+1. **Controller** — REST register body `advertiseNat64Egress` +
+   capability side-channel + approval API + `repo` field/SELECT/writer +
+   ACL route synthesis (enforce path only) + unit tests. No proto change.
 2. **CLI + Web** — `--advertise-nat64-egress` flag; admin approval toggle.
 
 ## 12. Phase boundary
