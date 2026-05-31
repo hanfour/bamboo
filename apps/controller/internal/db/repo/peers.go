@@ -135,6 +135,12 @@ type Peer struct {
 	// the flag.
 	ExitNodeCapable  bool
 	ExitNodeApproved bool
+	// NAT64EgressCapable records the --advertise-nat64-egress flag from
+	// the peer's last register (NAT64 Phase C1). NAT64EgressApproved is
+	// the admin's separate sign-off; both stored so approval survives a
+	// re-register that drops the flag. Parallel to ExitNode*.
+	NAT64EgressCapable  bool
+	NAT64EgressApproved bool
 	// UsingExitNodePeerID is the peer this row is routing default
 	// traffic through (`bamboo up --exit-node=<dns-name>`). NULL =
 	// no exit node in use. FK enforces "must be in the same tenant"
@@ -188,7 +194,7 @@ func (r *Peers) Insert(ctx context.Context, p *Peer) (*Peer, error) {
 		          created_at, updated_at, last_seen_at, last_handshake_at,
 		          approval_status, approved_at, approved_by_user_id,
 		          advertised_routes, approved_routes,
-		          exit_node_capable, exit_node_approved, using_exit_node_peer_id,
+		          exit_node_capable, exit_node_approved, nat64_egress_capable, nat64_egress_approved, using_exit_node_peer_id,
 		          connection_path, connection_path_at, connection_latency_ms
 	`, p.TenantID, p.UserID, p.Hostname, p.PeerDNSName, p.WireGuardPublicKey,
 		p.IP, ip6Arg, p.OS, p.ClientVersion, p.Status, endpoints,
@@ -199,7 +205,7 @@ func (r *Peers) Insert(ctx context.Context, p *Peer) (*Peer, error) {
 		&out.CreatedAt, &out.UpdatedAt, &out.LastSeenAt, &out.LastHandshakeAt,
 		&out.ApprovalStatus, &out.ApprovedAt, &out.ApprovedByUserID,
 		&out.AdvertisedRoutes, &out.ApprovedRoutes,
-		&out.ExitNodeCapable, &out.ExitNodeApproved, &out.UsingExitNodePeerID,
+		&out.ExitNodeCapable, &out.ExitNodeApproved, &out.NAT64EgressCapable, &out.NAT64EgressApproved, &out.UsingExitNodePeerID,
 		&out.ConnectionPath, &out.ConnectionPathAt, &out.ConnectionLatencyMs,
 	)
 	if err != nil {
@@ -228,7 +234,7 @@ func (r *Peers) GetByID(ctx context.Context, id uuid.UUID) (*Peer, error) {
 		       users.email, users.display_name,
 		       peers.approval_status, peers.approved_at, peers.approved_by_user_id,
 		       peers.advertised_routes, peers.approved_routes,
-		       peers.exit_node_capable, peers.exit_node_approved, peers.using_exit_node_peer_id,
+		       peers.exit_node_capable, peers.exit_node_approved, peers.nat64_egress_capable, peers.nat64_egress_approved, peers.using_exit_node_peer_id,
 		       peers.connection_path, peers.connection_path_at, peers.connection_latency_ms
 		FROM peers
 		LEFT JOIN users ON users.id = peers.user_id AND users.deleted_at IS NULL
@@ -242,7 +248,7 @@ func (r *Peers) GetByID(ctx context.Context, id uuid.UUID) (*Peer, error) {
 		&ownerEmail, &ownerDisplay,
 		&p.ApprovalStatus, &p.ApprovedAt, &p.ApprovedByUserID,
 		&p.AdvertisedRoutes, &p.ApprovedRoutes,
-		&p.ExitNodeCapable, &p.ExitNodeApproved, &p.UsingExitNodePeerID,
+		&p.ExitNodeCapable, &p.ExitNodeApproved, &p.NAT64EgressCapable, &p.NAT64EgressApproved, &p.UsingExitNodePeerID,
 		&p.ConnectionPath, &p.ConnectionPathAt, &p.ConnectionLatencyMs,
 	)
 	if err != nil {
@@ -299,7 +305,7 @@ func (r *Peers) FindByPubKey(ctx context.Context, tenantID uuid.UUID, pubKey str
 		       `+peerTagsSubquery+`,
 		       approval_status, approved_at, approved_by_user_id,
 		       advertised_routes, approved_routes,
-		       exit_node_capable, exit_node_approved, using_exit_node_peer_id,
+		       exit_node_capable, exit_node_approved, nat64_egress_capable, nat64_egress_approved, using_exit_node_peer_id,
 		       connection_path, connection_path_at, connection_latency_ms
 		FROM peers
 		WHERE tenant_id = $1 AND wireguard_public_key = $2
@@ -311,7 +317,7 @@ func (r *Peers) FindByPubKey(ctx context.Context, tenantID uuid.UUID, pubKey str
 		&p.Tags,
 		&p.ApprovalStatus, &p.ApprovedAt, &p.ApprovedByUserID,
 		&p.AdvertisedRoutes, &p.ApprovedRoutes,
-		&p.ExitNodeCapable, &p.ExitNodeApproved, &p.UsingExitNodePeerID,
+		&p.ExitNodeCapable, &p.ExitNodeApproved, &p.NAT64EgressCapable, &p.NAT64EgressApproved, &p.UsingExitNodePeerID,
 		&p.ConnectionPath, &p.ConnectionPathAt, &p.ConnectionLatencyMs,
 	)
 	if err != nil {
@@ -336,7 +342,7 @@ func (r *Peers) ListByTenant(ctx context.Context, tenantID uuid.UUID) ([]*Peer, 
 		       users.email, users.display_name,
 		       peers.approval_status, peers.approved_at, peers.approved_by_user_id,
 		       peers.advertised_routes, peers.approved_routes,
-		       peers.exit_node_capable, peers.exit_node_approved, peers.using_exit_node_peer_id,
+		       peers.exit_node_capable, peers.exit_node_approved, peers.nat64_egress_capable, peers.nat64_egress_approved, peers.using_exit_node_peer_id,
 		       peers.connection_path, peers.connection_path_at, peers.connection_latency_ms
 		FROM peers
 		LEFT JOIN users ON users.id = peers.user_id AND users.deleted_at IS NULL
@@ -361,7 +367,7 @@ func (r *Peers) ListByTenant(ctx context.Context, tenantID uuid.UUID) ([]*Peer, 
 			&ownerEmail, &ownerDisplay,
 			&p.ApprovalStatus, &p.ApprovedAt, &p.ApprovedByUserID,
 			&p.AdvertisedRoutes, &p.ApprovedRoutes,
-			&p.ExitNodeCapable, &p.ExitNodeApproved, &p.UsingExitNodePeerID,
+			&p.ExitNodeCapable, &p.ExitNodeApproved, &p.NAT64EgressCapable, &p.NAT64EgressApproved, &p.UsingExitNodePeerID,
 			&p.ConnectionPath, &p.ConnectionPathAt, &p.ConnectionLatencyMs,
 		); err != nil {
 			return nil, err
@@ -638,6 +644,31 @@ func (r *Peers) SetExitNodeApproved(ctx context.Context, id uuid.UUID, approved 
 		UPDATE peers
 		   SET exit_node_approved = $2,
 		       updated_at         = now()
+		 WHERE id = $1
+	`, id, approved)
+	return err
+}
+
+// SetNAT64EgressCapable records the --advertise-nat64-egress flag from a
+// Register call (NAT64 Phase C1). Separate from NAT64EgressApproved so
+// the admin's sign-off survives a re-register that drops the flag.
+func (r *Peers) SetNAT64EgressCapable(ctx context.Context, id uuid.UUID, capable bool) error {
+	_, err := r.pool.Exec(ctx, `
+		UPDATE peers
+		   SET nat64_egress_capable = $2,
+		       updated_at           = now()
+		 WHERE id = $1
+	`, id, capable)
+	return err
+}
+
+// SetNAT64EgressApproved is the admin's sign-off that this peer may act
+// as the tenant's NAT64 translator egress (NAT64 Phase C1).
+func (r *Peers) SetNAT64EgressApproved(ctx context.Context, id uuid.UUID, approved bool) error {
+	_, err := r.pool.Exec(ctx, `
+		UPDATE peers
+		   SET nat64_egress_approved = $2,
+		       updated_at            = now()
 		 WHERE id = $1
 	`, id, approved)
 	return err

@@ -645,3 +645,46 @@ func TestPeers_IP6Roundtrip(t *testing.T) {
 		t.Errorf("GetByID IP6 = %q, want fdba:1100::6440:5", got.IP6)
 	}
 }
+
+func TestPeers_NAT64EgressRoundtrip(t *testing.T) {
+	pool := requireDB(t)
+	tenants := repo.NewTenants(pool)
+	peers := repo.NewPeers(pool)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	slug := fmt.Sprintf("egr-%s", uuid.NewString()[:8])
+	tn, err := tenants.GetOrCreate(ctx, slug, "egress test", "100.64.0.0/24")
+	if err != nil {
+		t.Fatalf("GetOrCreate: %v", err)
+	}
+	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, tn.ID) })
+
+	pub := make([]byte, 32)
+	_, _ = rand.Read(pub)
+	in, err := peers.Insert(ctx, &repo.Peer{
+		TenantID: tn.ID, Hostname: "egress",
+		WireGuardPublicKey: base64.StdEncoding.EncodeToString(pub),
+		IP:                 "100.64.0.5", IP6: "fdba:1100::6440:5",
+		Status: "online", ApprovalStatus: "approved",
+	})
+	if err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+	if in.NAT64EgressCapable || in.NAT64EgressApproved {
+		t.Errorf("fresh peer egress flags = %v/%v, want false/false", in.NAT64EgressCapable, in.NAT64EgressApproved)
+	}
+	if err := peers.SetNAT64EgressCapable(ctx, in.ID, true); err != nil {
+		t.Fatalf("SetNAT64EgressCapable: %v", err)
+	}
+	if err := peers.SetNAT64EgressApproved(ctx, in.ID, true); err != nil {
+		t.Fatalf("SetNAT64EgressApproved: %v", err)
+	}
+	got, err := peers.GetByID(ctx, in.ID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if !got.NAT64EgressCapable || !got.NAT64EgressApproved {
+		t.Errorf("after set: %v/%v, want true/true", got.NAT64EgressCapable, got.NAT64EgressApproved)
+	}
+}
