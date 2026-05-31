@@ -797,6 +797,8 @@ type apiPeerJSON struct {
 	ApprovedRoutes      []string `json:"approvedRoutes"`
 	ExitNodeCapable     bool     `json:"exitNodeCapable"`
 	ExitNodeApproved    bool     `json:"exitNodeApproved"`
+	NAT64EgressCapable  bool     `json:"nat64EgressCapable"`
+	NAT64EgressApproved bool     `json:"nat64EgressApproved"`
 	UsingExitNodePeerID string   `json:"usingExitNodePeerId,omitempty"`
 	// ConnectionPath is "direct" / "relay" / "unknown" (issue #138).
 	// Reported by the peer on heartbeat; nil on the wire when the
@@ -835,31 +837,33 @@ func peerToJSON(p *repo.Peer) apiPeerJSON {
 		tags = []string{}
 	}
 	return apiPeerJSON{
-		ID:                 p.ID.String(),
-		TenantID:           p.TenantID.String(),
-		Hostname:           p.Hostname,
-		PeerDNSName:        p.PeerDNSName,
-		IP:                 p.IP,
-		Tags:               tags,
-		OS:                 p.OS,
-		ClientVersion:      p.ClientVersion,
-		Status:             p.Status,
-		WireGuardPublicKey: p.WireGuardPublicKey,
-		Endpoints:          endpoints,
-		WGEndpoint:         p.WGEndpoint,
-		RxBytes:            p.RxBytes,
-		TxBytes:            p.TxBytes,
-		CreatedAt:          p.CreatedAt,
-		LastSeenAt:         p.LastSeenAt,
-		LastHandshakeAt:    p.LastHandshakeAt,
-		OwnerEmail:         p.OwnerEmail,
-		OwnerDisplayName:   p.OwnerDisplayName,
-		ApprovalStatus:     p.ApprovalStatus,
-		ApprovedAt:         p.ApprovedAt,
-		AdvertisedRoutes:   emptyIfNil(p.AdvertisedRoutes),
-		ApprovedRoutes:     emptyIfNil(p.ApprovedRoutes),
-		ExitNodeCapable:    p.ExitNodeCapable,
-		ExitNodeApproved:   p.ExitNodeApproved,
+		ID:                  p.ID.String(),
+		TenantID:            p.TenantID.String(),
+		Hostname:            p.Hostname,
+		PeerDNSName:         p.PeerDNSName,
+		IP:                  p.IP,
+		Tags:                tags,
+		OS:                  p.OS,
+		ClientVersion:       p.ClientVersion,
+		Status:              p.Status,
+		WireGuardPublicKey:  p.WireGuardPublicKey,
+		Endpoints:           endpoints,
+		WGEndpoint:          p.WGEndpoint,
+		RxBytes:             p.RxBytes,
+		TxBytes:             p.TxBytes,
+		CreatedAt:           p.CreatedAt,
+		LastSeenAt:          p.LastSeenAt,
+		LastHandshakeAt:     p.LastHandshakeAt,
+		OwnerEmail:          p.OwnerEmail,
+		OwnerDisplayName:    p.OwnerDisplayName,
+		ApprovalStatus:      p.ApprovalStatus,
+		ApprovedAt:          p.ApprovedAt,
+		AdvertisedRoutes:    emptyIfNil(p.AdvertisedRoutes),
+		ApprovedRoutes:      emptyIfNil(p.ApprovedRoutes),
+		ExitNodeCapable:     p.ExitNodeCapable,
+		ExitNodeApproved:    p.ExitNodeApproved,
+		NAT64EgressCapable:  p.NAT64EgressCapable,
+		NAT64EgressApproved: p.NAT64EgressApproved,
 		UsingExitNodePeerID: func() string {
 			if p.UsingExitNodePeerID == nil {
 				return ""
