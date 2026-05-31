@@ -3,6 +3,7 @@
 package handlers
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"log/slog"
@@ -468,6 +469,7 @@ func (h *CoordinatorHandler) Register(ctx context.Context, req *bamboov1.Registe
 	// invisible to other peers and absent from the mesh until
 	// re-enabled.
 	selfApproved := self.ApprovalStatus == "approved"
+	egressRoute := computeNAT64EgressRoute(tenant, allPeers)
 	for _, p := range allPeers {
 		if p.ID == self.ID {
 			continue
@@ -482,7 +484,7 @@ func (h *CoordinatorHandler) Register(ctx context.Context, req *bamboov1.Registe
 			continue
 		}
 		pp := toProtoPeer(p)
-		pp.AllowedIps = allowedIPsFor(policyDoc, self, p)
+		pp.AllowedIps = allowedIPsFor(policyDoc, self, p, egressRoute)
 		resp.Peers = append(resp.Peers, pp)
 	}
 
@@ -713,6 +715,44 @@ func peerView(p *repo.Peer) policy.PeerView {
 	return view
 }
 
+// nat64EgressRoute carries the per-register NAT64 egress routing
+// decision (NAT64 Phase C1): whether the tenant has DNS64 enabled (the
+// master switch), the resolved /96 prefix, and the single active egress
+// peer the <prefix>::/96 route points at. Zero value (enabled=false,
+// egressID=uuid.Nil) emits no route.
+type nat64EgressRoute struct {
+	enabled  bool
+	prefix   string // resolved "64:ff9b::/96" form
+	egressID uuid.UUID
+}
+
+// computeNAT64EgressRoute picks the tenant's single active NAT64 egress:
+// the approved egress peer with the lowest ID (big-endian UUID byte
+// order). C3 will replace the deterministic pick with health-aware
+// selection. Returns a zero egressID when no peer is approved.
+func computeNAT64EgressRoute(tenant *repo.Tenant, peers []*repo.Peer) nat64EgressRoute {
+	rc := nat64EgressRoute{
+		enabled: tenant.DNS64Enabled,
+		prefix:  nat64.ResolvePrefix(tenant.NAT64Prefix),
+	}
+	for _, p := range peers {
+		if !p.NAT64EgressApproved {
+			continue
+		}
+		// Only a live, mesh-visible peer can translate. The register
+		// loop skips pending/disabled peers, so selecting one here would
+		// emit the /96 route to nobody and shadow a healthy higher-ID
+		// egress. (C3 makes egress selection health-aware.)
+		if p.ApprovalStatus != "approved" || p.Status == "disabled" {
+			continue
+		}
+		if rc.egressID == uuid.Nil || bytes.Compare(p.ID[:], rc.egressID[:]) < 0 {
+			rc.egressID = p.ID
+		}
+	}
+	return rc
+}
+
 // allowedIPsFor returns the AllowedIps slice for dst as seen from src.
 // nil when src is not permitted to reach dst — clients should skip the
 // peer entirely.
@@ -727,10 +767,14 @@ func peerView(p *repo.Peer) policy.PeerView {
 //     signed off on a subset of dst.AdvertisedRoutes, those CIDRs
 //     become reachable through dst from every src the policy allows.
 //
-//  3. 0.0.0.0/0 (and ::/0) when src has elected dst as its exit
+//  3. the tenant's NAT64 translation prefix (<prefix>::/96) when DNS64
+//     is enabled and dst is the active approved egress (NAT64 Phase C1).
+//     Routes src's synthesised v6 traffic to the translator peer.
+//
+//  4. 0.0.0.0/0 (and ::/0) when src has elected dst as its exit
 //     node (issue #137) and dst is exit_node_approved. Default-route
 //     reachability lets src forward public traffic through dst.
-func allowedIPsFor(p *policy.Policy, src, dst *repo.Peer) []string {
+func allowedIPsFor(p *policy.Policy, src, dst *repo.Peer, egress nat64EgressRoute) []string {
 	if !policy.Allow(p, peerView(src), peerView(dst)) {
 		return nil
 	}
@@ -749,6 +793,13 @@ func allowedIPsFor(p *policy.Policy, src, dst *repo.Peer) []string {
 	}
 	// Subnet router (issue #136): merge admin-approved CIDRs.
 	out = append(out, dst.ApprovedRoutes...)
+	// NAT64 egress (Phase C1): when the tenant has DNS64 enabled and dst
+	// is the active approved egress, route the translation prefix to it
+	// so a permitted src's synthesised v6 traffic reaches the translator.
+	// Gated by policy.Allow above, exactly like the exit-node route.
+	if egress.enabled && egress.egressID != uuid.Nil && dst.ID == egress.egressID {
+		out = append(out, egress.prefix)
+	}
 	// Exit node (issue #137): default-route reachability when src
 	// has dst pinned as its exit node AND admin has approved dst's
 	// exit-node role. The double-gate is important: the requesting
