@@ -150,12 +150,17 @@ for each would put the same `/96` in `AllowedIPs` pointing at two peers
 route-conflict exemption suppresses in the warning UI, but at the data
 plane only one peer can own a CIDR). So C1 selects a **single active
 egress deterministically**: the approved egress with the lowest peer ID
-(UUID string order). The controller logs an info line when it ignores
-additional approved egresses. C3 replaces this with health-aware
+(big-endian UUID byte order). C3 replaces this with health-aware
 selection (and, where the platform allows, ECMP across live egresses).
 
 `activeEgress` is computed once per register from the tenant's peer set:
-the min-ID peer with `nat64_egress_approved == true`.
+the min-ID peer that is `nat64_egress_approved` **AND itself live** —
+`approval_status == "approved"` and `status != "disabled"`. The
+liveness filter matters: the register loop already skips pending/disabled
+peers, so selecting a dead egress would emit the `/96` route to nobody
+and silently shadow a healthy higher-ID egress. (Health-*probing* — is
+the live egress's translator actually up — is C3; this is just the
+basic mesh-visibility filter the register loop itself applies.)
 
 ### 6.2 Simulate-path consistency — not applicable for C1
 
@@ -204,7 +209,8 @@ land as its own PR (PR 2) alongside the CLI flag.
   (min-ID) egress when multiple approved → no route; (d) ACL-denied src
   → nil. Mirror the existing `coordinator_enforce_test.go` style.
 - `activeEgress` selection unit test: min-ID among approved; nil when
-  none approved.
+  none approved; a pending/disabled approved-egress is skipped in favour
+  of a live higher-ID one.
 - approval API test: `POST .../nat64-egress` flips
   `nat64_egress_approved`, admin-gated, audited.
 - register capability test: `advertise_nat64_egress` → persisted
