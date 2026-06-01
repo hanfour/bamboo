@@ -11,15 +11,16 @@ import (
 
 // Shared flags.
 var (
-	flagAddr              string
-	flagTenant            string
-	flagAuthKey           string
-	flagIface             string
-	flagHostname          string
-	flagLogJSON           bool
-	flagWGListenPort      uint16
-	flagAdvertiseRoutes   []string
-	flagAdvertiseExitNode bool
+	flagAddr                 string
+	flagTenant               string
+	flagAuthKey              string
+	flagIface                string
+	flagHostname             string
+	flagLogJSON              bool
+	flagWGListenPort         uint16
+	flagAdvertiseRoutes      []string
+	flagAdvertiseExitNode    bool
+	flagAdvertiseNAT64Egress bool
 )
 
 var rootCmd = &cobra.Command{
@@ -53,6 +54,7 @@ func init() {
 	rootCmd.PersistentFlags().Uint16Var(&flagWGListenPort, "wg-listen-port", 0, "WireGuard UDP listen port; 0 = pick a free port (the same port is used for STUN discovery so the advertised endpoint matches what other peers can actually dial)")
 	rootCmd.PersistentFlags().StringSliceVar(&flagAdvertiseRoutes, "advertise-routes", nil, "advertise these CIDRs as reachable through this peer (subnet router; issue #136); admin must approve before they merge into other peers' allowed_ips. Comma-separated or repeated, e.g. --advertise-routes 10.0.0.0/24,192.168.86.0/24")
 	rootCmd.PersistentFlags().BoolVar(&flagAdvertiseExitNode, "advertise-exit-node", false, "advertise this peer as an exit-node candidate (issue #137); admin must still approve via POST /api/v1/peers/{id}/exit-node before any peer routes its default through here")
+	rootCmd.PersistentFlags().BoolVar(&flagAdvertiseNAT64Egress, "advertise-nat64-egress", false, "advertise this peer as a NAT64 translator-egress candidate (NAT64 Phase C); admin must still approve via POST /api/v1/peers/{id}/nat64-egress, and the box must actually run a translator (Phase C2) for traffic to flow")
 
 	rootCmd.AddCommand(upCmd)
 	rootCmd.AddCommand(downCmd)

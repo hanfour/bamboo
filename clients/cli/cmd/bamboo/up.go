@@ -375,6 +375,7 @@ func registerWithController(ctx context.Context, priv wg.PrivateKey, session *pe
 		discoverEndpoints(wgPort),
 		flagAdvertiseRoutes,
 		flagAdvertiseExitNode,
+		flagAdvertiseNAT64Egress,
 	)
 	if err != nil {
 		return nil, err
