@@ -154,7 +154,8 @@
       },
       "advertise": {
         "routesHint": "This peer is offering to route the following CIDRs. Approve the ones you trust — other peers' allowed_ips merge in only what you approve.",
-        "exitNode": "Approve as exit-node candidate"
+        "exitNode": "Approve as exit-node candidate",
+        "nat64Egress": "Approve as NAT64 egress candidate"
       },
       "routeConflicts": {
         "summary": "{count, plural, one {# conflict with another peer} other {# conflicts with other peers}}",
