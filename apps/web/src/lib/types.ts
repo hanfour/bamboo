@@ -90,6 +90,11 @@ export type Peer = {
   approvedRoutes: string[];
   exitNodeCapable: boolean;
   exitNodeApproved: boolean;
+  // nat64EgressCapable: the peer advertised --advertise-nat64-egress.
+  // nat64EgressApproved: admin sign-off as the tenant's NAT64 egress
+  // (NAT64 Phase C1). Both default false on a pre-#238 controller.
+  nat64EgressCapable: boolean;
+  nat64EgressApproved: boolean;
   // usingExitNodePeerId is the peer this row currently routes its
   // default traffic through (the chosen exit node). Absent when the
   // peer isn't using one — most common case.
