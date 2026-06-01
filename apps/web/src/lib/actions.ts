@@ -550,6 +550,36 @@ export async function setExitNodeApprovedAction(
   }
 }
 
+// setNAT64EgressApprovedAction is the admin sign-off side of NAT64
+// egress (NAT64 Phase C1). Approving enables the peer to act as a
+// NAT64 egress gateway; the controller returns 409 if the peer is
+// not nat64_egress_capable. Revoking (false) is always allowed
+// regardless of capable state.
+export async function setNAT64EgressApprovedAction(
+  id: string,
+  approved: boolean,
+): Promise<ActionResult> {
+  try {
+    const res = await fetch(
+      `${BASE}/api/v1/peers/${encodeURIComponent(id)}/nat64-egress`,
+      {
+        method: 'POST',
+        headers: await buildHeaders(),
+        body: JSON.stringify({ approved }),
+        cache: 'no-store',
+      },
+    );
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      return { ok: false, error: `${res.status} ${text || res.statusText}` };
+    }
+    revalidatePath('/[locale]/peers', 'page');
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: (e as Error).message };
+  }
+}
+
 async function peerApprovalAction(
   id: string,
   verb: 'approve' | 'reject',
