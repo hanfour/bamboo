@@ -32,7 +32,9 @@ type Reconciler struct {
 
 	mu         sync.Mutex
 	lastActive bool
-	applied    bool
+	// applied forces the first Reconcile to act even when active==false
+	// (the zero value of lastActive), so a "down" target is realised once.
+	applied bool
 }
 
 // NewReconciler builds a Reconciler around a Manager + host config.
