@@ -157,6 +157,11 @@ func (m *linuxManager) Down() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if !m.running {
+		// Never fully converged (no successful Up since the last Down), so
+		// there is nothing we recorded to reverse. A partial Up that flipped
+		// a sysctl or created the TUN before erroring is left for the next
+		// Up to forward-heal (idempotent), per the package's self-heal model;
+		// it is not torn down here. C3 may report such stuck egresses.
 		return nil
 	}
 	ctx := context.Background()

@@ -49,6 +49,9 @@ func (s *supervisor) loop(ctx context.Context, stopped chan struct{}) {
 	for {
 		r, err := s.startFn(ctx)
 		if err != nil {
+			if ctx.Err() != nil {
+				return // Stop() cancelled us mid-start; not a real failure
+			}
 			slog.Warn("nat64 egress: tayga start failed", "err", err)
 		} else if waitErr := r.Wait(); ctx.Err() != nil {
 			return // Stop() cancelled us; the exit was expected
