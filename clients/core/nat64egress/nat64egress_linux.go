@@ -139,7 +139,9 @@ func (m *linuxManager) Up(prefix netip.Prefix, v4Pool netip.Prefix, wanIface str
 
 	// 7. Supervise the tayga daemon.
 	m.sup = newSupervisor(func(ctx context.Context) (runnable, error) {
-		cmd := exec.CommandContext(ctx, "tayga", daemonArgs(ConfigPath)...)
+		// G204: the command ("tayga") and its args (daemonArgs(ConfigPath),
+		// all constants) are fixed in code, not user input — safe.
+		cmd := exec.CommandContext(ctx, "tayga", daemonArgs(ConfigPath)...) //nolint:gosec // see G204 note above
 		if err := cmd.Start(); err != nil {
 			return nil, err
 		}
