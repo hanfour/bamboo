@@ -433,12 +433,13 @@ func (h *CoordinatorHandler) Register(ctx context.Context, req *bamboov1.Registe
 	policyDoc, currentRev := h.loadPolicyAndRevision(ctx, tenant.ID)
 
 	resp := &bamboov1.RegisterResponse{
-		Self:           toProtoPeer(self),
-		Peers:          make([]*bamboov1.Peer, 0, len(allPeers)),
-		PolicyRevision: currentRev,
-		RelayServers:   make([]*bamboov1.RelayServer, 0, len(relays)),
-		Dns64Enabled:   tenant.DNS64Enabled,
-		Nat64Prefix:    nat64.ResolvePrefix(tenant.NAT64Prefix),
+		Self:              toProtoPeer(self),
+		Peers:             make([]*bamboov1.Peer, 0, len(allPeers)),
+		PolicyRevision:    currentRev,
+		RelayServers:      make([]*bamboov1.RelayServer, 0, len(relays)),
+		Dns64Enabled:      tenant.DNS64Enabled,
+		Nat64Prefix:       nat64.ResolvePrefix(tenant.NAT64Prefix),
+		Nat64EgressActive: self.NAT64EgressApproved && tenant.DNS64Enabled,
 	}
 	for _, rs := range relays {
 		resp.RelayServers = append(resp.RelayServers, &bamboov1.RelayServer{
