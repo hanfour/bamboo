@@ -183,6 +183,7 @@ func RunWatchPeers(
 	peerID string,
 	refresh Refresher,
 	onRelaysChanged RelaysChangedHandler,
+	onRegister func(*bamboov1.RegisterResponse),
 ) {
 	backoff := initialBackoff
 	for {
@@ -250,6 +251,9 @@ func RunWatchPeers(
 				}
 				if err := dev.Apply(ctx, cfg); err != nil {
 					slog.Warn("apply refreshed config to device", "err", err)
+				}
+				if onRegister != nil {
+					onRegister(resp)
 				}
 				continue
 			}

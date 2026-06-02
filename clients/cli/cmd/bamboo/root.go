@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 
+	"github.com/hanfour/bamboo/clients/core/nat64egress"
 	"github.com/spf13/cobra"
 )
 
@@ -21,6 +22,8 @@ var (
 	flagAdvertiseRoutes      []string
 	flagAdvertiseExitNode    bool
 	flagAdvertiseNAT64Egress bool
+	flagNAT64V4Pool          string
+	flagNAT64WANIface        string
 )
 
 var rootCmd = &cobra.Command{
@@ -55,6 +58,8 @@ func init() {
 	rootCmd.PersistentFlags().StringSliceVar(&flagAdvertiseRoutes, "advertise-routes", nil, "advertise these CIDRs as reachable through this peer (subnet router; issue #136); admin must approve before they merge into other peers' allowed_ips. Comma-separated or repeated, e.g. --advertise-routes 10.0.0.0/24,192.168.86.0/24")
 	rootCmd.PersistentFlags().BoolVar(&flagAdvertiseExitNode, "advertise-exit-node", false, "advertise this peer as an exit-node candidate (issue #137); admin must still approve via POST /api/v1/peers/{id}/exit-node before any peer routes its default through here")
 	rootCmd.PersistentFlags().BoolVar(&flagAdvertiseNAT64Egress, "advertise-nat64-egress", false, "advertise this peer as a NAT64 translator-egress candidate (NAT64 Phase C); admin must still approve via POST /api/v1/peers/{id}/nat64-egress, and the box must actually run a translator (Phase C2) for traffic to flow")
+	rootCmd.PersistentFlags().StringVar(&flagNAT64V4Pool, "nat64-v4-pool", nat64egress.DefaultV4Pool, "NAT64 egress: Tayga's v4 dynamic pool (NAT64 Phase C2); override if it collides with this box's networks")
+	rootCmd.PersistentFlags().StringVar(&flagNAT64WANIface, "nat64-wan-iface", "", "NAT64 egress: uplink interface for MASQUERADE (NAT64 Phase C2); empty = auto-detect the default route")
 
 	rootCmd.AddCommand(upCmd)
 	rootCmd.AddCommand(downCmd)
