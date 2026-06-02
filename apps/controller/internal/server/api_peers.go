@@ -56,6 +56,11 @@ type peerRegisterRequest struct {
 	// /api/v1/peers/{id}/exit-node/approve to make the peer
 	// eligible as an exit node for others.
 	AdvertiseExitNode bool `json:"advertiseExitNode,omitempty"`
+	// AdvertiseNat64Egress signals --advertise-nat64-egress (NAT64
+	// Phase C1). The admin then approves via
+	// POST /api/v1/peers/{id}/nat64-egress to make the peer the
+	// tenant's NAT64 translator egress.
+	AdvertiseNat64Egress bool `json:"advertiseNat64Egress,omitempty"`
 }
 
 // peerJSON is the shape used in the register response and the SSE
@@ -241,6 +246,9 @@ func (h *HTTPServer) apiPeersRegister(w http.ResponseWriter, r *http.Request) {
 			}
 			if err := h.peers.SetExitNodeCapable(r.Context(), peerUUID, body.AdvertiseExitNode); err != nil {
 				slog.Warn("set exit_node_capable", "peer_id", selfID, "err", err)
+			}
+			if err := h.peers.SetNAT64EgressCapable(r.Context(), peerUUID, body.AdvertiseNat64Egress); err != nil {
+				slog.Warn("set nat64_egress_capable", "peer_id", selfID, "err", err)
 			}
 		}
 	}

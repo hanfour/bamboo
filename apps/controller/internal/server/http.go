@@ -271,7 +271,7 @@ func normalizeRoute(path string) string {
 	if rest, ok := strings.CutPrefix(path, "/api/v1/peers/"); ok && rest != "" {
 		for _, sub := range []string{
 			"events", "connection-events", "route-conflicts",
-			"approve", "reject", "routes", "exit-node",
+			"approve", "reject", "routes", "exit-node", "nat64-egress",
 		} {
 			if strings.HasSuffix(rest, "/"+sub) {
 				return "/api/v1/peers/{id}/" + sub

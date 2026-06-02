@@ -191,6 +191,17 @@ func (h *HTTPServer) routeAPI(w http.ResponseWriter, r *http.Request) {
 			h.apiPeerSetExitNodeApproved(w, r, authn, tenant, id)
 			return
 		}
+		// "{id}/nat64-egress" — admin approves/revokes the peer's
+		// NAT64 translator-egress role (NAT64 Phase C1). Body:
+		// {"approved": bool}.
+		if id, found := strings.CutSuffix(rest, "/nat64-egress"); found && id != "" && !strings.Contains(id, "/") {
+			if r.Method != http.MethodPost {
+				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+				return
+			}
+			h.apiPeerSetNAT64EgressApproved(w, r, authn, tenant, id)
+			return
+		}
 		// "{id}" — single peer GET/PATCH/DELETE.
 		if !strings.Contains(rest, "/") {
 			switch r.Method {
@@ -797,6 +808,8 @@ type apiPeerJSON struct {
 	ApprovedRoutes      []string `json:"approvedRoutes"`
 	ExitNodeCapable     bool     `json:"exitNodeCapable"`
 	ExitNodeApproved    bool     `json:"exitNodeApproved"`
+	NAT64EgressCapable  bool     `json:"nat64EgressCapable"`
+	NAT64EgressApproved bool     `json:"nat64EgressApproved"`
 	UsingExitNodePeerID string   `json:"usingExitNodePeerId,omitempty"`
 	// ConnectionPath is "direct" / "relay" / "unknown" (issue #138).
 	// Reported by the peer on heartbeat; nil on the wire when the
@@ -835,31 +848,33 @@ func peerToJSON(p *repo.Peer) apiPeerJSON {
 		tags = []string{}
 	}
 	return apiPeerJSON{
-		ID:                 p.ID.String(),
-		TenantID:           p.TenantID.String(),
-		Hostname:           p.Hostname,
-		PeerDNSName:        p.PeerDNSName,
-		IP:                 p.IP,
-		Tags:               tags,
-		OS:                 p.OS,
-		ClientVersion:      p.ClientVersion,
-		Status:             p.Status,
-		WireGuardPublicKey: p.WireGuardPublicKey,
-		Endpoints:          endpoints,
-		WGEndpoint:         p.WGEndpoint,
-		RxBytes:            p.RxBytes,
-		TxBytes:            p.TxBytes,
-		CreatedAt:          p.CreatedAt,
-		LastSeenAt:         p.LastSeenAt,
-		LastHandshakeAt:    p.LastHandshakeAt,
-		OwnerEmail:         p.OwnerEmail,
-		OwnerDisplayName:   p.OwnerDisplayName,
-		ApprovalStatus:     p.ApprovalStatus,
-		ApprovedAt:         p.ApprovedAt,
-		AdvertisedRoutes:   emptyIfNil(p.AdvertisedRoutes),
-		ApprovedRoutes:     emptyIfNil(p.ApprovedRoutes),
-		ExitNodeCapable:    p.ExitNodeCapable,
-		ExitNodeApproved:   p.ExitNodeApproved,
+		ID:                  p.ID.String(),
+		TenantID:            p.TenantID.String(),
+		Hostname:            p.Hostname,
+		PeerDNSName:         p.PeerDNSName,
+		IP:                  p.IP,
+		Tags:                tags,
+		OS:                  p.OS,
+		ClientVersion:       p.ClientVersion,
+		Status:              p.Status,
+		WireGuardPublicKey:  p.WireGuardPublicKey,
+		Endpoints:           endpoints,
+		WGEndpoint:          p.WGEndpoint,
+		RxBytes:             p.RxBytes,
+		TxBytes:             p.TxBytes,
+		CreatedAt:           p.CreatedAt,
+		LastSeenAt:          p.LastSeenAt,
+		LastHandshakeAt:     p.LastHandshakeAt,
+		OwnerEmail:          p.OwnerEmail,
+		OwnerDisplayName:    p.OwnerDisplayName,
+		ApprovalStatus:      p.ApprovalStatus,
+		ApprovedAt:          p.ApprovedAt,
+		AdvertisedRoutes:    emptyIfNil(p.AdvertisedRoutes),
+		ApprovedRoutes:      emptyIfNil(p.ApprovedRoutes),
+		ExitNodeCapable:     p.ExitNodeCapable,
+		ExitNodeApproved:    p.ExitNodeApproved,
+		NAT64EgressCapable:  p.NAT64EgressCapable,
+		NAT64EgressApproved: p.NAT64EgressApproved,
 		UsingExitNodePeerID: func() string {
 			if p.UsingExitNodePeerID == nil {
 				return ""
@@ -1504,6 +1519,75 @@ func (h *HTTPServer) apiPeerSetExitNodeApproved(w http.ResponseWriter, r *http.R
 		"hostname": current.Hostname,
 		"exit_node_approved": map[string]any{
 			"from": current.ExitNodeApproved,
+			"to":   req.Approved,
+		},
+	})
+	// #170: bump policy_revision + publish PolicyChanged so peers
+	// re-pull allowed_ips without a manual reconnect.
+	if _, err := h.coord.BumpPolicyRevision(r.Context(), tenant.ID); err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("bump policy revision: %w", err))
+		return
+	}
+	updated, err := h.peers.GetByID(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, peerToJSON(updated))
+}
+
+// apiPeerSetNAT64EgressApprovedReq is the request shape for approving/
+// revoking the NAT64 translator-egress role (NAT64 Phase C1).
+type apiPeerSetNAT64EgressApprovedReq struct {
+	Approved bool `json:"approved"`
+}
+
+// apiPeerSetNAT64EgressApproved implements POST /api/v1/peers/{id}/nat64-egress
+// (NAT64 Phase C1). Admin flips the peer's nat64_egress_approved bit.
+// Approving requires nat64_egress_capable — approving a peer that didn't
+// advertise the role would be misleading.
+func (h *HTTPServer) apiPeerSetNAT64EgressApproved(w http.ResponseWriter, r *http.Request, authn *authnContext, tenant *repo.Tenant, idStr string) {
+	if !h.requireAdmin(w, r, authn, tenant, "peer.nat64-egress.approve") {
+		return
+	}
+	id, err := uuid.Parse(idStr)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	current, err := h.peers.GetByID(r.Context(), id)
+	if errors.Is(err, repo.ErrNotFound) {
+		http.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if current.TenantID != tenant.ID {
+		http.NotFound(w, r)
+		return
+	}
+	var req apiPeerSetNAT64EgressApprovedReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("decode body: %w", err))
+		return
+	}
+	if req.Approved && !current.NAT64EgressCapable {
+		writeError(w, http.StatusBadRequest, errors.New("peer is not nat64-egress-capable; client must register with --advertise-nat64-egress first"))
+		return
+	}
+	if err := h.peers.SetNAT64EgressApproved(r.Context(), id, req.Approved); err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("set nat64_egress_approved: %w", err))
+		return
+	}
+	// Audit BEFORE bump — see comment in apiPeerSetApprovedRoutes
+	// for the rationale (preserve audit trail across partial-failure
+	// retries).
+	writePeerAudit(r.Context(), h.audits, authn, tenant.ID, id, "peer.nat64-egress.approve", map[string]any{
+		"hostname": current.Hostname,
+		"nat64_egress_approved": map[string]any{
+			"from": current.NAT64EgressApproved,
 			"to":   req.Approved,
 		},
 	})
