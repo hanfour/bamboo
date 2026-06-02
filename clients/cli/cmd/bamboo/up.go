@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"os/signal"
@@ -26,6 +27,7 @@ import (
 	clientsync "github.com/hanfour/bamboo/clients/cli/internal/sync"
 	"github.com/hanfour/bamboo/clients/core/client"
 	"github.com/hanfour/bamboo/clients/core/device"
+	"github.com/hanfour/bamboo/clients/core/nat64egress"
 	"github.com/hanfour/bamboo/clients/core/relay"
 	"github.com/hanfour/bamboo/clients/core/stun"
 	"github.com/hanfour/bamboo/clients/core/wg"
@@ -123,6 +125,17 @@ func runUp(cmd *cobra.Command, _ []string) error {
 		"ip", resp.GetSelf().GetIp(),
 		"peers_in_set", len(resp.GetPeers()),
 	)
+
+	// NAT64 egress translator (Phase C2): reconcile once on the initial
+	// register, then on every re-register via the RunWatchPeers hook
+	// below. On a non-egress box the controller sends active=false and
+	// this is a no-op.
+	v4Pool, err := netip.ParsePrefix(flagNAT64V4Pool)
+	if err != nil {
+		return fmt.Errorf("--nat64-v4-pool: %w", err)
+	}
+	egress := nat64egress.NewReconciler(nat64egress.New(), v4Pool, flagNAT64WANIface)
+	reconcileEgress(egress, resp)
 
 	cfg, err := wg.BuildDeviceConfig(priv, resp)
 	if err != nil {
@@ -325,7 +338,7 @@ func runUp(cmd *cobra.Command, _ []string) error {
 	}
 
 	go clientsync.RunHeartbeat(daemonCtx, heartbeater, resp.GetSelf().GetId(), discover, reportBytes)
-	go clientsync.RunWatchPeers(daemonCtx, adapter, dev, priv, cache, resp.GetSelf().GetId(), refresh, onRelaysChanged)
+	go clientsync.RunWatchPeers(daemonCtx, adapter, dev, priv, cache, resp.GetSelf().GetId(), refresh, onRelaysChanged, func(resp *bamboov1.RegisterResponse) { reconcileEgress(egress, resp) })
 	if relayClient != nil {
 		// Initial fallback goroutine: under daemonCtx so process
 		// exit cancels it, but ALSO under a per-launch context
@@ -346,6 +359,18 @@ func runUp(cmd *cobra.Command, _ []string) error {
 	<-stop
 	slog.Info("tearing down tunnel")
 	return nil
+}
+
+// reconcileEgress drives the local NAT64 translator from a register
+// response. Failures are logged, never fatal — a peer that can't run a
+// translator still functions as a normal mesh member. A legacy
+// controller (no nat64 fields) sends active=false + blank prefix, which
+// reconciles to Down (a no-op on a non-egress box).
+func reconcileEgress(r *nat64egress.Reconciler, resp *bamboov1.RegisterResponse) {
+	prefix, _ := netip.ParsePrefix(resp.GetNat64Prefix())
+	if err := r.Reconcile(resp.GetNat64EgressActive(), prefix); err != nil {
+		slog.Warn("nat64 egress reconcile", "err", err)
+	}
 }
 
 // registerWithController posts a Register call over REST carrying

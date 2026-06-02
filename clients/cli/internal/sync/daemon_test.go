@@ -124,7 +124,7 @@ func TestRunWatchPeers_InvokesRelaysChangedHandler(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		sync.RunWatchPeers(ctx, cli, app, priv, cache, self.GetId(), nil, handler)
+		sync.RunWatchPeers(ctx, cli, app, priv, cache, self.GetId(), nil, handler, nil)
 		close(done)
 	}()
 
@@ -198,7 +198,7 @@ func TestRunWatchPeers_AppliesAfterPeerAdded(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		sync.RunWatchPeers(ctx, cli, app, priv, cache, self.GetId(), nil, nil)
+		sync.RunWatchPeers(ctx, cli, app, priv, cache, self.GetId(), nil, nil, nil)
 		close(done)
 	}()
 
@@ -254,7 +254,7 @@ func TestRunWatchPeers_ReconnectsAfterStreamError(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	go sync.RunWatchPeers(ctx, cli, app, priv, cache, self.GetId(), nil, nil)
+	go sync.RunWatchPeers(ctx, cli, app, priv, cache, self.GetId(), nil, nil, nil)
 
 	// Wait for first open.
 	var errs chan error
@@ -325,7 +325,7 @@ func TestRunWatchPeers_RefreshesOnPolicyChanged(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		sync.RunWatchPeers(ctx, cli, app, priv, cache, self.GetId(), refresh, nil)
+		sync.RunWatchPeers(ctx, cli, app, priv, cache, self.GetId(), refresh, nil, nil)
 		close(done)
 	}()
 

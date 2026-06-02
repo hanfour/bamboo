@@ -419,9 +419,13 @@ type RegisterResponse struct {
 	// nat64_prefix is the resolved /96 the client synthesises into when
 	// dns64_enabled is true (the well-known 64:ff9b::/96 substituted for
 	// an unset per-tenant override). Empty on a legacy controller.
-	Nat64Prefix   string `protobuf:"bytes,7,opt,name=nat64_prefix,json=nat64Prefix,proto3" json:"nat64_prefix,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Nat64Prefix string `protobuf:"bytes,7,opt,name=nat64_prefix,json=nat64Prefix,proto3" json:"nat64_prefix,omitempty"`
+	// nat64_egress_active tells THIS peer it should run a NAT64 translator
+	// (NAT64 Phase C2): true when the peer is the tenant's approved egress
+	// AND dns64_enabled is on. The CLI brings Tayga up/down on this edge.
+	Nat64EgressActive bool `protobuf:"varint,8,opt,name=nat64_egress_active,json=nat64EgressActive,proto3" json:"nat64_egress_active,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *RegisterResponse) Reset() {
@@ -501,6 +505,13 @@ func (x *RegisterResponse) GetNat64Prefix() string {
 		return x.Nat64Prefix
 	}
 	return ""
+}
+
+func (x *RegisterResponse) GetNat64EgressActive() bool {
+	if x != nil {
+		return x.Nat64EgressActive
+	}
+	return false
 }
 
 type RelayServer struct {
@@ -1421,7 +1432,7 @@ const file_bamboo_v1_coordinator_proto_rawDesc = "" +
 	"\x0eclient_version\x18\x06 \x01(\tR\rclientVersion\x12\x1c\n" +
 	"\tendpoints\x18\a \x03(\tR\tendpointsB\f\n" +
 	"\n" +
-	"credential\"\xb7\x02\n" +
+	"credential\"\xe7\x02\n" +
 	"\x10RegisterResponse\x12#\n" +
 	"\x04self\x18\x01 \x01(\v2\x0f.bamboo.v1.PeerR\x04self\x12%\n" +
 	"\x05peers\x18\x02 \x03(\v2\x0f.bamboo.v1.PeerR\x05peers\x12'\n" +
@@ -1429,7 +1440,8 @@ const file_bamboo_v1_coordinator_proto_rawDesc = "" +
 	"\rrelay_servers\x18\x04 \x03(\v2\x16.bamboo.v1.RelayServerR\frelayServers\x12)\n" +
 	"\x10preferred_region\x18\x05 \x01(\tR\x0fpreferredRegion\x12#\n" +
 	"\rdns64_enabled\x18\x06 \x01(\bR\fdns64Enabled\x12!\n" +
-	"\fnat64_prefix\x18\a \x01(\tR\vnat64Prefix\"\x84\x01\n" +
+	"\fnat64_prefix\x18\a \x01(\tR\vnat64Prefix\x12.\n" +
+	"\x13nat64_egress_active\x18\b \x01(\bR\x11nat64EgressActive\"\x84\x01\n" +
 	"\vRelayServer\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x16\n" +
 	"\x06region\x18\x02 \x01(\tR\x06region\x12\x1a\n" +

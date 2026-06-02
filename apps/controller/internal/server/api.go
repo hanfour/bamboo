@@ -3020,6 +3020,16 @@ func (h *HTTPServer) apiDNSPatch(w http.ResponseWriter, r *http.Request, authn *
 		})
 	}
 
+	// dns64_enabled is the tenant-level NAT64 master switch and feeds
+	// RegisterResponse.nat64_egress_active (NAT64 Phase C2). Bump the
+	// policy revision + publish PolicyChanged so an approved egress peer
+	// re-registers and converges its translator promptly — symmetric
+	// with the nat64-egress approval handler, which already bumps.
+	if _, err := h.coord.BumpPolicyRevision(r.Context(), tenant.ID); err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("bump policy revision: %w", err))
+		return
+	}
+
 	// Re-fetch the DNS-config row so the PATCH response is a full,
 	// consistent apiDNSJSON snapshot (same shape as GET) rather than a
 	// partial object that would zero out MagicDNS / nameserver fields.

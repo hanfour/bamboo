@@ -122,6 +122,11 @@ message RegisterResponse {
   // dns64_enabled is true (the well-known 64:ff9b::/96 substituted for
   // an unset per-tenant override). Empty on a legacy controller.
   string nat64_prefix = 7;
+
+  // nat64_egress_active tells THIS peer it should run a NAT64 translator
+  // (NAT64 Phase C2): true when the peer is the tenant's approved egress
+  // AND dns64_enabled is on. The CLI brings Tayga up/down on this edge.
+  bool nat64_egress_active = 8;
 }
 
 message RelayServer {
