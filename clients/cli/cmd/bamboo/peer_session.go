@@ -90,7 +90,7 @@ type restPeer struct {
 // getters without a refactor. Idempotent on wireguard_public_key on
 // the controller, so refresh() can call this repeatedly to rotate
 // the bearer without provisioning a new IP.
-func restRegister(ctx context.Context, hostname, wgPublicKey, osName, version, preAuthKey, tenantSlug string, endpoints, advertisedRoutes []string, advertiseExitNode bool) (*bamboov1.RegisterResponse, string, time.Time, error) {
+func restRegister(ctx context.Context, hostname, wgPublicKey, osName, version, preAuthKey, tenantSlug string, endpoints, advertisedRoutes []string, advertiseExitNode, advertiseNat64Egress bool) (*bamboov1.RegisterResponse, string, time.Time, error) {
 	base := controllerHTTPBase()
 	reqBody := map[string]any{
 		"hostname":           hostname,
@@ -109,6 +109,9 @@ func restRegister(ctx context.Context, hostname, wgPublicKey, osName, version, p
 	}
 	if advertiseExitNode {
 		reqBody["advertiseExitNode"] = true
+	}
+	if advertiseNat64Egress {
+		reqBody["advertiseNat64Egress"] = true
 	}
 	body, err := json.Marshal(reqBody)
 	if err != nil {

@@ -89,6 +89,8 @@ type ApiPeer = {
   approvedRoutes?: string[] | null;
   exitNodeCapable?: boolean | null;
   exitNodeApproved?: boolean | null;
+  nat64EgressCapable?: boolean | null;
+  nat64EgressApproved?: boolean | null;
   usingExitNodePeerId?: string | null;
 };
 
@@ -132,6 +134,8 @@ function apiPeerToPeer(p: ApiPeer): Peer {
     approvedRoutes: p.approvedRoutes ?? [],
     exitNodeCapable: p.exitNodeCapable ?? false,
     exitNodeApproved: p.exitNodeApproved ?? false,
+    nat64EgressCapable: p.nat64EgressCapable ?? false,
+    nat64EgressApproved: p.nat64EgressApproved ?? false,
     usingExitNodePeerId: p.usingExitNodePeerId ?? undefined,
   };
 }

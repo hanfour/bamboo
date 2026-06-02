@@ -10,6 +10,7 @@ import {
  renamePeerDnsNameAction,
  setApprovedRoutesAction,
  setExitNodeApprovedAction,
+ setNAT64EgressApprovedAction,
  setPeerStatusAction,
  setPeerTagsAction,
 } from '@/lib/actions';
@@ -592,7 +593,7 @@ function AdvertiseSection({
  onError: (msg: string | null) => void;
 }) {
  const t = useTranslations('peers.drawer');
- if (peer.advertisedRoutes.length === 0 && !peer.exitNodeCapable) {
+ if (peer.advertisedRoutes.length === 0 && !peer.exitNodeCapable && !peer.nat64EgressCapable) {
  return null;
  }
  return (
@@ -613,6 +614,9 @@ function AdvertiseSection({
  )}
  {peer.exitNodeCapable && (
  <ExitNodeApprovalRow peer={peer} onError={onError} />
+ )}
+ {peer.nat64EgressCapable && (
+ <NAT64EgressApprovalRow peer={peer} onError={onError} />
  )}
  </Section>
  );
@@ -722,6 +726,40 @@ function ExitNodeApprovalRow({
  }}
  />
  <span className="flex-1">{t('advertise.exitNode')}</span>
+ {pending && <span className="text-xs text-bamboo-200/60">{t('inline.working')}</span>}
+ </label>
+ );
+}
+
+// NAT64EgressApprovalRow is the single-toggle equivalent of
+// RouteApprovalRow. Revoking (false) is always allowed regardless
+// of capable state; approving (true) requires the peer to remain
+// nat64_egress_capable, which the parent component already guards
+// (this row is only rendered when capable is true).
+function NAT64EgressApprovalRow({
+ peer,
+ onError,
+}: {
+ peer: Peer;
+ onError: (msg: string | null) => void;
+}) {
+ const t = useTranslations('peers.drawer');
+ const [pending, startTransition] = useTransition();
+ return (
+ <label className="flex items-center gap-2 rounded-md border border-bamboo-200/20 px-3 py-1.5 text-sm text-bamboo-100">
+ <input
+ type="checkbox"
+ checked={peer.nat64EgressApproved}
+ disabled={pending}
+ onChange={() => {
+ startTransition(async () => {
+ const res = await setNAT64EgressApprovedAction(peer.id, !peer.nat64EgressApproved);
+ if (res.ok) onError(null);
+ else onError(res.error);
+ });
+ }}
+ />
+ <span className="flex-1">{t('advertise.nat64Egress')}</span>
  {pending && <span className="text-xs text-bamboo-200/60">{t('inline.working')}</span>}
  </label>
  );

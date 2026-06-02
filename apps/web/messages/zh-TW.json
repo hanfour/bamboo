@@ -154,7 +154,8 @@
       },
       "advertise": {
         "routesHint": "此節點宣告以下 CIDR 可由它轉發。請核可你信任的範圍 —— 只有核可的部分才會合併進其他節點的 allowed_ips。",
-        "exitNode": "核可作為 exit-node"
+        "exitNode": "核可作為 exit-node",
+        "nat64Egress": "核可作為 NAT64 egress"
       },
       "routeConflicts": {
         "summary": "{count, plural, other {與 # 個其他節點有路由衝突}}",
