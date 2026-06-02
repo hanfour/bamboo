@@ -69,9 +69,12 @@ func (m *linuxManager) Up(prefix netip.Prefix, v4Pool netip.Prefix, wanIface str
 		return fmt.Errorf("write %s: %w", ConfigPath, err)
 	}
 
-	// 3. Create + bring up the TUN.
-	if _, err := m.run(ctx, "tayga", mktunArgs(ConfigPath)...); err != nil {
-		return fmt.Errorf("tayga --mktun: %w", err)
+	// 3. Create + bring up the TUN. Skip --mktun if it already exists
+	// (a prior partial Up may have created it) so retries don't wedge.
+	if _, err := netlink.LinkByName(TunDevice); err != nil {
+		if _, err := m.run(ctx, "tayga", mktunArgs(ConfigPath)...); err != nil {
+			return fmt.Errorf("tayga --mktun: %w", err)
+		}
 	}
 	link, err := netlink.LinkByName(TunDevice)
 	if err != nil {
@@ -89,14 +92,22 @@ func (m *linuxManager) Up(prefix netip.Prefix, v4Pool netip.Prefix, wanIface str
 		return err
 	}
 
-	// 5. Enable forwarding (record prior values for restore on Down).
-	m.prior = map[string]string{}
+	// 5. Enable forwarding. Record each key's prior value only the first
+	// time we see it: a partial Up that already flipped a key to "1" must
+	// not re-record "1" as the original on retry, or Down would restore
+	// the wrong value. Down clears m.prior, so the next fresh cycle
+	// re-captures. Set is idempotent.
+	if m.prior == nil {
+		m.prior = map[string]string{}
+	}
 	for _, k := range forwardingKeys {
-		old, err := m.sysctl.Get(k)
-		if err != nil {
-			return fmt.Errorf("read sysctl %s: %w", k, err)
+		if _, recorded := m.prior[k]; !recorded {
+			old, err := m.sysctl.Get(k)
+			if err != nil {
+				return fmt.Errorf("read sysctl %s: %w", k, err)
+			}
+			m.prior[k] = old
 		}
-		m.prior[k] = old
 		if err := m.sysctl.Set(k, "1"); err != nil {
 			return fmt.Errorf("set sysctl %s: %w", k, err)
 		}
