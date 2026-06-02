@@ -28,7 +28,9 @@ func (s sysctlFS) Get(key string) (string, error) {
 	return strings.TrimSpace(string(b)), nil
 }
 
-// Set writes a sysctl value.
+// Set writes a sysctl value. The 0o600 perm only applies if the file
+// does not already exist; real /proc/sys nodes always pre-exist, so the
+// kernel ignores it — it is set tight to satisfy gosec G306.
 func (s sysctlFS) Set(key, val string) error {
-	return os.WriteFile(s.path(key), []byte(val+"\n"), 0o644)
+	return os.WriteFile(s.path(key), []byte(val+"\n"), 0o600)
 }

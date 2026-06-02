@@ -12,6 +12,7 @@ import (
 	"net/netip"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 
 	"github.com/vishvananda/netlink"
@@ -24,6 +25,18 @@ func newManager() Manager {
 		run:      execRun,
 		sysctl:   sysctlFS{root: "/"},
 	}
+}
+
+// execRun is the production runner: it captures combined output and folds
+// it into the error so a failed iptables/tayga/apt-get is diagnosable.
+// It lives in the Linux file because the real manager is its only caller
+// (tests inject a fake runner).
+func execRun(ctx context.Context, name string, args ...string) ([]byte, error) {
+	out, err := exec.CommandContext(ctx, name, args...).CombinedOutput()
+	if err != nil {
+		return out, fmt.Errorf("%s %s: %w: %s", name, strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+	}
+	return out, nil
 }
 
 // linuxManager drives a Tayga NAT64 translator on this host. Up converges
@@ -62,10 +75,10 @@ func (m *linuxManager) Up(prefix netip.Prefix, v4Pool netip.Prefix, wanIface str
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(ConfigDir, 0o755); err != nil {
+	if err := os.MkdirAll(ConfigDir, 0o750); err != nil {
 		return fmt.Errorf("mkdir %s: %w", ConfigDir, err)
 	}
-	if err := os.WriteFile(ConfigPath, []byte(conf), 0o644); err != nil {
+	if err := os.WriteFile(ConfigPath, []byte(conf), 0o600); err != nil {
 		return fmt.Errorf("write %s: %w", ConfigPath, err)
 	}
 

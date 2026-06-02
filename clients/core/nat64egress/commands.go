@@ -4,10 +4,7 @@ package nat64egress
 
 import (
 	"context"
-	"fmt"
 	"net/netip"
-	"os/exec"
-	"strings"
 )
 
 // Filesystem paths the Linux manager owns. ConfigDir holds the rendered
@@ -29,16 +26,6 @@ type runner func(ctx context.Context, name string, args ...string) ([]byte, erro
 
 // lookPathFn resolves a binary on PATH (exec.LookPath in production).
 type lookPathFn func(string) (string, error)
-
-// execRun is the production runner: it captures combined output and folds
-// it into the error so a failed iptables/tayga/apt-get is diagnosable.
-func execRun(ctx context.Context, name string, args ...string) ([]byte, error) {
-	out, err := exec.CommandContext(ctx, name, args...).CombinedOutput()
-	if err != nil {
-		return out, fmt.Errorf("%s %s: %w: %s", name, strings.Join(args, " "), err, strings.TrimSpace(string(out)))
-	}
-	return out, nil
-}
 
 // installCmd splits a PackageManager into the (name, args) to install
 // tayga, e.g. {"apt-get", "install", "-y"} -> ("apt-get", ["install","-y","tayga"]).
