@@ -3,6 +3,7 @@
 package nat64egress
 
 import (
+	"context"
 	"fmt"
 	"strings"
 )
@@ -43,4 +44,19 @@ func ParseWANIface(ipRouteGetOutput string) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("no 'dev <iface>' in route output: %q", ipRouteGetOutput)
+}
+
+// ResolveWANIface returns the MASQUERADE uplink interface. If configured
+// is non-empty (the --nat64-wan-iface flag) it is used verbatim;
+// otherwise the default route is probed via `ip route get 1.1.1.1` and
+// the device name parsed out with ParseWANIface.
+func ResolveWANIface(ctx context.Context, configured string, run runner) (string, error) {
+	if configured != "" {
+		return configured, nil
+	}
+	out, err := run(ctx, "ip", "route", "get", "1.1.1.1")
+	if err != nil {
+		return "", fmt.Errorf("detect wan iface: %w", err)
+	}
+	return ParseWANIface(string(out))
 }
