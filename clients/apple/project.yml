@@ -256,6 +256,7 @@ targets:
       - path: DNSProxy-macOS
       - path: Shared/MagicDNSPeerStore.swift
       - path: Shared/MagicDNSResolver.swift
+      - path: Shared/NAT64Synth.swift
     info:
       path: DNSProxy-macOS/Info.plist
       properties:
@@ -346,6 +347,7 @@ targets:
       - path: Tests/AppleShared
       - path: Shared/MagicDNSPeerStore.swift
       - path: Shared/MagicDNSResolver.swift
+      - path: Shared/NAT64Synth.swift
       - path: Shared/ControllerURLParser.swift
       - path: Shared/AdvertiseRoutesParser.swift
       - path: Shared/WGStatsParser.swift
@@ -464,6 +466,7 @@ targets:
       - path: DNSProxy-iOS
       - path: Shared/MagicDNSPeerStore.swift
       - path: Shared/MagicDNSResolver.swift
+      - path: Shared/NAT64Synth.swift
     info:
       path: DNSProxy-iOS/Info.plist
       properties:
