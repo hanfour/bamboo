@@ -17,10 +17,13 @@ targeting `64:ff9b::<v4>`; after C4 it works end-to-end for real names.
   matching the controller's Go `Synthesize`; a DNS answer-section parser
   to extract A records from an upstream response; a multi-AAAA response
   builder; and a pure DNS64 decision helper.
-- **Config decode + channel**: decode the tenant-scoped `dns64_enabled` +
-  `nat64_prefix` from the register response and push them to the DNS proxy
-  extension. This includes **fixing the currently-dormant iOS MagicDNS
-  config channel** (a prerequisite — see §3).
+- **Config surfacing + decode + channel**: the Apple client registers over
+  **REST**, whose `peerRegisterResponse` does not yet carry the NAT64
+  config (only the gRPC `RegisterResponse` does). A small controller change
+  surfaces `dns64Enabled` + `nat64Prefix` on the REST response (they are
+  already on the in-handler proto `resp`); the Swift client decodes them
+  and pushes them to the DNS proxy extension. This includes **fixing the
+  currently-dormant iOS MagicDNS config channel** (a prerequisite — see §3).
 - **Provider 2-stage upstream** (RFC 6147): refactor the DNS proxy's
   single-shot upstream forwarder into a reusable query primitive, and add
   the AAAA→(NODATA)→A→synthesise path to both the macOS and iOS providers.
@@ -109,12 +112,23 @@ existing `MagicDNSResolver` / `DNSMessage`.
   Returns nil if the A response has no usable A records (caller then
   relays the original NODATA).
 
-### 4.2 Config decode + channel (PR 2)
+### 4.2 Config surfacing + decode + channel (PR 2)
 
-- **Register-response decode**: add `dns64Enabled: Bool` and
-  `nat64Prefix: String` to the Swift Decodable for the register response
-  (top-level `RegisterResponse` fields 6/7 — tenant-scoped, not per-peer).
-  Default to `false` / `""` when absent (a pre-C4 controller).
+- **Controller REST surfacing** (small): the Apple client decodes the REST
+  `peerRegisterResponse` (`apps/controller/internal/server/api_peers.go`),
+  which currently omits the NAT64 config. The handler already builds its
+  response from an in-handler proto `resp` that carries `Dns64Enabled` +
+  `Nat64Prefix` (set at `coordinator.go:440-441` via `tenant.DNS64Enabled`
+  / `nat64.ResolvePrefix(tenant.NAT64Prefix)`). Add two `omitempty` JSON
+  fields to `peerRegisterResponse` and populate them from
+  `resp.GetDns64Enabled()` / `resp.GetNat64Prefix()`. No new tenant fetch
+  or prefix resolution — purely surfacing existing values, so the gRPC and
+  REST register paths stay in lock-step.
+- **Register-response decode**: add `dns64Enabled: Bool?` and
+  `nat64Prefix: String?` to `BambooClient.RegisterResponse` (the Swift
+  REST Decodable, `BambooClient.swift:123`) + their `CodingKeys`, optional
+  (nil ⇒ a pre-C4 controller ⇒ treated as off), mirroring the existing
+  optional fields (`peerSessionToken`, `preferredRegion`).
 - **`MagicDNSPeerStore` platform-conditional path** (§3) — macOS keeps
   `/Users/Shared`; iOS uses the App Group container. Existing macOS
   behaviour is byte-identical; the `init(path:)` test seam is unchanged.
@@ -191,6 +205,9 @@ logic** (`DNSProxy-macOS/DNSProxyProvider.swift`,
   `.bamboo` → no; A query → no; off → no.
 - `MagicDNSPeerStore` round-trip via the `init(path:)` seam (unchanged);
   the new `NAT64Config` sidecar round-trip.
+- **Controller (real Postgres, in CI):** an e2e REST register test asserting
+  the `peerRegisterResponse` JSON carries `dns64Enabled` + `nat64Prefix`
+  for a tenant with DNS64 on (mirrors the existing register e2e tests).
 
 **Not unit-testable (NE provider + real host):**
 - The 2-stage upstream wiring — compile-only verify
@@ -212,10 +229,12 @@ logic** (`DNSProxy-macOS/DNSProxyProvider.swift`,
    `nat64Synthesize`, `nat64PrefixBytes`, the answer-section parser,
    `aaaaRecords`, `synthesizeResponse`, and the DNS64 decision helper.
    Fully CI-tested. No provider/config change.
-2. **PR 2 — config channel**: register-response decode of `dns64Enabled` +
-   `nat64Prefix`; the `MagicDNSPeerStore` platform-conditional path
-   (reviving iOS MagicDNS); the `NAT64Config` sidecar + the app-side write.
-   Store/sidecar unit tests + Apple compile verify.
+2. **PR 2 — config surfacing + channel** (controller + Apple): surface
+   `dns64Enabled` + `nat64Prefix` on the REST `peerRegisterResponse`
+   (controller); decode them in `BambooClient.RegisterResponse` (Swift);
+   the `MagicDNSPeerStore` platform-conditional path (reviving iOS
+   MagicDNS); the `NAT64Config` sidecar + the app-side write. Controller
+   e2e (real Postgres) + store/sidecar unit tests + Apple compile verify.
 3. **PR 3 — provider 2-stage upstream**: extract `upstreamQuery`, add the
    DNS64 branch to both the macOS and iOS providers, wiring in the PR 1
    pure functions + the PR 2 config. Compile verify + the §7 manual E2E.
