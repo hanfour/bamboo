@@ -173,6 +173,11 @@ final class DNS64Tests: XCTestCase {
         XCTAssertFalse(NAT64Synth.shouldSynthesize(query: q, dns64Enabled: true, zone: "bamboo"))
     }
 
+    func testShouldSynthesizeSkipsBambooApex() {
+        let q = DNSMessage.parse(makeQuery("bamboo", type: 28))!
+        XCTAssertFalse(NAT64Synth.shouldSynthesize(query: q, dns64Enabled: true, zone: "bamboo"))
+    }
+
     func testShouldSynthesizeSkipsAQuery() {
         let q = DNSMessage.parse(makeQuery("ipv4only.example", type: 1))!
         XCTAssertFalse(NAT64Synth.shouldSynthesize(query: q, dns64Enabled: true, zone: "bamboo"))
