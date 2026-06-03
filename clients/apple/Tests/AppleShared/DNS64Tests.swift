@@ -155,4 +155,26 @@ final class DNS64Tests: XCTestCase {
         let prefix = NAT64Synth.prefixBytes("64:ff9b::/96")!
         XCTAssertNil(DNSMessage.synthesizeResponse(aaaaQuery: aaaaQ, aResponse: emptyA, prefix: prefix))
     }
+
+    // MARK: query-eligibility decision
+
+    func testShouldSynthesizeExternalAAAA() {
+        let q = DNSMessage.parse(makeQuery("ipv4only.example", type: 28))!
+        XCTAssertTrue(NAT64Synth.shouldSynthesize(query: q, dns64Enabled: true, zone: "bamboo"))
+    }
+
+    func testShouldSynthesizeFalseWhenDisabled() {
+        let q = DNSMessage.parse(makeQuery("ipv4only.example", type: 28))!
+        XCTAssertFalse(NAT64Synth.shouldSynthesize(query: q, dns64Enabled: false, zone: "bamboo"))
+    }
+
+    func testShouldSynthesizeSkipsBambooZone() {
+        let q = DNSMessage.parse(makeQuery("host.bamboo", type: 28))!
+        XCTAssertFalse(NAT64Synth.shouldSynthesize(query: q, dns64Enabled: true, zone: "bamboo"))
+    }
+
+    func testShouldSynthesizeSkipsAQuery() {
+        let q = DNSMessage.parse(makeQuery("ipv4only.example", type: 1))!
+        XCTAssertFalse(NAT64Synth.shouldSynthesize(query: q, dns64Enabled: true, zone: "bamboo"))
+    }
 }

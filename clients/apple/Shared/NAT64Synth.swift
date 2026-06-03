@@ -40,4 +40,20 @@ enum NAT64Synth {
         bytes[15] = 0
         return bytes
     }
+
+    /// shouldSynthesize decides whether a DNS *query* is eligible for
+    /// DNS64 AAAA synthesis: DNS64 must be enabled, and the query must be a
+    /// single AAAA (type 28) question for a name OUTSIDE the MagicDNS zone
+    /// (".<zone>." and the apex "<zone>." are answered locally, never
+    /// synthesized). The actual NODATA check happens on the upstream
+    /// response (DNSMessage.isDNS64Candidate); this gates the query.
+    static func shouldSynthesize(query: DNSMessage, dns64Enabled: Bool, zone: String) -> Bool {
+        guard dns64Enabled, query.questions.count == 1 else { return false }
+        let q = query.questions[0]
+        guard q.qtype == .aaaa else { return false }
+        let name = q.name.lowercased()
+        let z = zone.lowercased()
+        if name == z + "." || name.hasSuffix("." + z + ".") { return false }
+        return true
+    }
 }
