@@ -33,6 +33,11 @@ final class DNS64Tests: XCTestCase {
         XCTAssertNil(NAT64Synth.prefixBytes("nonsense/96"))    // unparseable addr
     }
 
+    func testPrefixBytesRejectsIPv4Mapped() {
+        // ::ffff:0:0/96 is the IPv4-mapped range — not a valid NAT64 prefix.
+        XCTAssertNil(NAT64Synth.prefixBytes("::ffff:0:0/96"))
+    }
+
     func testPrefixBytesZeroesLow32() {
         let got = NAT64Synth.prefixBytes("64:ff9b::5db8:d822/96")!
         let want: [UInt8] = [0x00, 0x64, 0xff, 0x9b, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]

@@ -34,6 +34,12 @@ enum NAT64Synth {
         guard var bytes = MagicDNSResolver.ipv6Bytes(String(parts[0])), bytes.count == 16 else {
             return nil
         }
+        // Reject an IPv4-mapped prefix (::ffff:0:0/96): bytes 0-9 zero and
+        // bytes 10-11 == 0xff. The controller's ParsePrefix rejects these;
+        // mirror it so a degenerate prefix never reaches synthesis.
+        if bytes[0..<10].allSatisfy({ $0 == 0 }) && bytes[10] == 0xff && bytes[11] == 0xff {
+            return nil
+        }
         bytes[12] = 0
         bytes[13] = 0
         bytes[14] = 0
