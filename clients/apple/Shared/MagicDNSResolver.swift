@@ -379,3 +379,74 @@ extension Data {
         append(UInt8(value & 0xFF))
     }
 }
+
+// MARK: - DNS64 answer-section parsing (NAT64 Phase C4)
+
+extension DNSMessage {
+    /// A resource record parsed from a response's answer section. The
+    /// name is discarded — callers only need type/class/rdata.
+    struct RR {
+        let type: UInt16
+        let cls: UInt16
+        let rdata: [UInt8]
+    }
+
+    /// rcode returns the low 4 bits of a DNS message's flag word, or nil
+    /// if the buffer is too short to hold a header.
+    static func rcode(_ data: Data) -> UInt8? {
+        guard data.count >= 4 else { return nil }
+        return UInt8(data.readUInt16(at: 2) & 0x000F)
+    }
+
+    /// parseAnswers walks the answer section of a full DNS *response* and
+    /// returns its resource records (the question section is skipped).
+    /// Authority/additional sections are ignored. Returns nil if the
+    /// message is truncated or malformed. Reuses decodeName, so
+    /// compression pointers in answer names are handled.
+    static func parseAnswers(_ data: Data) -> [RR]? {
+        guard data.count >= 12 else { return nil }
+        let qd = Int(data.readUInt16(at: 4))
+        let an = Int(data.readUInt16(at: 6))
+        var offset = 12
+        for _ in 0..<qd {
+            guard let (_, next) = decodeName(data, at: offset) else { return nil }
+            offset = next
+            guard offset + 4 <= data.count else { return nil }
+            offset += 4 // qtype + qclass
+        }
+        var out: [RR] = []
+        out.reserveCapacity(an)
+        for _ in 0..<an {
+            guard let (_, next) = decodeName(data, at: offset) else { return nil }
+            offset = next
+            guard offset + 10 <= data.count else { return nil }
+            let type = data.readUInt16(at: offset)
+            let cls = data.readUInt16(at: offset + 2)
+            // offset+4..7: TTL (skipped); offset+8..9: rdlength.
+            let rdlen = Int(data.readUInt16(at: offset + 8))
+            offset += 10
+            guard offset + rdlen <= data.count else { return nil }
+            let rdata = [UInt8](data.subdata(in: offset..<offset + rdlen))
+            out.append(RR(type: type, cls: cls, rdata: rdata))
+            offset += rdlen
+        }
+        return out
+    }
+
+    /// aRecords returns the 4-byte IPv4 rdata of every A (type 1, class
+    /// IN) record in a response, or nil if the message is malformed.
+    static func aRecords(_ data: Data) -> [[UInt8]]? {
+        guard let rrs = parseAnswers(data) else { return nil }
+        return rrs.filter { $0.type == 1 && $0.cls == 1 && $0.rdata.count == 4 }
+                  .map { $0.rdata }
+    }
+
+    /// isDNS64Candidate reports whether an AAAA *response* should trigger
+    /// DNS64 synthesis: NOERROR (rcode 0) with zero AAAA (type 28) answer
+    /// records. A real AAAA, an error rcode, or a malformed message
+    /// returns false — the caller relays the response verbatim (RFC 6147).
+    static func isDNS64Candidate(_ data: Data) -> Bool {
+        guard rcode(data) == 0, let rrs = parseAnswers(data) else { return false }
+        return !rrs.contains { $0.type == 28 }
+    }
+}

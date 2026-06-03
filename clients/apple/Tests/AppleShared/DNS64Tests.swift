@@ -85,4 +85,37 @@ final class DNS64Tests: XCTestCase {
         }
         return d
     }
+
+    // MARK: DNSMessage answer parsing
+
+    func testParseSingleARecord() {
+        let resp = makeAResponse(name: "ipv4only.example", ips: [[93, 184, 216, 34]])
+        XCTAssertEqual(DNSMessage.aRecords(resp), [[93, 184, 216, 34]])
+    }
+
+    func testParseMultipleARecords() {
+        let resp = makeAResponse(name: "multi.example", ips: [[1, 1, 1, 1], [8, 8, 8, 8]])
+        XCTAssertEqual(DNSMessage.aRecords(resp), [[1, 1, 1, 1], [8, 8, 8, 8]])
+    }
+
+    func testIsDNS64CandidateTrueForNoData() {
+        // A NOERROR/empty AAAA response (the IPv4-only case) is a candidate.
+        let aaaaQ = DNSMessage.parse(makeQuery("ipv4only.example", type: 28))!
+        let nodata = DNSMessage.noerrorEmpty(for: aaaaQ)
+        XCTAssertTrue(DNSMessage.isDNS64Candidate(nodata))
+    }
+
+    func testIsDNS64CandidateFalseWhenRealAAAA() {
+        let aaaaQ = DNSMessage.parse(makeQuery("dual.example", type: 28))!
+        let v6: [UInt8] = [0x26, 0x06, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]
+        let withAAAA = DNSMessage.aaaaRecord(for: aaaaQ, ipv6: v6)
+        XCTAssertFalse(DNSMessage.isDNS64Candidate(withAAAA))
+    }
+
+    func testParseAnswersRejectsTruncated() {
+        XCTAssertNil(DNSMessage.aRecords(Data([0x12, 0x34])))            // < 12-byte header
+        // Header claims 1 answer but the body is missing.
+        let bogus = Data([0x12, 0x34, 0x81, 0x80, 0, 0, 0, 1, 0, 0, 0, 0])
+        XCTAssertNil(DNSMessage.aRecords(bogus))
+    }
 }
