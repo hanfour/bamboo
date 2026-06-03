@@ -449,4 +449,30 @@ extension DNSMessage {
         guard rcode(data) == 0, let rrs = parseAnswers(data) else { return false }
         return !rrs.contains { $0.type == 28 }
     }
+
+    /// aaaaRecords builds a NOERROR response carrying one AAAA answer per
+    /// supplied 16-byte address, echoing the query's id + question.
+    static func aaaaRecords(for query: DNSMessage,
+                            ipv6s: [[UInt8]],
+                            ttlSeconds: UInt32 = 60) -> Data {
+        let answers = ipv6s.map { ip -> Answer in
+            precondition(ip.count == 16, "ipv6 must be 16 bytes")
+            return Answer(name: query.questions[0].name,
+                          type: 28, cls: 1, ttl: ttlSeconds, rdata: Data(ip))
+        }
+        return build(reply: query, rcode: 0, answers: answers)
+    }
+
+    /// synthesizeResponse builds the DNS64 AAAA reply for `aaaaQuery` from
+    /// an upstream A `aResponse`, embedding each A record into `prefix`
+    /// (a 16-byte /96 base) via NAT64Synth.synthesize. Returns nil when
+    /// the A response carries no usable A records (the caller then relays
+    /// the original NODATA AAAA reply).
+    static func synthesizeResponse(aaaaQuery: DNSMessage,
+                                   aResponse: Data,
+                                   prefix: [UInt8]) -> Data? {
+        guard let v4s = aRecords(aResponse), !v4s.isEmpty else { return nil }
+        let v6s = v4s.map { NAT64Synth.synthesize(prefix: prefix, v4: $0) }
+        return aaaaRecords(for: aaaaQuery, ipv6s: v6s)
+    }
 }

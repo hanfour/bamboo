@@ -118,4 +118,41 @@ final class DNS64Tests: XCTestCase {
         let bogus = Data([0x12, 0x34, 0x81, 0x80, 0, 0, 0, 1, 0, 0, 0, 0])
         XCTAssertNil(DNSMessage.aRecords(bogus))
     }
+
+    // MARK: synthesis glue
+
+    func testSynthesizeResponseSingleA() {
+        let aaaaQ = DNSMessage.parse(makeQuery("ipv4only.example", type: 28))!
+        let aResp = makeAResponse(name: "ipv4only.example", ips: [[93, 184, 216, 34]])
+        let prefix = NAT64Synth.prefixBytes("64:ff9b::/96")!
+        let out = DNSMessage.synthesizeResponse(aaaaQuery: aaaaQ, aResponse: aResp, prefix: prefix)!
+
+        let parsed = DNSMessage.parse(out)!
+        XCTAssertEqual(parsed.id, 0x1234)                 // echoes the AAAA query id
+        let rrs = DNSMessage.parseAnswers(out)!
+        XCTAssertEqual(rrs.count, 1)
+        XCTAssertEqual(rrs[0].type, 28)
+        XCTAssertEqual(rrs[0].rdata,
+                       [0x00, 0x64, 0xff, 0x9b, 0, 0, 0, 0, 0, 0, 0, 0, 0x5d, 0xb8, 0xd8, 0x22])
+    }
+
+    func testSynthesizeResponseMultiA() {
+        let aaaaQ = DNSMessage.parse(makeQuery("multi.example", type: 28))!
+        let aResp = makeAResponse(name: "multi.example", ips: [[1, 1, 1, 1], [8, 8, 8, 8]])
+        let prefix = NAT64Synth.prefixBytes("64:ff9b::/96")!
+        let out = DNSMessage.synthesizeResponse(aaaaQuery: aaaaQ, aResponse: aResp, prefix: prefix)!
+
+        let rrs = DNSMessage.parseAnswers(out)!
+        XCTAssertEqual(rrs.count, 2)
+        XCTAssertEqual(Array(rrs[0].rdata.suffix(4)), [1, 1, 1, 1])
+        XCTAssertEqual(Array(rrs[1].rdata.suffix(4)), [8, 8, 8, 8])
+    }
+
+    func testSynthesizeResponseNilWhenNoARecords() {
+        let aaaaQ = DNSMessage.parse(makeQuery("empty.example", type: 28))!
+        let aQ = DNSMessage.parse(makeQuery("empty.example", type: 1))!
+        let emptyA = DNSMessage.noerrorEmpty(for: aQ)         // A response with no answers
+        let prefix = NAT64Synth.prefixBytes("64:ff9b::/96")!
+        XCTAssertNil(DNSMessage.synthesizeResponse(aaaaQuery: aaaaQ, aResponse: emptyA, prefix: prefix))
+    }
 }
