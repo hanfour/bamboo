@@ -974,6 +974,12 @@ public final class ConnectionViewModel: ObservableObject {
             log.log("policy refresh: revision=\(resp.policyRevision, privacy: .public) peers=\(resp.peers.count, privacy: .public)")
             rebuildAndReapply()
             syncMagicDNSMap()
+            // Converge the DNSProxy's NAT64 config on policy changes too — an
+            // admin DNS64 toggle bumps the policy revision and re-registers
+            // here, not via the initial handler (NAT64 Phase C4).
+            peerStore.setNAT64Config(MagicDNSPeerStore.NAT64Config(
+                dns64Enabled: resp.dns64Enabled ?? false,
+                nat64Prefix: resp.nat64Prefix ?? ""))
         } catch {
             log.warning("policy refresh failed: \(String(describing: error), privacy: .public); staying on prior config")
         }
