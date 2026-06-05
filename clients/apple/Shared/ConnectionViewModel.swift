@@ -608,6 +608,11 @@ public final class ConnectionViewModel: ObservableObject {
             // Push the current peer map across the App Group so the
             // DNSProxy extension can answer *.bamboo queries.
             self.syncMagicDNSMap()
+            // Push the tenant NAT64/DNS64 config so the DNSProxy extension can
+            // synthesise AAAA for external IPv4-only names (NAT64 Phase C4).
+            self.peerStore.setNAT64Config(MagicDNSPeerStore.NAT64Config(
+                dns64Enabled: resp.dns64Enabled ?? false,
+                nat64Prefix: resp.nat64Prefix ?? ""))
 
             // Background loops: heartbeat keeps last_seen fresh +
             // re-reports our endpoint; watcher streams peer changes
