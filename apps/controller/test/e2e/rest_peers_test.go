@@ -1306,6 +1306,57 @@ func TestRESTGetPeerEvents_UnknownPeer(t *testing.T) {
 	}
 }
 
+func TestRESTRegister_SurfacesNAT64Config(t *testing.T) {
+	f := startFixture(t)
+	ctx := context.Background()
+	// Same peer (same key) registered twice — use the shared randomPubKey
+	// helper the other REST tests use, stored once so both registers match.
+	body := map[string]any{
+		"hostname":           "dns64-laptop",
+		"wireguardPublicKey": randomPubKey(t),
+		"tenantSlug":         f.tenantSlug,
+	}
+
+	// First register creates the tenant + peer; NAT64 is off → fields absent.
+	first := postJSON(t, f.httpURL+"/api/v1/peers/register", body)
+	var before struct {
+		DNS64Enabled bool   `json:"dns64Enabled"`
+		NAT64Prefix  string `json:"nat64Prefix"`
+	}
+	if err := json.Unmarshal(first.body, &before); err != nil {
+		t.Fatalf("decode first: %v", err)
+	}
+	if before.DNS64Enabled || before.NAT64Prefix != "" {
+		t.Errorf("pre-config: dns64Enabled=%v nat64Prefix=%q, want false/empty", before.DNS64Enabled, before.NAT64Prefix)
+	}
+
+	// Enable DNS64 + set a prefix on the now-existing tenant.
+	tenants := repo.NewTenants(f.pool)
+	tn, err := tenants.GetBySlug(ctx, f.tenantSlug)
+	if err != nil {
+		t.Fatalf("get tenant: %v", err)
+	}
+	if _, err := tenants.SetNAT64Config(ctx, tn.ID, "64:ff9b::/96", true); err != nil {
+		t.Fatalf("set nat64 config: %v", err)
+	}
+
+	// Re-register → response surfaces the config.
+	second := postJSON(t, f.httpURL+"/api/v1/peers/register", body)
+	var after struct {
+		DNS64Enabled bool   `json:"dns64Enabled"`
+		NAT64Prefix  string `json:"nat64Prefix"`
+	}
+	if err := json.Unmarshal(second.body, &after); err != nil {
+		t.Fatalf("decode second: %v", err)
+	}
+	if !after.DNS64Enabled {
+		t.Errorf("dns64Enabled = false, want true")
+	}
+	if after.NAT64Prefix != "64:ff9b::/96" {
+		t.Errorf("nat64Prefix = %q, want 64:ff9b::/96", after.NAT64Prefix)
+	}
+}
+
 // TestRESTGetPeer_CrossTenantIsolation registers a peer in tenant A
 // then fetches the same id with X-Tenant-Slug: B and expects 404.
 // Returning the real peer would let an attacker probe peer existence
