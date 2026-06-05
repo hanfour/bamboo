@@ -179,4 +179,26 @@ final class MagicDNSPeerStoreTests: XCTestCase {
 
         XCTAssertNil(store.peer(forLabel: "unknown-peer"))
     }
+
+    // MARK: - NAT64Config sidecar
+
+    func testNAT64ConfigRoundTrip() {
+        // Unique subdir so the sidecar is isolated per run (mirrors the
+        // defaults-off test); makeStore()'s flat temp path would put the
+        // sidecar at a shared fixed sibling path.
+        let store = MagicDNSPeerStore(
+            path: NSTemporaryDirectory() + "nat64-rt-\(UUID().uuidString)/peers.json")
+        let cfg = MagicDNSPeerStore.NAT64Config(dns64Enabled: true, nat64Prefix: "64:ff9b::/96")
+        store.setNAT64Config(cfg)
+        XCTAssertEqual(store.nat64Config(), cfg)
+    }
+
+    func testNAT64ConfigDefaultsOffWhenMissing() {
+        // A guaranteed-fresh path with no sidecar → defaults to off.
+        let fresh = MagicDNSPeerStore(
+            path: NSTemporaryDirectory() + "nat64-missing-\(UUID().uuidString)/peers.json")
+        let got = fresh.nat64Config()
+        XCTAssertFalse(got.dns64Enabled)
+        XCTAssertEqual(got.nat64Prefix, "")
+    }
 }

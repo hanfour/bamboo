@@ -142,10 +142,16 @@ public struct BambooClient {
         /// didn't pin one themselves. Optional / nilable so a
         /// controller without stage 5.5a still decodes.
         public var preferredRegion: String?
+        /// Tenant NAT64 / DNS64 config (NAT64 Phase C4). dns64Enabled tells
+        /// the DNS proxy to synthesise AAAA for external IPv4-only names into
+        /// nat64Prefix. Optional / nilable so a pre-C4 controller (which
+        /// omits them) still decodes → DNS64 stays off.
+        public var dns64Enabled: Bool?
+        public var nat64Prefix: String?
 
         enum CodingKeys: String, CodingKey {
             case self_ = "self"
-            case peers, policyRevision, peerSessionToken, peerSessionExpiresAt, relayServers, preferredRegion
+            case peers, policyRevision, peerSessionToken, peerSessionExpiresAt, relayServers, preferredRegion, dns64Enabled, nat64Prefix
         }
     }
 

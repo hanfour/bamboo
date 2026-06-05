@@ -36,12 +36,24 @@ import Foundation
 /// admin auth prompt on install).
 public struct MagicDNSPeerStore {
 
-    /// Parent directory for the shared peer-map file. Created on
-    /// first write with mode 0700 (owner-only). On a multi-user Mac
-    /// only the first user to run bamboo can write here; secondary
-    /// users would block at the directory open. Single-user dev
-    /// machines (the common case) are unaffected.
+    #if os(macOS)
+    /// macOS: a /Users/Shared file. The DNSProxy *System Extension* runs in
+    /// a privilege context that can't share the App Group container with the
+    /// user-context app (issue #154), so both sides use this path.
     public static let sharedDir = "/Users/Shared/dev.hanfour.bamboo"
+    #else
+    /// iOS: the DNSProxy *App Extension* shares the app's already-entitled
+    /// App Group container — /Users/Shared doesn't exist in the iOS sandbox,
+    /// which is why iOS MagicDNS was dormant before this. Falls back to a
+    /// temp dir only if the container is somehow unavailable.
+    public static let sharedDir: String = {
+        if let url = FileManager.default.containerURL(
+            forSecurityApplicationGroupIdentifier: "group.dev.hanfour.bamboo") {
+            return url.appendingPathComponent("dev.hanfour.bamboo").path
+        }
+        return NSTemporaryDirectory() + "dev.hanfour.bamboo"
+    }()
+    #endif
 
     /// Shared file path. Mode 0600 (owner read+write). The root-
     /// running DNSProxy SystemExt bypasses POSIX, so the read still
@@ -154,5 +166,62 @@ public struct MagicDNSPeerStore {
     /// stale entries.
     public func clear() {
         _ = try? FileManager.default.removeItem(at: url)
+    }
+
+    /// NAT64Config is the tenant's DNS64 settings, pushed from the app to the
+    /// DNS proxy alongside the peer map (NAT64 Phase C4). Stored in a sibling
+    /// "nat64-config.v1.json" file in the same directory as the peer map.
+    public struct NAT64Config: Codable, Equatable {
+        public let dns64Enabled: Bool
+        public let nat64Prefix: String
+        public init(dns64Enabled: Bool, nat64Prefix: String) {
+            self.dns64Enabled = dns64Enabled
+            self.nat64Prefix = nat64Prefix
+        }
+    }
+
+    /// configURL is the NAT64 sidecar, a sibling of the peer-map file (so the
+    /// init(path:) test seam covers it without extra plumbing).
+    private var configURL: URL {
+        url.deletingLastPathComponent().appendingPathComponent("nat64-config.v1.json")
+    }
+
+    /// setNAT64Config persists the tenant DNS64 settings for the DNS proxy.
+    /// Atomic write (tmp + rename), mirroring setPeers.
+    public func setNAT64Config(_ cfg: NAT64Config) {
+        do {
+            try FileManager.default.createDirectory(
+                atPath: configURL.deletingLastPathComponent().path,
+                withIntermediateDirectories: true,
+                attributes: [.posixPermissions: 0o700])
+            let data = try JSONEncoder().encode(cfg)
+            let tmp = configURL.deletingLastPathComponent()
+                .appendingPathComponent(".nat64-config.\(UUID().uuidString).tmp")
+            try data.write(to: tmp, options: [.atomic])
+            try FileManager.default.setAttributes(
+                [.posixPermissions: 0o600], ofItemAtPath: tmp.path)
+            if Darwin.rename(tmp.path, configURL.path) != 0 {
+                let err = errno
+                _ = try? FileManager.default.removeItem(at: tmp)
+                NSLog("[MagicDNSPeerStore] nat64 rename(\(tmp.path) → \(configURL.path)) failed errno=\(err)")
+            }
+        } catch {
+            NSLog("[MagicDNSPeerStore] nat64 write failed at \(configURL.path): \(error)")
+        }
+    }
+
+    /// nat64Config reads the sidecar, defaulting to "off" when missing or
+    /// unreadable (a tenant without DNS64, or a pre-C4 app).
+    public func nat64Config() -> NAT64Config {
+        guard FileManager.default.fileExists(atPath: configURL.path) else {
+            return NAT64Config(dns64Enabled: false, nat64Prefix: "")
+        }
+        do {
+            let data = try Data(contentsOf: configURL)
+            return try JSONDecoder().decode(NAT64Config.self, from: data)
+        } catch {
+            NSLog("[MagicDNSPeerStore] nat64 read failed at \(configURL.path): \(error)")
+            return NAT64Config(dns64Enabled: false, nat64Prefix: "")
+        }
     }
 }

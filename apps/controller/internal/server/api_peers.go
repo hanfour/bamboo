@@ -125,6 +125,13 @@ type peerRegisterResponse struct {
 	// client then falls back to its own local hint, or pure
 	// RTT ranking. Field name mirrors proto's preferred_region.
 	PreferredRegion string `json:"preferredRegion,omitempty"`
+	// DNS64Enabled / NAT64Prefix surface the tenant's NAT64 config to the
+	// Apple client, which registers over REST (the gRPC RegisterResponse
+	// already carries these). The client decodes them to drive DNS64
+	// synthesis (NAT64 Phase C4). omitempty so a DNS64-off tenant / pre-C4
+	// client sees nothing new.
+	DNS64Enabled bool   `json:"dns64Enabled,omitempty"`
+	NAT64Prefix  string `json:"nat64Prefix,omitempty"`
 }
 
 func (h *HTTPServer) apiPeersRegister(w http.ResponseWriter, r *http.Request) {
@@ -262,6 +269,18 @@ func (h *HTTPServer) apiPeersRegister(w http.ResponseWriter, r *http.Request) {
 		// operator-supplied BAMBOO_REGION_CIDRS table. Empty
 		// when no table / no match; client treats as no-hint.
 		PreferredRegion: h.regionMap.resolveRegion(clientIPFromRequest(r.RemoteAddr, r.Header.Get("X-Forwarded-For"))),
+		DNS64Enabled:    resp.GetDns64Enabled(),
+		// Only propagate the prefix when DNS64 is enabled; the proto layer
+		// resolves an empty tenant prefix to the well-known default
+		// (64:ff9b::/96) regardless of DNS64Enabled, so unconditionally
+		// forwarding it would expose a non-empty prefix to clients whose
+		// tenant hasn't enabled DNS64 — defeating the omitempty contract.
+		NAT64Prefix: func() string {
+			if resp.GetDns64Enabled() {
+				return resp.GetNat64Prefix()
+			}
+			return ""
+		}(),
 	}
 	// Mint a peer session token for the caller. Failure here is
 	// non-fatal — log and degrade rather than fail registration, since
