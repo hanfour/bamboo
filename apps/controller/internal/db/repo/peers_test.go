@@ -742,3 +742,144 @@ func TestPeers_SetNAT64EgressHealth(t *testing.T) {
 		t.Errorf("reason = %v, want 'translator down'", got.NAT64EgressHealthReason)
 	}
 }
+
+func TestPeers_SetNAT64EgressStale(t *testing.T) {
+	pool := requireDB(t)
+	tenants := repo.NewTenants(pool)
+	peers := repo.NewPeers(pool)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	slug := fmt.Sprintf("c3pr3stale-%s", uuid.NewString()[:8])
+	tn, err := tenants.GetOrCreate(ctx, slug, "C3PR3Stale", "100.64.0.0/24")
+	if err != nil {
+		t.Fatalf("GetOrCreate tenant: %v", err)
+	}
+	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, tn.ID) })
+
+	pub := make([]byte, 32)
+	_, _ = rand.Read(pub)
+	p, err := peers.Insert(ctx, &repo.Peer{
+		TenantID:           tn.ID,
+		Hostname:           "egress",
+		WireGuardPublicKey: base64.StdEncoding.EncodeToString(pub),
+		IP:                 "100.64.0.5",
+		Status:             "online",
+		ApprovalStatus:     "approved",
+	})
+	if err != nil {
+		t.Fatalf("Insert peer: %v", err)
+	}
+
+	if err := peers.SetNAT64EgressStale(ctx, p.ID); err != nil {
+		t.Fatalf("SetNAT64EgressStale: %v", err)
+	}
+	got, err := peers.GetByID(ctx, p.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.NAT64EgressHealthStatus == nil || *got.NAT64EgressHealthStatus != "unhealthy" {
+		t.Errorf("status = %v, want unhealthy", got.NAT64EgressHealthStatus)
+	}
+	if got.NAT64EgressHealthReason == nil || *got.NAT64EgressHealthReason != "stale" {
+		t.Errorf("reason = %v, want 'stale'", got.NAT64EgressHealthReason)
+	}
+}
+
+func TestPeers_ListNAT64EgressActiveTenants(t *testing.T) {
+	pool := requireDB(t)
+	tenants := repo.NewTenants(pool)
+	peers := repo.NewPeers(pool)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Tenant A: dns64 ON + an approved egress → MUST appear.
+	ta, err := tenants.GetOrCreate(ctx, "c3pr3-a-"+uuid.NewString()[:8], "A", "100.64.0.0/24")
+	if err != nil {
+		t.Fatalf("GetOrCreate A: %v", err)
+	}
+	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, ta.ID) })
+	if _, err := tenants.SetNAT64Config(ctx, ta.ID, "64:ff9b::/96", true); err != nil {
+		t.Fatal(err)
+	}
+	pubA := make([]byte, 32)
+	_, _ = rand.Read(pubA)
+	pa, err := peers.Insert(ctx, &repo.Peer{
+		TenantID:           ta.ID,
+		Hostname:           "egA",
+		WireGuardPublicKey: base64.StdEncoding.EncodeToString(pubA),
+		IP:                 "100.64.0.5",
+		Status:             "online",
+		ApprovalStatus:     "approved",
+	})
+	if err != nil {
+		t.Fatalf("Insert A egress: %v", err)
+	}
+	if err := peers.SetNAT64EgressApproved(ctx, pa.ID, true); err != nil {
+		t.Fatal(err)
+	}
+
+	// Tenant B: dns64 ON but NO approved egress → MUST NOT appear.
+	tb, err := tenants.GetOrCreate(ctx, "c3pr3-b-"+uuid.NewString()[:8], "B", "100.64.0.0/24")
+	if err != nil {
+		t.Fatalf("GetOrCreate B: %v", err)
+	}
+	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, tb.ID) })
+	if _, err := tenants.SetNAT64Config(ctx, tb.ID, "64:ff9b::/96", true); err != nil {
+		t.Fatal(err)
+	}
+	pubB := make([]byte, 32)
+	_, _ = rand.Read(pubB)
+	if _, err := peers.Insert(ctx, &repo.Peer{
+		TenantID:           tb.ID,
+		Hostname:           "plain",
+		WireGuardPublicKey: base64.StdEncoding.EncodeToString(pubB),
+		IP:                 "100.64.0.6",
+		Status:             "online",
+		ApprovalStatus:     "approved",
+	}); err != nil {
+		t.Fatalf("Insert B plain peer: %v", err)
+	}
+
+	// Tenant C: approved egress but dns64 OFF → MUST NOT appear.
+	tc, err := tenants.GetOrCreate(ctx, "c3pr3-c-"+uuid.NewString()[:8], "C", "100.64.0.0/24")
+	if err != nil {
+		t.Fatalf("GetOrCreate C: %v", err)
+	}
+	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, tc.ID) })
+	pubC := make([]byte, 32)
+	_, _ = rand.Read(pubC)
+	pc, err := peers.Insert(ctx, &repo.Peer{
+		TenantID:           tc.ID,
+		Hostname:           "egC",
+		WireGuardPublicKey: base64.StdEncoding.EncodeToString(pubC),
+		IP:                 "100.64.0.7",
+		Status:             "online",
+		ApprovalStatus:     "approved",
+	})
+	if err != nil {
+		t.Fatalf("Insert C egress: %v", err)
+	}
+	if err := peers.SetNAT64EgressApproved(ctx, pc.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	// dns64 remains OFF for tenant C (no SetNAT64Config call).
+
+	got, err := peers.ListNAT64EgressActiveTenants(ctx)
+	if err != nil {
+		t.Fatalf("ListNAT64EgressActiveTenants: %v", err)
+	}
+	set := map[uuid.UUID]bool{}
+	for _, id := range got {
+		set[id] = true
+	}
+	if !set[ta.ID] {
+		t.Errorf("tenant A (dns64+egress) missing from %v", got)
+	}
+	if set[tb.ID] {
+		t.Errorf("tenant B (no egress) should be absent")
+	}
+	if set[tc.ID] {
+		t.Errorf("tenant C (dns64 off) should be absent")
+	}
+}
