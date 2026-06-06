@@ -189,7 +189,15 @@ fileprivate final class DNSFlowHandler: Hashable {
                 guard let aResp = aResp,
                       let synth = DNSMessage.synthesizeResponse(
                           aaaaQuery: msg, aResponse: aResp, prefix: prefix) else {
-                    self.writeToFlow(aaaaResp, endpoint) // no A records / fail → relay NODATA
+                    // Distinguish "all A special-use" (NAT64 §5.1.4 exclusion)
+                    // from "no A / upstream fail" so an operator can diagnose a
+                    // name that resolves but never gets a synthesised AAAA.
+                    if let aResp = aResp, let v4s = DNSMessage.aRecords(aResp), !v4s.isEmpty {
+                        os_log(.debug, log: DNSProxyProvider.log,
+                               "dns64 skip: all %{public}d A special-use for %{public}@",
+                               v4s.count, msg.questions.first?.name ?? "?")
+                    }
+                    self.writeToFlow(aaaaResp, endpoint) // no A / fail / all special-use → relay NODATA
                     return
                 }
                 self.writeToFlow(synth, endpoint)
