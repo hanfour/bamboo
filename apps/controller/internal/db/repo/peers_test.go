@@ -688,3 +688,57 @@ func TestPeers_NAT64EgressRoundtrip(t *testing.T) {
 		t.Errorf("after set: %v/%v, want true/true", got.NAT64EgressCapable, got.NAT64EgressApproved)
 	}
 }
+
+func TestPeers_SetNAT64EgressHealth(t *testing.T) {
+	pool := requireDB(t)
+	tenants := repo.NewTenants(pool)
+	peers := repo.NewPeers(pool)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	slug := fmt.Sprintf("c3pr2-%s", uuid.NewString()[:8])
+	tn, err := tenants.GetOrCreate(ctx, slug, "C3PR2", "100.64.0.0/24")
+	if err != nil {
+		t.Fatalf("GetOrCreate tenant: %v", err)
+	}
+	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, tn.ID) })
+
+	pub := make([]byte, 32)
+	_, _ = rand.Read(pub)
+	p, err := peers.Insert(ctx, &repo.Peer{
+		TenantID: tn.ID, Hostname: "egress",
+		WireGuardPublicKey: base64.StdEncoding.EncodeToString(pub),
+		IP:                 "100.64.0.5", Status: "online", ApprovalStatus: "approved",
+	})
+	if err != nil {
+		t.Fatalf("Insert peer: %v", err)
+	}
+	peerID := p.ID
+
+	// Reported healthy → status healthy, reason cleared.
+	if err := peers.SetNAT64EgressHealth(ctx, peerID, true); err != nil {
+		t.Fatalf("SetNAT64EgressHealth(true): %v", err)
+	}
+	got, err := peers.GetByID(ctx, peerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.NAT64EgressHealthStatus == nil || *got.NAT64EgressHealthStatus != "healthy" {
+		t.Errorf("status = %v, want healthy", got.NAT64EgressHealthStatus)
+	}
+	if got.NAT64EgressHealthReason == nil || *got.NAT64EgressHealthReason != "" {
+		t.Errorf("reason = %v, want empty", got.NAT64EgressHealthReason)
+	}
+
+	// Reported unhealthy → status unhealthy, reason "translator down".
+	if err := peers.SetNAT64EgressHealth(ctx, peerID, false); err != nil {
+		t.Fatalf("SetNAT64EgressHealth(false): %v", err)
+	}
+	got, _ = peers.GetByID(ctx, peerID)
+	if got.NAT64EgressHealthStatus == nil || *got.NAT64EgressHealthStatus != "unhealthy" {
+		t.Errorf("status = %v, want unhealthy", got.NAT64EgressHealthStatus)
+	}
+	if got.NAT64EgressHealthReason == nil || *got.NAT64EgressHealthReason != "translator down" {
+		t.Errorf("reason = %v, want 'translator down'", got.NAT64EgressHealthReason)
+	}
+}
