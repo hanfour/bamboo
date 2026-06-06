@@ -24,6 +24,7 @@ type supervisor struct {
 	mu      sync.Mutex
 	cancel  context.CancelFunc
 	stopped chan struct{}
+	childUp bool // true while a started child is running (guarded by mu)
 }
 
 func newSupervisor(startFn func(context.Context) (runnable, error)) *supervisor {
@@ -53,9 +54,13 @@ func (s *supervisor) loop(ctx context.Context, stopped chan struct{}) {
 				return // Stop() cancelled us mid-start; not a real failure
 			}
 			slog.Warn("nat64 egress: tayga start failed", "err", err)
-		} else if waitErr := r.Wait(); ctx.Err() != nil {
-			return // Stop() cancelled us; the exit was expected
 		} else {
+			s.setChildUp(true)
+			waitErr := r.Wait()
+			s.setChildUp(false)
+			if ctx.Err() != nil {
+				return // Stop() cancelled us; the exit was expected
+			}
 			slog.Warn("nat64 egress: tayga exited; restarting", "err", waitErr)
 		}
 		select {
@@ -66,11 +71,28 @@ func (s *supervisor) loop(ctx context.Context, stopped chan struct{}) {
 	}
 }
 
+func (s *supervisor) setChildUp(up bool) {
+	s.mu.Lock()
+	s.childUp = up
+	s.mu.Unlock()
+}
+
+// Alive reports whether a supervised child is currently running (not
+// crash-looping in backoff and not stopped). linuxManager.Healthy uses
+// this to distinguish a translating egress from one whose tayga keeps
+// dying.
+func (s *supervisor) Alive() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.childUp
+}
+
 // Stop cancels the child and waits for the loop to exit. Idempotent.
 func (s *supervisor) Stop() {
 	s.mu.Lock()
 	cancel, stopped := s.cancel, s.stopped
 	s.cancel = nil
+	s.childUp = false
 	s.mu.Unlock()
 	if cancel == nil {
 		return
