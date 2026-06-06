@@ -301,6 +301,7 @@ ping6 -c 3 <peerB-ip6>         # v6 ULA tunnel
 | dns64 toggle 不生效 | app 是否重註冊(PolicyChanged)?等 ≤30s;`apiDNSPatch` 會 bump revision |
 | v4 pool 衝突 | egress 機已用 192.168.255.0/24?用 `--nat64-v4-pool` 換一段 |
 | 剛核准的 egress 暫時不被選 | 設計使然:`isEgressEligible` 要求 `last_seen_at` 新鮮 → 從未 heartbeat 的 egress 首次 heartbeat 前(≤30s)不被選 |
+| IPv4-only 名稱解析但回 NODATA(沒合成 AAAA) | 該名稱的上游 A 是否為**特殊用途/私有位址**(10.x / 172.16-31.x / 192.168.x / 100.64-127.x / 127.x / 169.254.x / 0.x / 224-255.x)?**設計上刻意不對這些合成**(RFC 6147 §5.1.4 + egress-LAN SSRF 防護),所以私有 split-horizon 目的地預設不經 NAT64 可達。DNS proxy 會在 `.debug` log `dns64 skip: all N A special-use for <name>`。`ipv4only.arpa`(192.0.0.170/.171)是刻意保留的例外仍會合成。 |
 
 ---
 
