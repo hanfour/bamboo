@@ -132,7 +132,7 @@ fileprivate final class DNSFlowHandler: Hashable {
                 }
             }
         case .forwardUpstream:
-            forwardUpstream(query: query, replyEndpoint: endpoint)
+            maybeDNS64(query: query, endpoint: endpoint)
         case .malformed:
             os_log(.debug, log: DNSProxyProvider.log,
                    "dropping malformed query (%{public}d bytes)", query.count)
@@ -148,11 +148,86 @@ fileprivate final class DNSFlowHandler: Hashable {
         handleOne(query: query, endpoint: host)
     }
 
+    /// writeToFlow sends one datagram back to the asking app.
+    private func writeToFlow(_ data: Data, _ endpoint: NWHostEndpoint) {
+        flow.writeDatagrams([data], sentBy: [endpoint]) { error in
+            if let error = error {
+                os_log(.error, log: DNSProxyProvider.log,
+                       "flow write failed: %{public}@", String(describing: error))
+            }
+        }
+    }
+
+    /// maybeDNS64 decides whether a to-be-forwarded query is a DNS64
+    /// candidate. If DNS64 is off, or the query isn't a synthesizable
+    /// external AAAA, it forwards verbatim. Otherwise it runs the RFC 6147
+    /// 2-stage path: AAAA upstream → (NODATA?) → A upstream → synthesise.
+    private func maybeDNS64(query: Data, endpoint: NWHostEndpoint) {
+        let cfg = store.nat64Config()
+        guard cfg.dns64Enabled,
+              let msg = DNSMessage.parse(query),
+              NAT64Synth.shouldSynthesize(query: msg, dns64Enabled: true,
+                                          zone: MagicDNSResolver.zone),
+              let prefix = NAT64Synth.prefixBytes(cfg.nat64Prefix) else {
+            forwardUpstream(query: query, replyEndpoint: endpoint)
+            return
+        }
+        // Stage 1: forward the AAAA query.
+        upstreamQuery(query, to: endpoint) { [self] aaaaResp in
+            guard let aaaaResp = aaaaResp else { return } // timeout/fail → client retries
+            // A real AAAA (or an error rcode) wins — relay verbatim (RFC 6147).
+            if !DNSMessage.isDNS64Candidate(aaaaResp) {
+                self.writeToFlow(aaaaResp, endpoint)
+                return
+            }
+            // Stage 2: query the same name's A record, then synthesise.
+            guard let aQuery = DNSMessage.aQueryFromAAAA(query) else {
+                self.writeToFlow(aaaaResp, endpoint) // can't build A query → relay NODATA
+                return
+            }
+            self.upstreamQuery(aQuery, to: endpoint) { [self] aResp in
+                guard let aResp = aResp,
+                      let synth = DNSMessage.synthesizeResponse(
+                          aaaaQuery: msg, aResponse: aResp, prefix: prefix) else {
+                    self.writeToFlow(aaaaResp, endpoint) // no A records / fail → relay NODATA
+                    return
+                }
+                self.writeToFlow(synth, endpoint)
+            }
+        }
+    }
+
+    /// forwardUpstream relays a query upstream and writes the reply back to
+    /// the flow verbatim (the non-DNS64 path).
     private func forwardUpstream(query: Data, replyEndpoint: NWHostEndpoint) {
-        guard let port = Network.NWEndpoint.Port(replyEndpoint.port) else { return }
+        upstreamQuery(query, to: replyEndpoint) { [self] data in
+            if let data = data { self.writeToFlow(data, replyEndpoint) }
+        }
+    }
+
+    /// upstreamQuery sends one DNS query to `replyEndpoint` over UDP and
+    /// hands the reply bytes to `completion` (nil on timeout / send / receive
+    /// / connection failure). The completion fires EXACTLY once — a lock
+    /// guards the timeout-vs-receive race.
+    private func upstreamQuery(_ query: Data, to replyEndpoint: NWHostEndpoint,
+                               completion: @escaping (Data?) -> Void) {
+        guard let port = Network.NWEndpoint.Port(replyEndpoint.port) else {
+            completion(nil)
+            return
+        }
         let host = Network.NWEndpoint.Host(replyEndpoint.hostname)
         let conn = NWConnection(host: host, port: port, using: .udp)
-        let flow = self.flow
+
+        let onceLock = NSLock()
+        var done = false
+        func finish(_ data: Data?) {
+            onceLock.lock()
+            let already = done
+            done = true
+            onceLock.unlock()
+            if already { return }
+            completion(data)
+        }
 
         let timer = DispatchSource.makeTimerSource()
         timer.schedule(deadline: .now() + DNSProxyProvider.upstreamTimeout)
@@ -160,6 +235,7 @@ fileprivate final class DNSFlowHandler: Hashable {
             conn.cancel()
             os_log(.debug, log: DNSProxyProvider.log,
                    "upstream timeout for %{public}@", replyEndpoint.hostname)
+            finish(nil)
         }
 
         conn.stateUpdateHandler = { state in
@@ -169,10 +245,10 @@ fileprivate final class DNSFlowHandler: Hashable {
                           completion: NWConnection.SendCompletion.contentProcessed { error in
                     if let error = error {
                         os_log(.error, log: DNSProxyProvider.log,
-                               "upstream send failed: %{public}@",
-                               String(describing: error))
+                               "upstream send failed: %{public}@", String(describing: error))
                         timer.cancel()
                         conn.cancel()
+                        finish(nil)
                         return
                     }
                     conn.receiveMessage { data, _, _, recvErr in
@@ -180,27 +256,21 @@ fileprivate final class DNSFlowHandler: Hashable {
                         defer { conn.cancel() }
                         if let recvErr = recvErr {
                             os_log(.error, log: DNSProxyProvider.log,
-                                   "upstream receive failed: %{public}@",
-                                   String(describing: recvErr))
+                                   "upstream receive failed: %{public}@", String(describing: recvErr))
+                            finish(nil)
                             return
                         }
-                        guard let data = data else { return }
-                        flow.writeDatagrams([data], sentBy: [replyEndpoint]) { writeErr in
-                            if let writeErr = writeErr {
-                                os_log(.error, log: DNSProxyProvider.log,
-                                       "flow write (forwarded) failed: %{public}@",
-                                       String(describing: writeErr))
-                            }
-                        }
+                        finish(data)
                     }
                 })
             case .failed(let error):
                 timer.cancel()
                 os_log(.error, log: DNSProxyProvider.log,
-                       "upstream NWConnection failed: %{public}@",
-                       String(describing: error))
+                       "upstream NWConnection failed: %{public}@", String(describing: error))
+                finish(nil)
             case .cancelled:
                 timer.cancel()
+                finish(nil)
             default:
                 break
             }
