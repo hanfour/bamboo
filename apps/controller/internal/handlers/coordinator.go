@@ -271,8 +271,8 @@ func (h *CoordinatorHandler) ReconcileNAT64Egress(ctx context.Context, tenantID,
 			slog.Warn("nat64 egress reaper: mark stale", "peer_id", p.ID, "err", err)
 			continue
 		}
-		stale := "unhealthy"
-		p.NAT64EgressHealthStatus = &stale
+		unhealthy := "unhealthy"
+		p.NAT64EgressHealthStatus = &unhealthy
 	}
 	selected := selectEgress(peers, now)
 	if selected == prevSelected {
