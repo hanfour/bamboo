@@ -460,6 +460,11 @@ type peerHeartbeatRequest struct {
 	// implement bandwidth reporting omit the fields.
 	BytesSent     uint64 `json:"bytesSent,omitempty"`
 	BytesReceived uint64 `json:"bytesReceived,omitempty"`
+	// NAT64EgressHealthy is the active egress's translator liveness, a
+	// *bool side-channel (NAT64 Phase C3). nil → not an egress / pre-C3
+	// CLI → the controller leaves the health columns unchanged (judged by
+	// staleness only). Present true/false → persisted as healthy/unhealthy.
+	NAT64EgressHealthy *bool `json:"nat64EgressHealthy,omitempty"`
 }
 
 type peerHeartbeatResponse struct {
@@ -545,6 +550,17 @@ func (h *HTTPServer) apiPeersHeartbeat(w http.ResponseWriter, r *http.Request) {
 	if body.BytesSent > 0 || body.BytesReceived > 0 {
 		if peerID, perr := uuid.Parse(body.PeerID); perr == nil {
 			h.logBandwidthSample(r.Context(), peerID, body.ConnectionPath, body.BytesSent, body.BytesReceived)
+		}
+	}
+	// NAT64 egress health side-channel (NAT64 Phase C3). Like the
+	// ConnectionPath block above, this is admin-visibility data persisted
+	// outside the coord.Heartbeat mesh-state contract. nil → skip (a
+	// non-egress / pre-C3 CLI leaves the columns untouched).
+	if body.NAT64EgressHealthy != nil {
+		if peerID, perr := uuid.Parse(body.PeerID); perr == nil {
+			if err := h.peers.SetNAT64EgressHealth(r.Context(), peerID, *body.NAT64EgressHealthy); err != nil {
+				slog.Warn("set nat64 egress health", "peer_id", body.PeerID, "err", err)
+			}
 		}
 	}
 	writeJSON(w, http.StatusOK, peerHeartbeatResponse{
