@@ -44,6 +44,10 @@ type HeartbeatArgs struct {
 	// data; the controller skips its bandwidth-sample write.
 	BytesSent     uint64
 	BytesReceived uint64
+	// NAT64EgressHealthy is this peer's NAT64 translator liveness when it
+	// is the active egress; nil when it is not an egress (NAT64 Phase C3).
+	// The controller reads it as a *bool side-channel.
+	NAT64EgressHealthy *bool
 }
 
 // HeartbeatResult is the slim view of the response RunHeartbeat
@@ -71,6 +75,12 @@ type Heartbeater interface {
 // transient permission failure). The reporter MUST be cheap to
 // call; it runs on the heartbeat hot path.
 type BytesReporter func() (bytesSent, bytesReceived uint64)
+
+// NAT64HealthReporter returns this peer's NAT64 egress translator health
+// for the heartbeat self-report: nil when the peer is not the active
+// egress, else a pointer to the translator liveness (NAT64 Phase C3).
+// Nil-safe: callers without an egress reconciler omit it.
+type NAT64HealthReporter func() *bool
 
 // WatchStream is the minimal surface we exercise from
 // bamboov1.CoordinatorService_WatchPeersClient. The generated gRPC
@@ -144,7 +154,7 @@ type RelaysChangedHandler func(ctx context.Context, servers []*bamboov1.RelaySer
 // callbacks are nil-safe: callers running in degraded environments
 // (no STUN, no wgctrl) just omit them. Errors are logged and tolerated;
 // the loop continues so a transient outage doesn't kill the daemon.
-func RunHeartbeat(ctx context.Context, hb Heartbeater, peerID string, discover EndpointDiscoverer, reportBytes BytesReporter) {
+func RunHeartbeat(ctx context.Context, hb Heartbeater, peerID string, discover EndpointDiscoverer, reportBytes BytesReporter, reportNAT64Health NAT64HealthReporter) {
 	t := time.NewTicker(HeartbeatInterval)
 	defer t.Stop()
 	for {
@@ -158,6 +168,9 @@ func RunHeartbeat(ctx context.Context, hb Heartbeater, peerID string, discover E
 			}
 			if reportBytes != nil {
 				args.BytesSent, args.BytesReceived = reportBytes()
+			}
+			if reportNAT64Health != nil {
+				args.NAT64EgressHealthy = reportNAT64Health()
 			}
 			if _, err := hb.Heartbeat(ctx, args); err != nil {
 				slog.Warn("heartbeat failed", "err", err)

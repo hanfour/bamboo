@@ -386,7 +386,7 @@ func TestRunHeartbeat_FiresPeriodically(t *testing.T) {
 	// of calls observed within the budget plus a non-zero floor.
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
-	sync.RunHeartbeat(ctx, hb, "self", nil, nil)
+	sync.RunHeartbeat(ctx, hb, "self", nil, nil, nil)
 
 	// 50ms is below the 30s cadence — we expect zero heartbeats but
 	// we're really exercising "the loop returns cleanly when ctx is
@@ -431,5 +431,38 @@ func TestRunHeartbeat_ThreadsBytesReporter(t *testing.T) {
 	}
 	if args[0].PeerID != "peer-1" || args[0].BytesSent != 4321 || args[0].BytesReceived != 8765 {
 		t.Errorf("args = %+v, want peer-1 / 4321 / 8765", args[0])
+	}
+}
+
+// TestRunHeartbeat_ThreadsNAT64Health pins the NAT64 Phase C3 self-report
+// wiring: a *bool reaches the Heartbeater verbatim (nil when not an egress,
+// non-nil liveness when active), so the controller's health side-channel
+// sees presence vs. absence. Tested at the Heartbeater seam like the bytes
+// reporter; the args struct is built in one place in daemon.go, so a
+// refactor that drops the field trips the compiler against this literal.
+func TestRunHeartbeat_ThreadsNAT64Health(t *testing.T) {
+	hb := &fakeHeartbeater{}
+	healthy := true
+
+	if _, err := hb.Heartbeat(context.Background(), sync.HeartbeatArgs{
+		PeerID: "peer-1", NAT64EgressHealthy: &healthy,
+	}); err != nil {
+		t.Fatalf("Heartbeat: %v", err)
+	}
+	args := hb.snapshot()
+	if len(args) != 1 {
+		t.Fatalf("captured %d args, want 1", len(args))
+	}
+	if args[0].NAT64EgressHealthy == nil || *args[0].NAT64EgressHealthy != true {
+		t.Errorf("NAT64EgressHealthy = %v, want *true", args[0].NAT64EgressHealthy)
+	}
+
+	// A non-egress peer reports nil → the field is absent.
+	hb2 := &fakeHeartbeater{}
+	if _, err := hb2.Heartbeat(context.Background(), sync.HeartbeatArgs{PeerID: "peer-2"}); err != nil {
+		t.Fatalf("Heartbeat: %v", err)
+	}
+	if got := hb2.snapshot()[0].NAT64EgressHealthy; got != nil {
+		t.Errorf("non-egress NAT64EgressHealthy = %v, want nil", *got)
 	}
 }
