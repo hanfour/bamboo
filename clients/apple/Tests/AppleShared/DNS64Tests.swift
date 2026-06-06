@@ -251,4 +251,39 @@ final class DNS64Tests: XCTestCase {
         XCTAssertFalse(NAT64Synth.isSpecialUseV4([10, 0, 0]))       // 3 bytes → false (guard)
         XCTAssertFalse(NAT64Synth.isSpecialUseV4([10, 0, 0, 0, 0])) // 5 bytes → false
     }
+
+    // MARK: synthesizeResponse special-use filtering
+
+    func testSynthesizeResponse_dropsPrivateKeepsPublic() {
+        let aaaaQ = DNSMessage.parse(makeQuery("mixed.example", type: 28))!
+        // one public + one RFC1918 private A → only the public is synthesised.
+        let aResp = makeAResponse(name: "mixed.example", ips: [[93, 184, 216, 34], [192, 168, 1, 1]])
+        let prefix = NAT64Synth.prefixBytes("64:ff9b::/96")!
+        let out = DNSMessage.synthesizeResponse(aaaaQuery: aaaaQ, aResponse: aResp, prefix: prefix)!
+
+        let rrs = DNSMessage.parseAnswers(out)!
+        XCTAssertEqual(rrs.count, 1, "only the public A should be synthesised")
+        XCTAssertEqual(rrs[0].rdata,
+                       [0x00, 0x64, 0xff, 0x9b, 0, 0, 0, 0, 0, 0, 0, 0, 0x5d, 0xb8, 0xd8, 0x22])
+    }
+
+    func testSynthesizeResponse_allPrivateReturnsNil() {
+        let aaaaQ = DNSMessage.parse(makeQuery("priv.example", type: 28))!
+        let aResp = makeAResponse(name: "priv.example", ips: [[10, 0, 0, 1], [192, 168, 0, 1]])
+        let prefix = NAT64Synth.prefixBytes("64:ff9b::/96")!
+        // all special-use → nil → caller relays the original NODATA AAAA.
+        XCTAssertNil(DNSMessage.synthesizeResponse(aaaaQuery: aaaaQ, aResponse: aResp, prefix: prefix))
+    }
+
+    func testSynthesizeResponse_ipv4onlyArpaStillSynthesises() {
+        let aaaaQ = DNSMessage.parse(makeQuery("ipv4only.arpa", type: 28))!
+        let aResp = makeAResponse(name: "ipv4only.arpa", ips: [[192, 0, 0, 170]])
+        let prefix = NAT64Synth.prefixBytes("64:ff9b::/96")!
+        let out = DNSMessage.synthesizeResponse(aaaaQuery: aaaaQ, aResponse: aResp, prefix: prefix)!
+
+        let rrs = DNSMessage.parseAnswers(out)!
+        XCTAssertEqual(rrs.count, 1)
+        XCTAssertEqual(rrs[0].rdata,
+                       [0x00, 0x64, 0xff, 0x9b, 0, 0, 0, 0, 0, 0, 0, 0, 0xc0, 0x00, 0x00, 0xaa])
+    }
 }

@@ -471,8 +471,14 @@ extension DNSMessage {
     static func synthesizeResponse(aaaaQuery: DNSMessage,
                                    aResponse: Data,
                                    prefix: [UInt8]) -> Data? {
-        guard let v4s = aRecords(aResponse), !v4s.isEmpty else { return nil }
-        let v6s = v4s.map { NAT64Synth.synthesize(prefix: prefix, v4: $0) }
+        guard let v4s = aRecords(aResponse) else { return nil }
+        // Drop special-use / non-globally-routable v4s (RFC 6147 §5.1.4) so
+        // we never synthesise a route the egress would translate onto its own
+        // LAN. A mixed response keeps only the synthesisable (global) answers;
+        // an all-special-use response yields nil → caller relays NODATA.
+        let synthesizable = v4s.filter { !NAT64Synth.isSpecialUseV4($0) }
+        guard !synthesizable.isEmpty else { return nil }
+        let v6s = synthesizable.map { NAT64Synth.synthesize(prefix: prefix, v4: $0) }
         return aaaaRecords(for: aaaaQuery, ipv6s: v6s)
     }
 
