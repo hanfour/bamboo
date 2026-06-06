@@ -8,6 +8,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/netip"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/hanfour/bamboo/apps/controller/internal/db"
@@ -470,7 +471,7 @@ func (h *CoordinatorHandler) Register(ctx context.Context, req *bamboov1.Registe
 	// invisible to other peers and absent from the mesh until
 	// re-enabled.
 	selfApproved := self.ApprovalStatus == "approved"
-	egressRoute := computeNAT64EgressRoute(tenant, allPeers)
+	egressRoute := computeNAT64EgressRoute(tenant, allPeers, time.Now())
 	for _, p := range allPeers {
 		if p.ID == self.ID {
 			continue
@@ -727,24 +728,42 @@ type nat64EgressRoute struct {
 	egressID uuid.UUID
 }
 
+// nat64EgressStaleAfter is how long since a peer's last heartbeat before
+// its egress is treated as unhealthy regardless of its last self-report
+// — it catches a hard host crash that sends no final "down" heartbeat.
+// 3× the client HeartbeatInterval (30s); duplicated here because the CLI
+// interval lives in a separate module the controller cannot import.
+const nat64EgressStaleAfter = 90 * time.Second
+
+// isEgressEligible reports whether p may be the active NAT64 egress at
+// `now`: approved + mesh-live + not confirmed-unhealthy + heartbeat
+// fresh. health_status NULL/'unknown'/'healthy' are all eligible (only a
+// confirmed 'unhealthy' is skipped); freshness is derived live from
+// last_seen_at so the register path never routes to a translator that
+// died inside PR 3's reaper gap (NAT64 Phase C3).
+func isEgressEligible(p *repo.Peer, now time.Time) bool {
+	if !p.NAT64EgressApproved || p.ApprovalStatus != "approved" || p.Status == "disabled" {
+		return false
+	}
+	if p.NAT64EgressHealthStatus != nil && *p.NAT64EgressHealthStatus == "unhealthy" {
+		return false
+	}
+	if p.LastSeenAt == nil || now.Sub(*p.LastSeenAt) > nat64EgressStaleAfter {
+		return false
+	}
+	return true
+}
+
 // computeNAT64EgressRoute picks the tenant's single active NAT64 egress:
-// the approved egress peer with the lowest ID (big-endian UUID byte
-// order). C3 will replace the deterministic pick with health-aware
-// selection. Returns a zero egressID when no peer is approved.
-func computeNAT64EgressRoute(tenant *repo.Tenant, peers []*repo.Peer) nat64EgressRoute {
+// the lowest-UUID eligible approved egress (health-aware, NAT64 Phase C3).
+// Returns a zero egressID when no egress is eligible (no /96 route).
+func computeNAT64EgressRoute(tenant *repo.Tenant, peers []*repo.Peer, now time.Time) nat64EgressRoute {
 	rc := nat64EgressRoute{
 		enabled: tenant.DNS64Enabled,
 		prefix:  nat64.ResolvePrefix(tenant.NAT64Prefix),
 	}
 	for _, p := range peers {
-		if !p.NAT64EgressApproved {
-			continue
-		}
-		// Only a live, mesh-visible peer can translate. The register
-		// loop skips pending/disabled peers, so selecting one here would
-		// emit the /96 route to nobody and shadow a healthy higher-ID
-		// egress. (C3 makes egress selection health-aware.)
-		if p.ApprovalStatus != "approved" || p.Status == "disabled" {
+		if !isEgressEligible(p, now) {
 			continue
 		}
 		if rc.egressID == uuid.Nil || bytes.Compare(p.ID[:], rc.egressID[:]) < 0 {
