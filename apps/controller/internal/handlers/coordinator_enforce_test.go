@@ -239,3 +239,50 @@ func TestComputeNAT64EgressRoute_HealthAware(t *testing.T) {
 }
 
 func strptr(s string) *string { return &s }
+
+func TestSelectEgress(t *testing.T) {
+	now := time.Now()
+	fresh := now.Add(-10 * time.Second)
+	mk := func(id uuid.UUID, health string) *repo.Peer {
+		h := health
+		return &repo.Peer{ID: id, NAT64EgressApproved: true, ApprovalStatus: "approved", Status: "online", NAT64EgressHealthStatus: &h, LastSeenAt: &fresh}
+	}
+	lo := uuid.MustParse("00000000-0000-0000-0000-000000000001")
+	hi := uuid.MustParse("00000000-0000-0000-0000-0000000000ff")
+
+	if got := selectEgress([]*repo.Peer{mk(hi, "healthy"), mk(lo, "healthy")}, now); got != lo {
+		t.Errorf("both healthy: %v, want lo", got)
+	}
+	if got := selectEgress([]*repo.Peer{mk(lo, "unhealthy"), mk(hi, "healthy")}, now); got != hi {
+		t.Errorf("lo unhealthy: %v, want hi", got)
+	}
+	if got := selectEgress([]*repo.Peer{mk(lo, "unhealthy"), mk(hi, "unhealthy")}, now); got != uuid.Nil {
+		t.Errorf("all unhealthy: %v, want Nil", got)
+	}
+}
+
+func TestShouldMarkStale(t *testing.T) {
+	now := time.Now()
+	fresh := now.Add(-10 * time.Second)
+	stale := now.Add(-2 * nat64EgressStaleAfter)
+	healthy, unhealthy := strptr("healthy"), strptr("unhealthy")
+
+	cases := []struct {
+		name string
+		p    *repo.Peer
+		want bool
+	}{
+		{"approved+stale+healthy → mark", &repo.Peer{NAT64EgressApproved: true, ApprovalStatus: "approved", Status: "online", NAT64EgressHealthStatus: healthy, LastSeenAt: &stale}, true},
+		{"approved+stale+NULL → mark", &repo.Peer{NAT64EgressApproved: true, ApprovalStatus: "approved", Status: "online", NAT64EgressHealthStatus: nil, LastSeenAt: &stale}, true},
+		{"approved+fresh → no", &repo.Peer{NAT64EgressApproved: true, ApprovalStatus: "approved", Status: "online", NAT64EgressHealthStatus: healthy, LastSeenAt: &fresh}, false},
+		{"already unhealthy → no (don't re-write)", &repo.Peer{NAT64EgressApproved: true, ApprovalStatus: "approved", Status: "online", NAT64EgressHealthStatus: unhealthy, LastSeenAt: &stale}, false},
+		{"never-seen → no (stays unknown)", &repo.Peer{NAT64EgressApproved: true, ApprovalStatus: "approved", Status: "online", NAT64EgressHealthStatus: nil, LastSeenAt: nil}, false},
+		{"not approved → no", &repo.Peer{NAT64EgressApproved: false, ApprovalStatus: "approved", Status: "online", LastSeenAt: &stale}, false},
+		{"disabled → no", &repo.Peer{NAT64EgressApproved: true, ApprovalStatus: "approved", Status: "disabled", LastSeenAt: &stale}, false},
+	}
+	for _, c := range cases {
+		if got := shouldMarkStale(c.p, now); got != c.want {
+			t.Errorf("%s: shouldMarkStale = %v, want %v", c.name, got, c.want)
+		}
+	}
+}

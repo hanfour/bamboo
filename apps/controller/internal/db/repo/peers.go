@@ -688,6 +688,22 @@ func (r *Peers) SetNAT64EgressApproved(ctx context.Context, id uuid.UUID, approv
 	return err
 }
 
+// SetNAT64EgressStale marks a peer's egress translator unhealthy with
+// reason "stale" — the NAT64 Phase C3 reaper's staleness leg (the peer
+// stopped heartbeating, so its translator is presumed dead even though it
+// never self-reported "down"). Distinct reason from SetNAT64EgressHealth's
+// "translator down" so admins can tell a crash from a silent host.
+func (r *Peers) SetNAT64EgressStale(ctx context.Context, id uuid.UUID) error {
+	_, err := r.pool.Exec(ctx, `
+		UPDATE peers
+		   SET nat64_egress_health_status = 'unhealthy',
+		       nat64_egress_health_reason = 'stale',
+		       updated_at                 = now()
+		 WHERE id = $1
+	`, id)
+	return err
+}
+
 // SetNAT64EgressHealth persists the egress translator's self-reported
 // health (NAT64 Phase C3). reported=true → status "healthy" / reason
 // cleared; false → "unhealthy" / reason "translator down". A side-channel
@@ -707,6 +723,34 @@ func (r *Peers) SetNAT64EgressHealth(ctx context.Context, id uuid.UUID, reported
 		 WHERE id = $1
 	`, id, status, reason)
 	return err
+}
+
+// ListNAT64EgressActiveTenants returns the distinct tenant IDs that have
+// at least one approved NAT64 egress AND DNS64 enabled — exactly the
+// tenants the C3 reaper must sweep. Tenants with DNS64 off emit no /96
+// route regardless of egress health, so a selection change there is a
+// no-op; skipping them keeps the sweep cheap.
+func (r *Peers) ListNAT64EgressActiveTenants(ctx context.Context) ([]uuid.UUID, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT DISTINCT p.tenant_id
+		  FROM peers p
+		  JOIN tenants t ON t.id = p.tenant_id AND t.deleted_at IS NULL
+		 WHERE p.nat64_egress_approved = true
+		   AND t.dns64_enabled = true
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
 }
 
 // SetUsingExitNode records that this peer is routing default

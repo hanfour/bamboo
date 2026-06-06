@@ -247,6 +247,43 @@ func (h *CoordinatorHandler) BumpPolicyRevision(ctx context.Context, tenantID uu
 	return rev, nil
 }
 
+// ReconcileNAT64Egress is one sweep of one tenant for the C3 reaper: it
+// marks any newly-stale approved egress unhealthy/'stale', recomputes the
+// selected (lowest-UUID eligible) egress, and — if that selection differs
+// from prevSelected — bumps the tenant policy revision so affected peers
+// re-register and pick up the new <prefix>::/96 route. Returns the freshly
+// selected egress, whether it bumped, and any error. On a bump error the
+// caller should NOT advance its prevSelected (so the next sweep retries).
+func (h *CoordinatorHandler) ReconcileNAT64Egress(ctx context.Context, tenantID, prevSelected uuid.UUID) (uuid.UUID, bool, error) {
+	peers, err := h.peers.ListByTenant(ctx, tenantID)
+	if err != nil {
+		return uuid.Nil, false, err
+	}
+	now := time.Now()
+	// Staleness leg: persist stale → unhealthy/'stale', and mutate the
+	// in-memory peer so the recompute below sees it as ineligible without
+	// a second DB read.
+	for _, p := range peers {
+		if !shouldMarkStale(p, now) {
+			continue
+		}
+		if err := h.peers.SetNAT64EgressStale(ctx, p.ID); err != nil {
+			slog.Warn("nat64 egress reaper: mark stale", "peer_id", p.ID, "err", err)
+			continue
+		}
+		unhealthy := "unhealthy"
+		p.NAT64EgressHealthStatus = &unhealthy
+	}
+	selected := selectEgress(peers, now)
+	if selected == prevSelected {
+		return selected, false, nil
+	}
+	if _, err := h.BumpPolicyRevision(ctx, tenantID); err != nil {
+		return selected, false, err
+	}
+	return selected, true, nil
+}
+
 // SetRequireAuth flips the handler into prod-mode credential checking.
 // Coordinator-specific because the REST adapter delegates here for
 // peer onboarding; HTTPServer.SetRequireAuth applies the same gate to
@@ -754,23 +791,52 @@ func isEgressEligible(p *repo.Peer, now time.Time) bool {
 	return true
 }
 
-// computeNAT64EgressRoute picks the tenant's single active NAT64 egress:
-// the lowest-UUID eligible approved egress (health-aware, NAT64 Phase C3).
-// Returns a zero egressID when no egress is eligible (no /96 route).
-func computeNAT64EgressRoute(tenant *repo.Tenant, peers []*repo.Peer, now time.Time) nat64EgressRoute {
-	rc := nat64EgressRoute{
-		enabled: tenant.DNS64Enabled,
-		prefix:  nat64.ResolvePrefix(tenant.NAT64Prefix),
+// shouldMarkStale reports whether the reaper should write an approved
+// egress's health to unhealthy/'stale' this sweep: it is a live-approved
+// egress that stopped heartbeating past nat64EgressStaleAfter and is not
+// already 'unhealthy' (don't clobber a self-reported 'translator down' or
+// re-write 'stale'). A never-heartbeated egress (LastSeenAt nil) stays
+// 'unknown' — it is ineligible anyway, and 'unknown' reads better than
+// 'stale' for an egress that was never alive (NAT64 Phase C3).
+func shouldMarkStale(p *repo.Peer, now time.Time) bool {
+	if !p.NAT64EgressApproved || p.ApprovalStatus != "approved" || p.Status == "disabled" {
+		return false
 	}
+	if p.NAT64EgressHealthStatus != nil && *p.NAT64EgressHealthStatus == "unhealthy" {
+		return false
+	}
+	if p.LastSeenAt == nil {
+		return false
+	}
+	return now.Sub(*p.LastSeenAt) > nat64EgressStaleAfter
+}
+
+// selectEgress returns the lowest-UUID eligible egress among peers, or
+// uuid.Nil when none is eligible (NAT64 Phase C3). Shared by the register
+// path (computeNAT64EgressRoute) and the reaper (ReconcileNAT64Egress) so
+// they can never disagree on "who is the active egress".
+func selectEgress(peers []*repo.Peer, now time.Time) uuid.UUID {
+	var sel uuid.UUID
 	for _, p := range peers {
 		if !isEgressEligible(p, now) {
 			continue
 		}
-		if rc.egressID == uuid.Nil || bytes.Compare(p.ID[:], rc.egressID[:]) < 0 {
-			rc.egressID = p.ID
+		if sel == uuid.Nil || bytes.Compare(p.ID[:], sel[:]) < 0 {
+			sel = p.ID
 		}
 	}
-	return rc
+	return sel
+}
+
+// computeNAT64EgressRoute picks the tenant's single active NAT64 egress:
+// the lowest-UUID eligible approved egress (health-aware, NAT64 Phase C3).
+// Returns a zero egressID when no egress is eligible (no /96 route).
+func computeNAT64EgressRoute(tenant *repo.Tenant, peers []*repo.Peer, now time.Time) nat64EgressRoute {
+	return nat64EgressRoute{
+		enabled:  tenant.DNS64Enabled,
+		prefix:   nat64.ResolvePrefix(tenant.NAT64Prefix),
+		egressID: selectEgress(peers, now),
+	}
 }
 
 // allowedIPsFor returns the AllowedIps slice for dst as seen from src.
