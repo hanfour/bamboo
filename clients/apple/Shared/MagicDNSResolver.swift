@@ -475,4 +475,24 @@ extension DNSMessage {
         let v6s = v4s.map { NAT64Synth.synthesize(prefix: prefix, v4: $0) }
         return aaaaRecords(for: aaaaQuery, ipv6s: v6s)
     }
+
+    /// aQueryFromAAAA rewrites a single-question AAAA query into the
+    /// equivalent A query for the same name, preserving the id, flags
+    /// (RD), and qclass — only the 2 qtype bytes (28 → 1) change. Used by
+    /// the DNS proxy's stage-2 DNS64 lookup. Returns nil unless the input
+    /// is exactly one AAAA (type 28) question.
+    static func aQueryFromAAAA(_ data: Data) -> Data? {
+        let buf = Data(data) // normalise to a 0-based contiguous copy
+        guard let msg = parse(buf),
+              msg.questions.count == 1,
+              msg.questions[0].qtype == .aaaa,
+              let (_, qtypeOffset) = decodeName(buf, at: 12),
+              qtypeOffset + 4 <= buf.count else {
+            return nil
+        }
+        var bytes = [UInt8](buf)
+        bytes[qtypeOffset] = 0x00     // qtype high byte
+        bytes[qtypeOffset + 1] = 0x01 // qtype low byte → A (1)
+        return Data(bytes)
+    }
 }

@@ -187,4 +187,23 @@ final class DNS64Tests: XCTestCase {
         let q = DNSMessage.parse(makeQuery("ipv4only.example", type: 1))!
         XCTAssertFalse(NAT64Synth.shouldSynthesize(query: q, dns64Enabled: true, zone: "bamboo"))
     }
+
+    // MARK: aQueryFromAAAA
+
+    func testAQueryFromAAAAFlipsType() {
+        let aaaa = makeQuery("ipv4only.example", type: 28)
+        let a = DNSMessage.aQueryFromAAAA(aaaa)!
+        let parsed = DNSMessage.parse(a)!
+        XCTAssertEqual(parsed.id, 0x1234)                       // id preserved
+        XCTAssertEqual(parsed.questions.count, 1)
+        XCTAssertEqual(parsed.questions[0].name, "ipv4only.example.")
+        XCTAssertEqual(parsed.questions[0].qtype, .a)           // 28 → 1
+        XCTAssertEqual(parsed.questions[0].qclass, 1)           // IN preserved
+        XCTAssertEqual(a.count, aaaa.count)                     // only 2 bytes changed
+    }
+
+    func testAQueryFromAAAARejectsNonAAAA() {
+        // An A query (or anything not a single AAAA question) → nil.
+        XCTAssertNil(DNSMessage.aQueryFromAAAA(makeQuery("x.example", type: 1)))
+    }
 }
