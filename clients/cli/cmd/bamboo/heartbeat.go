@@ -56,6 +56,11 @@ type restHeartbeatRequest struct {
 	Endpoints           []string `json:"endpoints,omitempty"`
 	BytesSent           uint64   `json:"bytesSent,omitempty"`
 	BytesReceived       uint64   `json:"bytesReceived,omitempty"`
+	// NAT64EgressHealthy is the active egress's translator liveness, a
+	// *bool side-channel (NAT64 Phase C3). omitempty drops it when nil so
+	// a non-egress peer / pre-C3 controller sees nothing — the controller
+	// reads absent as "judge by staleness only".
+	NAT64EgressHealthy *bool `json:"nat64EgressHealthy,omitempty"`
 }
 
 type restHeartbeatResponse struct {
@@ -75,6 +80,7 @@ func (r *restHeartbeater) Heartbeat(ctx context.Context, args clientsync.Heartbe
 		Endpoints:           args.Endpoints,
 		BytesSent:           args.BytesSent,
 		BytesReceived:       args.BytesReceived,
+		NAT64EgressHealthy:  args.NAT64EgressHealthy,
 	})
 	if err != nil {
 		return clientsync.HeartbeatResult{}, err

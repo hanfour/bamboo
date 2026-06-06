@@ -153,6 +153,15 @@ func (m *linuxManager) Up(prefix netip.Prefix, v4Pool netip.Prefix, wanIface str
 	return nil
 }
 
+// Healthy reports whether the translator is actually running: Up has
+// converged AND the supervised tayga child is currently alive (not
+// crash-looping in backoff).
+func (m *linuxManager) Healthy() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.running && m.sup != nil && m.sup.Alive()
+}
+
 // Down reverses Up. Best-effort: it attempts every teardown step and
 // joins the errors so one failure does not strand the rest.
 func (m *linuxManager) Down() error {

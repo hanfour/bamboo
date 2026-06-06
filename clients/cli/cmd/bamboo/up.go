@@ -337,7 +337,7 @@ func runUp(cmd *cobra.Command, _ []string) error {
 		return device.SumBytes(stats)
 	}
 
-	go clientsync.RunHeartbeat(daemonCtx, heartbeater, resp.GetSelf().GetId(), discover, reportBytes)
+	go clientsync.RunHeartbeat(daemonCtx, heartbeater, resp.GetSelf().GetId(), discover, reportBytes, egress.ActiveHealth)
 	go clientsync.RunWatchPeers(daemonCtx, adapter, dev, priv, cache, resp.GetSelf().GetId(), refresh, onRelaysChanged, func(resp *bamboov1.RegisterResponse) { reconcileEgress(egress, resp) })
 	if relayClient != nil {
 		// Initial fallback goroutine: under daemonCtx so process

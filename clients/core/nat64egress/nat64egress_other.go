@@ -17,3 +17,7 @@ func (noopManager) Up(_ netip.Prefix, _ netip.Prefix, _ string) error {
 	return errors.New("nat64 egress translator is Linux-only")
 }
 func (noopManager) Down() error { return nil }
+
+// Healthy is always false off Linux: the noop manager never runs a
+// translator.
+func (noopManager) Healthy() bool { return false }

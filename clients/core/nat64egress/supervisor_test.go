@@ -85,3 +85,45 @@ func waitFor(t *testing.T, cond func() bool) {
 	}
 	t.Fatal("condition not met within timeout")
 }
+
+func TestSupervisor_Alive(t *testing.T) {
+	exit := make(chan error)
+	started := make(chan struct{}, 8)
+	s := newSupervisor(func(ctx context.Context) (runnable, error) {
+		started <- struct{}{}
+		return &fakeProc{ctx: ctx, exit: exit}, nil
+	})
+	s.backoff = time.Millisecond
+
+	if s.Alive() {
+		t.Fatal("Alive() should be false before Start")
+	}
+	s.Start()
+	<-started // first child up
+	waitFor(t, func() bool { return s.Alive() })
+
+	// Child crashes → Alive() drops until the supervisor restarts it.
+	exit <- errors.New("crash")
+	<-started // restart spun a new child
+	waitFor(t, func() bool { return s.Alive() })
+
+	s.Stop()
+	if s.Alive() {
+		t.Error("Alive() should be false after Stop")
+	}
+}
+
+func TestSupervisor_AliveFalseWhenStartFails(t *testing.T) {
+	var calls int32
+	s := newSupervisor(func(ctx context.Context) (runnable, error) {
+		atomic.AddInt32(&calls, 1)
+		return nil, errors.New("boom") // startFn keeps failing
+	})
+	s.backoff = time.Millisecond
+	s.Start()
+	waitFor(t, func() bool { return atomic.LoadInt32(&calls) >= 2 }) // looping on failure
+	if s.Alive() {
+		t.Error("Alive() must be false while startFn keeps failing")
+	}
+	s.Stop()
+}
