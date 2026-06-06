@@ -10,10 +10,14 @@ import (
 	"github.com/hanfour/bamboo/clients/core/nat64egress"
 )
 
-type fakeManager struct{ ups, downs int }
+type fakeManager struct {
+	ups, downs int
+	healthy    bool
+}
 
 func (f *fakeManager) Up(_ netip.Prefix, _ netip.Prefix, _ string) error { f.ups++; return nil }
 func (f *fakeManager) Down() error                                       { f.downs++; return nil }
+func (f *fakeManager) Healthy() bool                                     { return f.healthy }
 
 func TestReconciler_EdgesOnly(t *testing.T) {
 	f := &fakeManager{}
@@ -53,7 +57,8 @@ func (e *errManager) Up(_ netip.Prefix, _ netip.Prefix, _ string) error {
 	}
 	return nil
 }
-func (e *errManager) Down() error { return nil }
+func (e *errManager) Down() error   { return nil }
+func (e *errManager) Healthy() bool { return false }
 
 var errTest = errors.New("boom")
 
@@ -76,5 +81,38 @@ func TestReconciler_RetriesAfterError(t *testing.T) {
 	_ = r.Reconcile(true, p)
 	if e.ups != 2 {
 		t.Errorf("steady-state reconcile should not re-Up; ups=%d", e.ups)
+	}
+}
+
+func TestReconciler_ActiveHealth(t *testing.T) {
+	f := &fakeManager{healthy: true}
+	r := nat64egress.NewReconciler(f, netip.MustParsePrefix("192.168.255.0/24"), "eth0")
+	p := netip.MustParsePrefix("64:ff9b::/96")
+
+	// Never reconciled → not an active egress → nil (report nothing).
+	if got := r.ActiveHealth(); got != nil {
+		t.Errorf("before any reconcile: ActiveHealth = %v, want nil", *got)
+	}
+
+	// Became the active egress and the translator is healthy → *true.
+	if err := r.Reconcile(true, p); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.ActiveHealth(); got == nil || *got != true {
+		t.Errorf("active+healthy: ActiveHealth = %v, want *true", got)
+	}
+
+	// Translator goes unhealthy while still the active egress → *false.
+	f.healthy = false
+	if got := r.ActiveHealth(); got == nil || *got != false {
+		t.Errorf("active+unhealthy: ActiveHealth = %v, want *false", got)
+	}
+
+	// Deactivated → nil again.
+	if err := r.Reconcile(false, p); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.ActiveHealth(); got != nil {
+		t.Errorf("after deactivate: ActiveHealth = %v, want nil", *got)
 	}
 }

@@ -10,12 +10,13 @@ import (
 	"sync"
 )
 
-// Manager owns the NAT64 translator lifecycle on this host. Both methods
-// are idempotent — Up converges to "running + routed + NAT'd", Down to
-// "nothing of ours present".
+// Manager owns the NAT64 translator lifecycle on this host. Both Up and
+// Down are idempotent. Healthy reports whether the translator is actually
+// running right now (not merely "Up was once called") — see Reconciler.
 type Manager interface {
 	Up(prefix netip.Prefix, v4Pool netip.Prefix, wanIface string) error
 	Down() error
+	Healthy() bool
 }
 
 // New returns the platform Manager (the real Tayga manager on Linux, a
@@ -70,4 +71,19 @@ func (r *Reconciler) Reconcile(active bool, prefix netip.Prefix) error {
 	r.lastActive = active
 	r.applied = true
 	return nil
+}
+
+// ActiveHealth returns this peer's NAT64 egress health for the heartbeat
+// self-report: nil when the peer is NOT the active egress (the controller
+// never told it to translate, so it has nothing to report), otherwise a
+// pointer to the translator's current liveness. The controller treats nil
+// as "judge by staleness only" (NAT64 Phase C3).
+func (r *Reconciler) ActiveHealth() *bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.applied || !r.lastActive {
+		return nil
+	}
+	h := r.mgr.Healthy()
+	return &h
 }
