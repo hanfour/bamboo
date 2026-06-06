@@ -206,4 +206,49 @@ final class DNS64Tests: XCTestCase {
         // An A query (or anything not a single AAAA question) → nil.
         XCTAssertNil(DNSMessage.aQueryFromAAAA(makeQuery("x.example", type: 1)))
     }
+
+    // MARK: isSpecialUseV4
+
+    func testIsSpecialUseV4_excludedRanges() {
+        let excluded: [[UInt8]] = [
+            [0, 0, 0, 0], [0, 255, 255, 255],            // 0/8
+            [10, 0, 0, 0], [10, 255, 255, 255],          // 10/8
+            [100, 64, 0, 0], [100, 127, 255, 255],       // 100.64/10 (mesh range)
+            [127, 0, 0, 1], [127, 255, 255, 255],        // 127/8 loopback
+            [169, 254, 0, 0], [169, 254, 255, 255],      // 169.254/16 link-local
+            [172, 16, 0, 0], [172, 31, 255, 255],        // 172.16/12
+            [192, 168, 0, 0], [192, 168, 255, 255],      // 192.168/16
+            [192, 88, 99, 0], [192, 88, 99, 255],        // 192.88.99/24 6to4
+            [198, 18, 0, 0], [198, 19, 255, 255],        // 198.18/15 benchmark
+            [224, 0, 0, 0], [239, 255, 255, 255],        // 224/4 multicast
+            [240, 0, 0, 0], [255, 255, 255, 255],        // 240/4 reserved + broadcast
+            [192, 0, 0, 0], [192, 0, 0, 169], [192, 0, 0, 172], [192, 0, 0, 255], // 192.0.0/24 except .170/.171
+        ]
+        for v4 in excluded {
+            XCTAssertTrue(NAT64Synth.isSpecialUseV4(v4), "\(v4) should be special-use")
+        }
+    }
+
+    func testIsSpecialUseV4_synthesizable() {
+        let ok: [[UInt8]] = [
+            [93, 184, 216, 34], [8, 8, 8, 8], [1, 1, 1, 1],   // global unicast
+            [203, 0, 113, 5],                                  // TEST-NET-3 (kept — runbook example)
+            [192, 0, 0, 170], [192, 0, 0, 171],                // ipv4only.arpa carve-out
+            // non-aligned-mask NEAR-boundaries that must NOT match:
+            [100, 63, 255, 255], [100, 128, 0, 0],             // just outside 100.64/10
+            [172, 15, 255, 255], [172, 32, 0, 0],              // just outside 172.16/12
+            [198, 17, 255, 255], [198, 20, 0, 0],              // just outside 198.18/15
+            [169, 253, 255, 255], [169, 255, 0, 0],            // just outside 169.254/16
+            [192, 88, 98, 255], [192, 88, 100, 0],             // just outside 192.88.99/24
+            [223, 255, 255, 255],                              // just below 224/4 multicast
+        ]
+        for v4 in ok {
+            XCTAssertFalse(NAT64Synth.isSpecialUseV4(v4), "\(v4) should be synthesizable")
+        }
+    }
+
+    func testIsSpecialUseV4_badLength() {
+        XCTAssertFalse(NAT64Synth.isSpecialUseV4([10, 0, 0]))       // 3 bytes → false (guard)
+        XCTAssertFalse(NAT64Synth.isSpecialUseV4([10, 0, 0, 0, 0])) // 5 bytes → false
+    }
 }

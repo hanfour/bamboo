@@ -62,4 +62,72 @@ enum NAT64Synth {
         if name == z + "." || name.hasSuffix("." + z + ".") { return false }
         return true
     }
+
+    /// isSpecialUseV4 reports whether a 4-byte IPv4 must NOT be synthesised
+    /// into a NAT64 AAAA — a special-use / non-globally-routable address per
+    /// RFC 6052 §3.1 ("MUST NOT translate non-global IPv4"), RFC 6147 §5.1.4
+    /// (the DNS64 exclusion set), and the IANA IPv4 Special-Purpose Registry
+    /// (RFC 6890, Global=False). Synthesising one would let the egress's
+    /// Tayga translate it onto the egress's own LAN (SSRF) — the 100.64/10
+    /// CGN entry in particular covers the bamboo mesh's own tunnel range.
+    ///
+    /// Carve-out: 192.0.0.170/.171 (ipv4only.arpa, RFC 7335) stay
+    /// SYNTHESISABLE even though they sit inside the 192.0.0.0/24 exclusion —
+    /// the hardware-E2E runbook uses ipv4only.arpa as its synthesis
+    /// smoke-test (see docs/deployment/nat64-hardware-e2e.md §2). Do not
+    /// "tidy away" that carve-out.
+    ///
+    /// Non-4-byte input returns false (callers pass aRecords' 4-byte rdata).
+    static func isSpecialUseV4(_ v4: [UInt8]) -> Bool {
+        guard v4.count == 4 else { return false }
+        // Carve-out checked first so it short-circuits the /24 below.
+        if v4 == [192, 0, 0, 170] || v4 == [192, 0, 0, 171] {
+            return false
+        }
+        for range in specialUseV4Ranges where v4MatchesPrefix(v4, range.net, range.bits) {
+            return true
+        }
+        return false
+    }
+
+    /// specialUseV4Ranges is the (network, prefix-length) exclusion table.
+    /// Provenance above; keep alphabetical-by-first-octet for auditability.
+    private static let specialUseV4Ranges: [(net: [UInt8], bits: Int)] = [
+        ([0, 0, 0, 0], 8),        // this host on this network
+        ([10, 0, 0, 0], 8),       // RFC 1918 private
+        ([100, 64, 0, 0], 10),    // CGN (RFC 6598) — covers the mesh 100.127.0.0/24
+        ([127, 0, 0, 0], 8),      // loopback
+        ([169, 254, 0, 0], 16),   // link-local
+        ([172, 16, 0, 0], 12),    // RFC 1918 private
+        ([192, 0, 0, 0], 24),     // IETF protocol assignments (except .170/.171, carved out)
+        ([192, 88, 99, 0], 24),   // 6to4 relay anycast (RFC 3068, deprecated RFC 7526)
+        ([192, 168, 0, 0], 16),   // RFC 1918 private
+        ([198, 18, 0, 0], 15),    // benchmarking (RFC 2544)
+        ([224, 0, 0, 0], 4),      // multicast (never a unicast A destination)
+        ([240, 0, 0, 0], 4),      // reserved (incl. 255.255.255.255 broadcast)
+    ]
+
+    /// v4MatchesPrefix compares the first `bits` bits of v4 against net:
+    /// full bytes via ==, the final partial byte via a high-bit mask. One
+    /// path for octet-aligned and non-aligned (/10, /12, /15) masks — a
+    /// per-octet first-byte check would mis-handle CGN/RFC1918 and re-open
+    /// the SSRF vector.
+    private static func v4MatchesPrefix(_ v4: [UInt8], _ net: [UInt8], _ bits: Int) -> Bool {
+        var remaining = bits
+        for i in 0..<4 {
+            if remaining >= 8 {
+                if v4[i] != net[i] { return false }
+                remaining -= 8
+            } else if remaining > 0 {
+                // truncatingIfNeeded keeps only the low 8 bits of the
+                // Int-width shift result (e.g. 0xFF<<4 = 4080 → 0xF0 = 240).
+                let mask = UInt8(truncatingIfNeeded: 0xFF << (8 - remaining))
+                if (v4[i] & mask) != (net[i] & mask) { return false }
+                remaining = 0
+            } else {
+                break
+            }
+        }
+        return true
+    }
 }
