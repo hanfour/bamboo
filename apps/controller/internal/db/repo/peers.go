@@ -141,6 +141,12 @@ type Peer struct {
 	// re-register that drops the flag. Parallel to ExitNode*.
 	NAT64EgressCapable  bool
 	NAT64EgressApproved bool
+	// NAT64EgressHealthStatus / Reason are the egress translator's
+	// self-reported health (NAT64 Phase C3): "healthy"/"unhealthy"/
+	// "unknown"; nil until the egress first reports. Reason carries the
+	// admin-facing cause ("translator down" / "stale") when unhealthy.
+	NAT64EgressHealthStatus *string
+	NAT64EgressHealthReason *string
 	// UsingExitNodePeerID is the peer this row is routing default
 	// traffic through (`bamboo up --exit-node=<dns-name>`). NULL =
 	// no exit node in use. FK enforces "must be in the same tenant"
@@ -195,7 +201,8 @@ func (r *Peers) Insert(ctx context.Context, p *Peer) (*Peer, error) {
 		          approval_status, approved_at, approved_by_user_id,
 		          advertised_routes, approved_routes,
 		          exit_node_capable, exit_node_approved, nat64_egress_capable, nat64_egress_approved, using_exit_node_peer_id,
-		          connection_path, connection_path_at, connection_latency_ms
+		          connection_path, connection_path_at, connection_latency_ms,
+		          nat64_egress_health_status, nat64_egress_health_reason
 	`, p.TenantID, p.UserID, p.Hostname, p.PeerDNSName, p.WireGuardPublicKey,
 		p.IP, ip6Arg, p.OS, p.ClientVersion, p.Status, endpoints,
 		approval, approvedAt, p.ApprovedByUserID).Scan(
@@ -207,6 +214,7 @@ func (r *Peers) Insert(ctx context.Context, p *Peer) (*Peer, error) {
 		&out.AdvertisedRoutes, &out.ApprovedRoutes,
 		&out.ExitNodeCapable, &out.ExitNodeApproved, &out.NAT64EgressCapable, &out.NAT64EgressApproved, &out.UsingExitNodePeerID,
 		&out.ConnectionPath, &out.ConnectionPathAt, &out.ConnectionLatencyMs,
+		&out.NAT64EgressHealthStatus, &out.NAT64EgressHealthReason,
 	)
 	if err != nil {
 		return nil, err
@@ -235,7 +243,8 @@ func (r *Peers) GetByID(ctx context.Context, id uuid.UUID) (*Peer, error) {
 		       peers.approval_status, peers.approved_at, peers.approved_by_user_id,
 		       peers.advertised_routes, peers.approved_routes,
 		       peers.exit_node_capable, peers.exit_node_approved, peers.nat64_egress_capable, peers.nat64_egress_approved, peers.using_exit_node_peer_id,
-		       peers.connection_path, peers.connection_path_at, peers.connection_latency_ms
+		       peers.connection_path, peers.connection_path_at, peers.connection_latency_ms,
+		       peers.nat64_egress_health_status, peers.nat64_egress_health_reason
 		FROM peers
 		LEFT JOIN users ON users.id = peers.user_id AND users.deleted_at IS NULL
 		WHERE peers.id = $1
@@ -250,6 +259,7 @@ func (r *Peers) GetByID(ctx context.Context, id uuid.UUID) (*Peer, error) {
 		&p.AdvertisedRoutes, &p.ApprovedRoutes,
 		&p.ExitNodeCapable, &p.ExitNodeApproved, &p.NAT64EgressCapable, &p.NAT64EgressApproved, &p.UsingExitNodePeerID,
 		&p.ConnectionPath, &p.ConnectionPathAt, &p.ConnectionLatencyMs,
+		&p.NAT64EgressHealthStatus, &p.NAT64EgressHealthReason,
 	)
 	if err != nil {
 		return nil, asNotFound(err)
@@ -306,7 +316,8 @@ func (r *Peers) FindByPubKey(ctx context.Context, tenantID uuid.UUID, pubKey str
 		       approval_status, approved_at, approved_by_user_id,
 		       advertised_routes, approved_routes,
 		       exit_node_capable, exit_node_approved, nat64_egress_capable, nat64_egress_approved, using_exit_node_peer_id,
-		       connection_path, connection_path_at, connection_latency_ms
+		       connection_path, connection_path_at, connection_latency_ms,
+		       nat64_egress_health_status, nat64_egress_health_reason
 		FROM peers
 		WHERE tenant_id = $1 AND wireguard_public_key = $2
 	`, tenantID, pubKey).Scan(
@@ -319,6 +330,7 @@ func (r *Peers) FindByPubKey(ctx context.Context, tenantID uuid.UUID, pubKey str
 		&p.AdvertisedRoutes, &p.ApprovedRoutes,
 		&p.ExitNodeCapable, &p.ExitNodeApproved, &p.NAT64EgressCapable, &p.NAT64EgressApproved, &p.UsingExitNodePeerID,
 		&p.ConnectionPath, &p.ConnectionPathAt, &p.ConnectionLatencyMs,
+		&p.NAT64EgressHealthStatus, &p.NAT64EgressHealthReason,
 	)
 	if err != nil {
 		return nil, asNotFound(err)
@@ -343,7 +355,8 @@ func (r *Peers) ListByTenant(ctx context.Context, tenantID uuid.UUID) ([]*Peer, 
 		       peers.approval_status, peers.approved_at, peers.approved_by_user_id,
 		       peers.advertised_routes, peers.approved_routes,
 		       peers.exit_node_capable, peers.exit_node_approved, peers.nat64_egress_capable, peers.nat64_egress_approved, peers.using_exit_node_peer_id,
-		       peers.connection_path, peers.connection_path_at, peers.connection_latency_ms
+		       peers.connection_path, peers.connection_path_at, peers.connection_latency_ms,
+		       peers.nat64_egress_health_status, peers.nat64_egress_health_reason
 		FROM peers
 		LEFT JOIN users ON users.id = peers.user_id AND users.deleted_at IS NULL
 		WHERE peers.tenant_id = $1
@@ -369,6 +382,7 @@ func (r *Peers) ListByTenant(ctx context.Context, tenantID uuid.UUID) ([]*Peer, 
 			&p.AdvertisedRoutes, &p.ApprovedRoutes,
 			&p.ExitNodeCapable, &p.ExitNodeApproved, &p.NAT64EgressCapable, &p.NAT64EgressApproved, &p.UsingExitNodePeerID,
 			&p.ConnectionPath, &p.ConnectionPathAt, &p.ConnectionLatencyMs,
+			&p.NAT64EgressHealthStatus, &p.NAT64EgressHealthReason,
 		); err != nil {
 			return nil, err
 		}
@@ -671,6 +685,27 @@ func (r *Peers) SetNAT64EgressApproved(ctx context.Context, id uuid.UUID, approv
 		       updated_at            = now()
 		 WHERE id = $1
 	`, id, approved)
+	return err
+}
+
+// SetNAT64EgressHealth persists the egress translator's self-reported
+// health (NAT64 Phase C3). reported=true → status "healthy" / reason
+// cleared; false → "unhealthy" / reason "translator down". A side-channel
+// like SetConnectionPath: admin-visibility data, written outside the
+// coord.Heartbeat mesh-state contract. (PR 3's reaper writes the
+// staleness leg with reason "stale".)
+func (r *Peers) SetNAT64EgressHealth(ctx context.Context, id uuid.UUID, reported bool) error {
+	status, reason := "healthy", ""
+	if !reported {
+		status, reason = "unhealthy", "translator down"
+	}
+	_, err := r.pool.Exec(ctx, `
+		UPDATE peers
+		   SET nat64_egress_health_status = $2,
+		       nat64_egress_health_reason = $3,
+		       updated_at                 = now()
+		 WHERE id = $1
+	`, id, status, reason)
 	return err
 }
 

@@ -810,7 +810,13 @@ type apiPeerJSON struct {
 	ExitNodeApproved    bool     `json:"exitNodeApproved"`
 	NAT64EgressCapable  bool     `json:"nat64EgressCapable"`
 	NAT64EgressApproved bool     `json:"nat64EgressApproved"`
-	UsingExitNodePeerID string   `json:"usingExitNodePeerId,omitempty"`
+	// NAT64EgressHealthStatus / Reason expose the egress translator's
+	// health (NAT64 Phase C3): "healthy"/"unhealthy"/"unknown" (nil
+	// normalized to "unknown" at the JSON edge), with the admin-facing
+	// reason when unhealthy. Mirrors relay last_health_status/error.
+	NAT64EgressHealthStatus *string `json:"nat64EgressHealthStatus,omitempty"`
+	NAT64EgressHealthReason *string `json:"nat64EgressHealthReason,omitempty"`
+	UsingExitNodePeerID     string  `json:"usingExitNodePeerId,omitempty"`
 	// ConnectionPath is "direct" / "relay" / "unknown" (issue #138).
 	// Reported by the peer on heartbeat; nil on the wire when the
 	// peer hasn't reported yet. The Web UI normalizes nil → "unknown"
@@ -875,6 +881,14 @@ func peerToJSON(p *repo.Peer) apiPeerJSON {
 		ExitNodeApproved:    p.ExitNodeApproved,
 		NAT64EgressCapable:  p.NAT64EgressCapable,
 		NAT64EgressApproved: p.NAT64EgressApproved,
+		NAT64EgressHealthStatus: func() *string {
+			if p.NAT64EgressHealthStatus == nil || *p.NAT64EgressHealthStatus == "" {
+				s := "unknown"
+				return &s
+			}
+			return p.NAT64EgressHealthStatus
+		}(),
+		NAT64EgressHealthReason: p.NAT64EgressHealthReason,
 		UsingExitNodePeerID: func() string {
 			if p.UsingExitNodePeerID == nil {
 				return ""
