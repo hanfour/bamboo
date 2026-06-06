@@ -635,6 +635,7 @@ func (h *HTTPServer) Run(ctx context.Context) error {
 	h.StartInviteReaper(ctx)
 	h.StartAuditRetentionReaper(ctx)
 	h.StartRelayHealthReaper(ctx)
+	h.StartNAT64EgressHealthReaper(ctx)
 	h.StartRevokedSessionsReaper(ctx)
 	h.StartReleaseFeedPoller(ctx)
 	errCh := make(chan error, 1)
