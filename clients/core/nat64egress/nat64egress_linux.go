@@ -82,6 +82,12 @@ func (m *linuxManager) Up(prefix netip.Prefix, v4Pool netip.Prefix, wanIface str
 		return fmt.Errorf("write %s: %w", ConfigPath, err)
 	}
 
+	// 2b. Ensure Tayga's data-dir exists — tayga --nodetach exits 1 when it
+	// is missing (the --mktun probe can succeed first, masking the cause).
+	if err := os.MkdirAll(DataDir, 0o750); err != nil {
+		return fmt.Errorf("mkdir %s: %w", DataDir, err)
+	}
+
 	// 3. Create + bring up the TUN. Skip --mktun if it already exists
 	// (a prior partial Up may have created it) so retries don't wedge.
 	if _, err := netlink.LinkByName(TunDevice); err != nil {
