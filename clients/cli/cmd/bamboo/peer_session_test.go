@@ -4,6 +4,8 @@ package main
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -11,6 +13,47 @@ import (
 	bamboov1 "github.com/hanfour/bamboo/proto/gen/go/bamboo/v1"
 	"google.golang.org/grpc/metadata"
 )
+
+// TestRestRegister_ParsesNAT64Fields is the regression for the hardware-E2E
+// bug: the REST register response carries the tenant's NAT64 config + the
+// egress activation signal, but restRegisterResponse didn't decode them, so
+// they never reached the bamboov1.RegisterResponse that reconcileEgress reads
+// — a CLI egress always saw active=false and never stood up Tayga.
+func TestRestRegister_ParsesNAT64Fields(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/peers/register" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"self": {"id":"p1","tenantId":"t1","hostname":"egress","ip":"100.64.0.2","wireguardPublicKey":"k"},
+			"peers": [],
+			"policyRevision": 0,
+			"dns64Enabled": true,
+			"nat64Prefix": "64:ff9b::/96",
+			"nat64EgressActive": true
+		}`))
+	}))
+	defer srv.Close()
+	t.Setenv("BAMBOO_CONTROLLER_HTTP_URL", srv.URL)
+
+	resp, _, _, err := restRegister(context.Background(),
+		"egress", "k", "linux", "vtest", "bka_test", "default",
+		nil, nil, false, true)
+	if err != nil {
+		t.Fatalf("restRegister: %v", err)
+	}
+	if !resp.GetDns64Enabled() {
+		t.Errorf("Dns64Enabled = false, want true")
+	}
+	if got := resp.GetNat64Prefix(); got != "64:ff9b::/96" {
+		t.Errorf("Nat64Prefix = %q, want 64:ff9b::/96", got)
+	}
+	if !resp.GetNat64EgressActive() {
+		t.Errorf("Nat64EgressActive = false, want true (egress would never build Tayga)")
+	}
+}
 
 // fakeCoord captures the ctx passed by callers so the test can assert
 // on the gRPC outgoing metadata the authedAdapter injected. Only

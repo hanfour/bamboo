@@ -132,6 +132,13 @@ type peerRegisterResponse struct {
 	// client sees nothing new.
 	DNS64Enabled bool   `json:"dns64Enabled,omitempty"`
 	NAT64Prefix  string `json:"nat64Prefix,omitempty"`
+	// NAT64EgressActive tells a CLI egress peer — which registers over REST,
+	// not gRPC — that it is the approved+enabled NAT64 translator and should
+	// stand up Tayga (Phase C2). The gRPC RegisterResponse already carries
+	// this signal; the REST bridge dropped it, so CLI egresses registered
+	// over REST never reconciled active and the translator never built.
+	// omitempty mirrors DNS64Enabled: a non-egress / pre-C2 client sees nothing.
+	NAT64EgressActive bool `json:"nat64EgressActive,omitempty"`
 }
 
 func (h *HTTPServer) apiPeersRegister(w http.ResponseWriter, r *http.Request) {
@@ -281,6 +288,7 @@ func (h *HTTPServer) apiPeersRegister(w http.ResponseWriter, r *http.Request) {
 			}
 			return ""
 		}(),
+		NAT64EgressActive: resp.GetNat64EgressActive(),
 	}
 	// Mint a peer session token for the caller. Failure here is
 	// non-fatal — log and degrade rather than fail registration, since

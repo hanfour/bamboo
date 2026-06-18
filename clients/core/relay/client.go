@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/url"
 	"sync"
 
 	"github.com/coder/websocket"
@@ -60,6 +61,27 @@ type peerSocket struct {
 	port   int          // local port the WG config should target
 }
 
+// normalizeRelayURL appends the "/relay" WebSocket path when the
+// operator-supplied URL carries none (or only "/"). The relay server
+// serves the WS handler at /relay (apps/relay/cmd/relay registers
+// mux.HandleFunc("/relay", ...)); a bare wss://host hits Caddy's root and
+// 404s the handshake. Operators routinely paste BAMBOO_RELAY_URL without
+// the path, so self-heal here — this mirrors the Apple RelayClient, which
+// does the same normalisation for the same reason. A non-empty, non-root
+// path is left untouched so explicit overrides still work. Parse failures
+// fall through unchanged so websocket.Dial surfaces the original error.
+func normalizeRelayURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return raw
+	}
+	if u.Path == "" || u.Path == "/" {
+		u.Path = "/relay"
+		return u.String()
+	}
+	return raw
+}
+
 // Dial opens a WSS session to relayURL, sends CLIENT_HELLO with
 // selfPubKey and token, waits for SERVER_HELLO. wgListenAddr is the
 // loopback address (typically 127.0.0.1:<wg_port>) where WG inbound
@@ -71,6 +93,7 @@ func Dial(ctx context.Context, relayURL string, selfPubKey [PubKeyLen]byte, toke
 		return nil, fmt.Errorf("resolve wg addr %q: %w", wgListenAddr, err)
 	}
 
+	relayURL = normalizeRelayURL(relayURL)
 	conn, _, err := websocket.Dial(ctx, relayURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("ws dial %s: %w", relayURL, err)

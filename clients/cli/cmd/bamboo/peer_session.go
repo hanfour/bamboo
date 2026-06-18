@@ -70,6 +70,15 @@ type restRegisterResponse struct {
 	PolicyRevision       int64      `json:"policyRevision"`
 	PeerSessionToken     string     `json:"peerSessionToken,omitempty"`
 	PeerSessionExpiresAt int64      `json:"peerSessionExpiresAt,omitempty"`
+	// NAT64 (Phase C): the controller surfaces the tenant's DNS64 config and,
+	// for an approved egress, the activation signal. reconcileEgress drives
+	// the Tayga translator from Nat64EgressActive; DNS64 synthesis uses the
+	// prefix. These had been absent from this struct, so a CLI egress (which
+	// registers over REST, not gRPC) always saw active=false and never built
+	// the translator. omitempty keeps the wire shape unchanged for non-egress.
+	DNS64Enabled      bool   `json:"dns64Enabled,omitempty"`
+	NAT64Prefix       string `json:"nat64Prefix,omitempty"`
+	NAT64EgressActive bool   `json:"nat64EgressActive,omitempty"`
 }
 
 type restPeer struct {
@@ -140,9 +149,12 @@ func restRegister(ctx context.Context, hostname, wgPublicKey, osName, version, p
 		return nil, "", time.Time{}, fmt.Errorf("decode register response: %w", err)
 	}
 	out := &bamboov1.RegisterResponse{
-		Self:           restPeerToProto(rj.Self),
-		Peers:          restPeersToProto(rj.Peers),
-		PolicyRevision: rj.PolicyRevision,
+		Self:              restPeerToProto(rj.Self),
+		Peers:             restPeersToProto(rj.Peers),
+		PolicyRevision:    rj.PolicyRevision,
+		Dns64Enabled:      rj.DNS64Enabled,
+		Nat64Prefix:       rj.NAT64Prefix,
+		Nat64EgressActive: rj.NAT64EgressActive,
 	}
 	var exp time.Time
 	if rj.PeerSessionExpiresAt > 0 {
