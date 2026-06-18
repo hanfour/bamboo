@@ -76,9 +76,9 @@ type restRegisterResponse struct {
 	// prefix. These had been absent from this struct, so a CLI egress (which
 	// registers over REST, not gRPC) always saw active=false and never built
 	// the translator. omitempty keeps the wire shape unchanged for non-egress.
-	Dns64Enabled      bool   `json:"dns64Enabled,omitempty"`
-	Nat64Prefix       string `json:"nat64Prefix,omitempty"`
-	Nat64EgressActive bool   `json:"nat64EgressActive,omitempty"`
+	DNS64Enabled      bool   `json:"dns64Enabled,omitempty"`
+	NAT64Prefix       string `json:"nat64Prefix,omitempty"`
+	NAT64EgressActive bool   `json:"nat64EgressActive,omitempty"`
 }
 
 type restPeer struct {
@@ -152,9 +152,9 @@ func restRegister(ctx context.Context, hostname, wgPublicKey, osName, version, p
 		Self:              restPeerToProto(rj.Self),
 		Peers:             restPeersToProto(rj.Peers),
 		PolicyRevision:    rj.PolicyRevision,
-		Dns64Enabled:      rj.Dns64Enabled,
-		Nat64Prefix:       rj.Nat64Prefix,
-		Nat64EgressActive: rj.Nat64EgressActive,
+		Dns64Enabled:      rj.DNS64Enabled,
+		Nat64Prefix:       rj.NAT64Prefix,
+		Nat64EgressActive: rj.NAT64EgressActive,
 	}
 	var exp time.Time
 	if rj.PeerSessionExpiresAt > 0 {

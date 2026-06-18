@@ -4,6 +4,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -12,6 +13,29 @@ import (
 
 	bamboov1 "github.com/hanfour/bamboo/proto/gen/go/bamboo/v1"
 )
+
+// TestPeerRegisterResponse_NAT64EgressActive guards the REST bridge that the
+// hardware-E2E bug exposed: the gRPC RegisterResponse carried
+// nat64_egress_active but the REST shape dropped it, so a CLI egress (which
+// registers over REST, not gRPC) never reconciled active and never built the
+// Tayga translator. true must serialise; false must be omitted (omitempty) so
+// non-egress / pre-C2 clients see nothing new on the wire.
+func TestPeerRegisterResponse_NAT64EgressActive(t *testing.T) {
+	on, err := json.Marshal(peerRegisterResponse{NAT64EgressActive: true})
+	if err != nil {
+		t.Fatalf("marshal active: %v", err)
+	}
+	if !strings.Contains(string(on), `"nat64EgressActive":true`) {
+		t.Errorf("active response missing nat64EgressActive: %s", on)
+	}
+	off, err := json.Marshal(peerRegisterResponse{NAT64EgressActive: false})
+	if err != nil {
+		t.Fatalf("marshal inactive: %v", err)
+	}
+	if strings.Contains(string(off), "nat64EgressActive") {
+		t.Errorf("inactive response should omit nat64EgressActive: %s", off)
+	}
+}
 
 // TestStreamWatchEvents_EmitsKeepalive verifies the SSE handler
 // writes a `: keepalive\n\n` comment frame at the configured

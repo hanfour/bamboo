@@ -21,8 +21,12 @@ func TestRenderTaygaConfig_golden(t *testing.T) {
 	for _, want := range []string{
 		"tun-device nat64",
 		"ipv4-addr 192.168.255.1",
+		// ipv6-addr is mandatory for the well-known prefix + RFC1918 pool
+		// combo — tayga --mktun exits 1 without it (NAT64 Phase C2 fix).
+		"ipv6-addr " + nat64egress.TaygaSelfV6,
 		"prefix 64:ff9b::/96",
 		"dynamic-pool 192.168.255.0/24",
+		"data-dir " + nat64egress.DataDir,
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("config missing %q\n---\n%s", want, got)
