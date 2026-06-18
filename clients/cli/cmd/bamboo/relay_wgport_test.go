@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	bamboov1 "github.com/hanfour/bamboo/proto/gen/go/bamboo/v1"
-	"github.com/hanfour/bamboo/clients/core/wg"
 	"github.com/coder/websocket"
+	"github.com/hanfour/bamboo/clients/core/wg"
+	bamboov1 "github.com/hanfour/bamboo/proto/gen/go/bamboo/v1"
 )
 
 // encodeRelayFrame mirrors apps/relay/server.Encode: [4-byte BE total len
