@@ -3,6 +3,7 @@ module github.com/hanfour/bamboo/clients/cli
 go 1.25.7
 
 require (
+	github.com/coder/websocket v1.8.13
 	github.com/hanfour/bamboo/clients/core v0.0.0-00010101000000-000000000000
 	github.com/hanfour/bamboo/proto v0.0.0-00010101000000-000000000000
 	github.com/spf13/cobra v1.8.1

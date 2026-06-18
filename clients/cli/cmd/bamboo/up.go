@@ -152,7 +152,7 @@ func runUp(cmd *cobra.Command, _ []string) error {
 	// swaps individual peers from direct to relay when their direct
 	// endpoint stops handshaking. Peers with no direct endpoint at
 	// all start on relay immediately.
-	relayClient, relayProxies, currentRelayURL, err := maybeOpenRelay(cmd.Context(), resp, priv, session)
+	relayClient, relayProxies, currentRelayURL, err := maybeOpenRelay(cmd.Context(), resp, priv, session, wgPort)
 	if err != nil {
 		slog.Warn("relay setup failed; continuing without relay", "err", err)
 	}
@@ -294,7 +294,7 @@ func runUp(cmd *cobra.Command, _ []string) error {
 		// that joined since bring-up also gets a proxy port on
 		// the new relay (and one that left no longer takes one).
 		_, cachedPeers := cache.Snapshot()
-		newClient, newProxies, err := openRelayAtURL(handlerCtx, newURL, resp.GetSelf().GetId(), cachedPeers, priv, session)
+		newClient, newProxies, err := openRelayAtURL(handlerCtx, newURL, resp.GetSelf().GetId(), cachedPeers, priv, session, wgPort)
 		if err != nil {
 			slog.Warn("relays_changed: open new relay failed; staying on current", "err", err)
 			return
@@ -479,7 +479,7 @@ func pickFreeUDPPort() (uint16, error) {
 // §4 P2 stage 4b RelaysChanged handler can compare "what we're on
 // now" vs "what the picker would prefer now" without re-deriving
 // the chosen URL from the relay.Client (which doesn't store it).
-func maybeOpenRelay(ctx context.Context, resp *bamboov1.RegisterResponse, priv wg.PrivateKey, session *peerSession) (*relay.Client, clientsync.PeerRelayMap, string, error) {
+func maybeOpenRelay(ctx context.Context, resp *bamboov1.RegisterResponse, priv wg.PrivateKey, session *peerSession, wgPort uint16) (*relay.Client, clientsync.PeerRelayMap, string, error) {
 	relayURL := os.Getenv("BAMBOO_RELAY_URL")
 	if relayURL == "" {
 		// Fall through to the controller-supplied list. Region
@@ -505,7 +505,7 @@ func maybeOpenRelay(ctx context.Context, resp *bamboov1.RegisterResponse, priv w
 		slog.Info("relay picker: chose", "region", picked.GetRegion(), "hostname", picked.GetHostname())
 	}
 
-	c, proxies, err := openRelayAtURL(ctx, relayURL, resp.GetSelf().GetId(), resp.GetPeers(), priv, session)
+	c, proxies, err := openRelayAtURL(ctx, relayURL, resp.GetSelf().GetId(), resp.GetPeers(), priv, session, wgPort)
 	if err != nil {
 		return nil, nil, "", err
 	}
@@ -522,7 +522,7 @@ func maybeOpenRelay(ctx context.Context, resp *bamboov1.RegisterResponse, priv w
 //
 // On any failure the partially-constructed client is closed before
 // returning so a half-up relay can't leak listener ports.
-func openRelayAtURL(ctx context.Context, relayURL, selfID string, peers []*bamboov1.Peer, priv wg.PrivateKey, session *peerSession) (*relay.Client, clientsync.PeerRelayMap, error) {
+func openRelayAtURL(ctx context.Context, relayURL, selfID string, peers []*bamboov1.Peer, priv wg.PrivateKey, session *peerSession, wgPort uint16) (*relay.Client, clientsync.PeerRelayMap, error) {
 	token, err := mintRelayToken(ctx, selfID, priv.PublicKey().Base64(), session)
 	if err != nil {
 		return nil, nil, fmt.Errorf("mint relay token: %w", err)
@@ -531,7 +531,15 @@ func openRelayAtURL(ctx context.Context, relayURL, selfID string, peers []*bambo
 	if err != nil {
 		return nil, nil, err
 	}
-	c, err := relay.Dial(ctx, relayURL, selfKey, token, "127.0.0.1:51820")
+	// Deliver relay-forwarded WG packets to THIS peer's actual WireGuard
+	// listen port — not a hardcoded default. wgListenUDP is where the relay
+	// client writes inbound bodies; if it doesn't match wg's bind, every
+	// forwarded packet lands on a port nothing is listening on and silently
+	// drops. (Regression: a literal "127.0.0.1:51820" here meant a CLI peer
+	// only ever received relay traffic when its random wg port happened to be
+	// 51820 — so a CLI egress↔Apple-peer relay path never completed, while two
+	// Apple peers, which pass their real port, worked fine.)
+	c, err := relay.Dial(ctx, relayURL, selfKey, token, fmt.Sprintf("127.0.0.1:%d", wgPort))
 	if err != nil {
 		return nil, nil, fmt.Errorf("relay dial: %w", err)
 	}
