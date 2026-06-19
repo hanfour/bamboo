@@ -774,11 +774,16 @@ func (h *HTTPServer) apiMe(w http.ResponseWriter, r *http.Request, authn *authnC
 
 // apiPeerJSON is the wire shape for the peers endpoint.
 type apiPeerJSON struct {
-	ID                 string     `json:"id"`
-	TenantID           string     `json:"tenantId"`
-	Hostname           string     `json:"hostname"`
-	PeerDNSName        *string    `json:"peerDnsName,omitempty"`
-	IP                 string     `json:"ip"`
+	ID          string  `json:"id"`
+	TenantID    string  `json:"tenantId"`
+	Hostname    string  `json:"hostname"`
+	PeerDNSName *string `json:"peerDnsName,omitempty"`
+	IP          string  `json:"ip"`
+	// IP6 is the peer's deterministic overlay IPv6 (NAT64 Phase A ULA).
+	// Omitempty: legacy peers registered before migration 00018 (or that
+	// have not re-registered since) carry "" and are elided rather than
+	// surfaced as an empty v6 address.
+	IP6                string     `json:"ip6,omitempty"`
 	Tags               []string   `json:"tags"`
 	OS                 string     `json:"os"`
 	ClientVersion      string     `json:"clientVersion"`
@@ -867,6 +872,7 @@ func peerToJSON(p *repo.Peer) apiPeerJSON {
 		Hostname:            p.Hostname,
 		PeerDNSName:         p.PeerDNSName,
 		IP:                  p.IP,
+		IP6:                 p.IP6,
 		Tags:                tags,
 		OS:                  p.OS,
 		ClientVersion:       p.ClientVersion,
