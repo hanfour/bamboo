@@ -405,6 +405,16 @@ func (h *HTTPServer) routeAPI(w http.ResponseWriter, r *http.Request) {
 		h.apiPolicyRollback(w, r, authn, tenant)
 		return
 	}
+	// /api/v1/dns serves GET (read) and PATCH (apiDNSPatch — the DNS64 /
+	// NAT64-prefix toggle), dispatching on method inside apiDNS and
+	// returning 405 with Allow: GET, PATCH for anything else. It must be
+	// routed BEFORE the blanket GET-only guard below; otherwise the guard
+	// shadows the PATCH branch (dead code) and DNS64 can't be toggled over
+	// REST at all.
+	if r.URL.Path == "/api/v1/dns" {
+		h.apiDNS(w, r, authn, tenant)
+		return
+	}
 
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -422,8 +432,6 @@ func (h *HTTPServer) routeAPI(w http.ResponseWriter, r *http.Request) {
 		h.apiRecommendations(w, r, tenant)
 	case "/api/v1/activity":
 		h.apiActivity(w, r, tenant)
-	case "/api/v1/dns":
-		h.apiDNS(w, r, authn, tenant)
 	case "/api/v1/users":
 		h.apiUsers(w, r, authn, tenant)
 	case "/api/v1/logs":
