@@ -67,6 +67,14 @@ fileprivate final class DNSFlowHandler: Hashable {
     private let flow: NEAppProxyUDPFlow
     private let store: MagicDNSPeerStore
     private let id = UUID()
+    // Reconciles read-EOF against still-in-flight async responses so the
+    // write half is torn down exactly once, only after every pending
+    // response has been written. Without it, a single-query flow's
+    // read-EOF closed the write half before the deferred DNS64 synthesis
+    // could write — the synthesised AAAA failed with "flow is not
+    // connected" while the synchronous MagicDNS / single-round-trip A
+    // paths slipped in under the close.
+    private let lifecycle = FlowLifecycle()
 
     init(flow: NEAppProxyUDPFlow) {
         self.flow = flow
@@ -80,6 +88,15 @@ fileprivate final class DNSFlowHandler: Hashable {
         DNSProxyProvider.handlersLock.lock()
         DNSProxyProvider.handlers.remove(self)
         DNSProxyProvider.handlersLock.unlock()
+    }
+
+    /// finishWriteClose tears down the write half and releases the
+    /// handler. Invoked exactly once — by whichever of read-EOF or the
+    /// last draining response wins the FlowLifecycle latch — so a pending
+    /// synthesised write is never cut off mid-flight.
+    private func finishWriteClose(_ error: Error?) {
+        flow.closeWriteWithError(error)
+        release()
     }
 
     func start() {
@@ -101,14 +118,15 @@ fileprivate final class DNSFlowHandler: Hashable {
         flow.readDatagrams { [self] datagrams, endpoints, error in
             if let error = error {
                 self.flow.closeReadWithError(error)
-                self.flow.closeWriteWithError(error)
-                self.release()
+                // Defer the write-half teardown until in-flight responses
+                // drain — closing it now would drop a pending synthesised
+                // AAAA (the write-after-close race).
+                if self.lifecycle.markReadClosed() { self.finishWriteClose(error) }
                 return
             }
             guard let datagrams = datagrams, !datagrams.isEmpty else {
                 self.flow.closeReadWithError(nil)
-                self.flow.closeWriteWithError(nil)
-                self.release()
+                if self.lifecycle.markReadClosed() { self.finishWriteClose(nil) }
                 return
             }
             let endpoints = endpoints ?? []
@@ -124,15 +142,20 @@ fileprivate final class DNSFlowHandler: Hashable {
         let peers = store.peers()
         switch MagicDNSResolver.handle(query: query, peers: peers) {
         case .answered(let response):
-            flow.writeDatagrams([response], sentBy: [endpoint]) { error in
+            lifecycle.begin()
+            flow.writeDatagrams([response], sentBy: [endpoint]) { [self] error in
                 if let error = error {
                     os_log(.error, log: DNSProxyProvider.log,
                            "writeDatagrams (synthesized) failed: %{public}@",
                            String(describing: error))
                 }
+                if self.lifecycle.end() { self.finishWriteClose(nil) }
             }
         case .forwardUpstream:
-            maybeDNS64(query: query, endpoint: endpoint)
+            lifecycle.begin()
+            maybeDNS64(query: query, endpoint: endpoint) { [self] in
+                if self.lifecycle.end() { self.finishWriteClose(nil) }
+            }
         case .malformed:
             os_log(.debug, log: DNSProxyProvider.log,
                    "dropping malformed query (%{public}d bytes)", query.count)
@@ -148,13 +171,18 @@ fileprivate final class DNSFlowHandler: Hashable {
         handleOne(query: query, endpoint: host)
     }
 
-    /// writeToFlow sends one datagram back to the asking app.
-    private func writeToFlow(_ data: Data, _ endpoint: NWHostEndpoint) {
+    /// writeToFlow sends one datagram back to the asking app, then calls
+    /// `done` from the write completion — so the FlowLifecycle op stays
+    /// in flight until the write has actually landed (not merely been
+    /// enqueued), which is what keeps the write half open long enough.
+    private func writeToFlow(_ data: Data, _ endpoint: NWHostEndpoint,
+                             done: @escaping () -> Void) {
         flow.writeDatagrams([data], sentBy: [endpoint]) { error in
             if let error = error {
                 os_log(.error, log: DNSProxyProvider.log,
                        "flow write failed: %{public}@", String(describing: error))
             }
+            done()
         }
     }
 
@@ -162,27 +190,30 @@ fileprivate final class DNSFlowHandler: Hashable {
     /// candidate. If DNS64 is off, or the query isn't a synthesizable
     /// external AAAA, it forwards verbatim. Otherwise it runs the RFC 6147
     /// 2-stage path: AAAA upstream → (NODATA?) → A upstream → synthesise.
-    private func maybeDNS64(query: Data, endpoint: NWHostEndpoint) {
+    /// `onComplete` fires exactly once at every terminal path (after the
+    /// reply write lands, or immediately when nothing is written).
+    private func maybeDNS64(query: Data, endpoint: NWHostEndpoint,
+                            onComplete: @escaping () -> Void) {
         let cfg = store.nat64Config()
         guard cfg.dns64Enabled,
               let msg = DNSMessage.parse(query),
               NAT64Synth.shouldSynthesize(query: msg, dns64Enabled: true,
                                           zone: MagicDNSResolver.zone),
               let prefix = NAT64Synth.prefixBytes(cfg.nat64Prefix) else {
-            forwardUpstream(query: query, replyEndpoint: endpoint)
+            forwardUpstream(query: query, replyEndpoint: endpoint, onComplete: onComplete)
             return
         }
         // Stage 1: forward the AAAA query.
         upstreamQuery(query, to: endpoint) { [self] aaaaResp in
-            guard let aaaaResp = aaaaResp else { return } // timeout/fail → client retries
+            guard let aaaaResp = aaaaResp else { onComplete(); return } // timeout/fail → client retries
             // A real AAAA (or an error rcode) wins — relay verbatim (RFC 6147).
             if !DNSMessage.isDNS64Candidate(aaaaResp) {
-                self.writeToFlow(aaaaResp, endpoint)
+                self.writeToFlow(aaaaResp, endpoint, done: onComplete)
                 return
             }
             // Stage 2: query the same name's A record, then synthesise.
             guard let aQuery = DNSMessage.aQueryFromAAAA(query) else {
-                self.writeToFlow(aaaaResp, endpoint) // can't build A query → relay NODATA
+                self.writeToFlow(aaaaResp, endpoint, done: onComplete) // can't build A query → relay NODATA
                 return
             }
             self.upstreamQuery(aQuery, to: endpoint) { [self] aResp in
@@ -197,19 +228,24 @@ fileprivate final class DNSFlowHandler: Hashable {
                                "dns64 skip: all %{public}d A special-use for %{public}@",
                                v4s.count, msg.questions.first?.name ?? "?")
                     }
-                    self.writeToFlow(aaaaResp, endpoint) // no A / fail / all special-use → relay NODATA
+                    self.writeToFlow(aaaaResp, endpoint, done: onComplete) // no A / fail / all special-use → relay NODATA
                     return
                 }
-                self.writeToFlow(synth, endpoint)
+                self.writeToFlow(synth, endpoint, done: onComplete)
             }
         }
     }
 
     /// forwardUpstream relays a query upstream and writes the reply back to
-    /// the flow verbatim (the non-DNS64 path).
-    private func forwardUpstream(query: Data, replyEndpoint: NWHostEndpoint) {
+    /// the flow verbatim (the non-DNS64 path). `onComplete` fires once.
+    private func forwardUpstream(query: Data, replyEndpoint: NWHostEndpoint,
+                                 onComplete: @escaping () -> Void) {
         upstreamQuery(query, to: replyEndpoint) { [self] data in
-            if let data = data { self.writeToFlow(data, replyEndpoint) }
+            if let data = data {
+                self.writeToFlow(data, replyEndpoint, done: onComplete)
+            } else {
+                onComplete()
+            }
         }
     }
 
