@@ -257,6 +257,7 @@ targets:
       - path: Shared/MagicDNSPeerStore.swift
       - path: Shared/MagicDNSResolver.swift
       - path: Shared/NAT64Synth.swift
+      - path: Shared/FlowLifecycle.swift
     info:
       path: DNSProxy-macOS/Info.plist
       properties:
@@ -355,6 +356,7 @@ targets:
       - path: Shared/BambooClient.swift
       - path: Shared/PeerWatcher.swift
       - path: Shared/BundleVersion.swift
+      - path: Shared/FlowLifecycle.swift
     settings:
       base:
         # Tests don't ship; sign locally with whatever the developer
@@ -467,6 +469,7 @@ targets:
       - path: Shared/MagicDNSPeerStore.swift
       - path: Shared/MagicDNSResolver.swift
       - path: Shared/NAT64Synth.swift
+      - path: Shared/FlowLifecycle.swift
     info:
       path: DNSProxy-iOS/Info.plist
       properties:
