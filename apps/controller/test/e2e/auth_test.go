@@ -8,8 +8,48 @@ import (
 
 	bamboov1 "github.com/hanfour/bamboo/proto/gen/go/bamboo/v1"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 )
+
+// TestGRPC_RevokePreAuthKey_RejectsCrossTenant is the audit M-1
+// regression: a tenant admin must not revoke another tenant's pre-auth
+// key by UUID. keys.Revoke is keyed on id alone, so RevokePreAuthKey now
+// resolves the caller's tenant and 404s a key that isn't theirs.
+func TestGRPC_RevokePreAuthKey_RejectsCrossTenant(t *testing.T) {
+	f := startFixture(t)
+	bg := context.Background()
+
+	// A key in tenant A (the fixture's default tenant).
+	keyA, err := f.auth.CreatePreAuthKey(f.outgoingCtx(bg),
+		&bamboov1.CreatePreAuthKeyRequest{Description: "tenant-A key"})
+	if err != nil {
+		t.Fatalf("create tenant-A key: %v", err)
+	}
+
+	// Seed a distinct tenant B (creating a key under its slug GetOrCreates it).
+	slugB := f.tenantSlug + "-other"
+	ctxB := metadata.AppendToOutgoingContext(bg, "x-tenant-slug", slugB)
+	if _, err := f.auth.CreatePreAuthKey(ctxB,
+		&bamboov1.CreatePreAuthKeyRequest{Description: "tenant-B seed"}); err != nil {
+		t.Fatalf("seed tenant B: %v", err)
+	}
+	t.Cleanup(func() { _, _ = f.pool.Exec(bg, `DELETE FROM tenants WHERE slug = $1`, slugB) })
+
+	// Revoking A's key while acting as tenant B must be NotFound — B can't
+	// even confirm A's key exists (no cross-tenant probe).
+	_, err = f.auth.RevokePreAuthKey(ctxB,
+		&bamboov1.RevokePreAuthKeyRequest{Id: keyA.GetKey().GetId()})
+	if status.Code(err) != codes.NotFound {
+		t.Errorf("cross-tenant revoke: code=%v (%v), want NotFound", status.Code(err), err)
+	}
+
+	// Sanity: the owning tenant A can still revoke its own key.
+	if _, err := f.auth.RevokePreAuthKey(f.outgoingCtx(bg),
+		&bamboov1.RevokePreAuthKeyRequest{Id: keyA.GetKey().GetId()}); err != nil {
+		t.Errorf("same-tenant revoke should succeed, got %v", err)
+	}
+}
 
 func TestPreAuthKey_CreateAndRedeemViaRegister(t *testing.T) {
 	f := startFixture(t)
