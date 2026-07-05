@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/hanfour/bamboo/apps/controller/internal/auth"
 	"github.com/hanfour/bamboo/apps/controller/internal/db"
 	"github.com/hanfour/bamboo/apps/controller/internal/db/repo"
 	"github.com/hanfour/bamboo/apps/controller/internal/events"
@@ -551,6 +552,9 @@ func (h *CoordinatorHandler) Heartbeat(ctx context.Context, req *bamboov1.Heartb
 	if req.GetPeerId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "peer_id is required")
 	}
+	if err := h.enforcePeerBinding(ctx, req.GetPeerId()); err != nil {
+		return nil, err
+	}
 	peerID, err := uuid.Parse(req.GetPeerId())
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "invalid peer_id: %v", err)
@@ -598,10 +602,41 @@ func (h *CoordinatorHandler) Heartbeat(ctx context.Context, req *bamboov1.Heartb
 	}, nil
 }
 
+// enforcePeerBinding rejects a request whose peer-session bearer is bound
+// to a peer other than the one it targets (audit M-2). Without it, a
+// valid peer-session token for peer A could Heartbeat / WatchPeers as
+// peer B — endpoint poisoning, netmap snooping. Only the peer-session
+// credential is bound; a user-session bearer (admin) or no bearer (dev /
+// require_auth off) skips the check, matching the REST peerCredentialAllows
+// behavior. The interceptor already validated the bearer's signature; this
+// adds the identity binding the interceptor can't (it lacks the peer_id).
+func (h *CoordinatorHandler) enforcePeerBinding(ctx context.Context, reqPeerID string) error {
+	if h.auth == nil || len(h.auth.sessionSec) == 0 {
+		return nil
+	}
+	token := bearerFromMetadata(ctx)
+	if token == "" {
+		return nil
+	}
+	claims, err := auth.VerifyPeerSessionToken(h.auth.sessionSec, token)
+	if err != nil {
+		// Not a peer-session token (user session, other shape). Peer
+		// binding applies only to peer-session credentials.
+		return nil
+	}
+	if claims.PeerID.String() != reqPeerID {
+		return status.Error(codes.PermissionDenied, "peer-session token is not bound to the requested peer")
+	}
+	return nil
+}
+
 // WatchPeers streams peer-set and policy events to the calling peer for
 // the lifetime of the stream.
 func (h *CoordinatorHandler) WatchPeers(req *bamboov1.WatchPeersRequest, stream bamboov1.CoordinatorService_WatchPeersServer) error {
 	ctx := stream.Context()
+	if err := h.enforcePeerBinding(ctx, req.GetPeerId()); err != nil {
+		return err
+	}
 	ch, cancel, err := h.SubscribePeer(ctx, req.GetPeerId())
 	if err != nil {
 		return err

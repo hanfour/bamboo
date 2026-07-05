@@ -232,11 +232,32 @@ func (h *AuthHandler) RevokePreAuthKey(ctx context.Context, req *bamboov1.Revoke
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "invalid id: %v", err)
 	}
+	// Tenant scoping (audit M-1): without it, a tenant admin could revoke
+	// ANY tenant's key by UUID (cross-tenant IDOR) since keys.Revoke is
+	// keyed on id alone. Resolve the caller's tenant (same as List/Create)
+	// and confirm the key belongs to it; a mismatch is a 404 so callers
+	// can't probe key IDs in other tenants. Mirrors the REST handler.
+	slug := tenantSlugFromMetadata(ctx)
+	tenant, err := h.tenants.GetBySlug(ctx, slug)
+	if err != nil {
+		return nil, status.Errorf(codes.NotFound, "tenant %q: %v", slug, err)
+	}
+	key, err := h.keys.GetByID(ctx, id)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			return nil, status.Error(codes.NotFound, "pre-auth key not found")
+		}
+		return nil, status.Errorf(codes.Internal, "lookup key: %v", err)
+	}
+	if key.TenantID != tenant.ID {
+		return nil, status.Error(codes.NotFound, "pre-auth key not found")
+	}
 	if err := h.keys.Revoke(ctx, id); err != nil {
 		return nil, status.Errorf(codes.Internal, "revoke: %v", err)
 	}
 
 	auditLog(ctx, h.audits, &repo.AuditEvent{
+		TenantID:     &tenant.ID,
 		ActorType:    "system",
 		Action:       "preauthkey.revoke",
 		ResourceType: "pre_auth_key",
@@ -275,8 +296,18 @@ func (h *AuthHandler) redeemAndReturnKey(ctx context.Context, presentedSecret st
 		return nil, status.Error(codes.Unauthenticated, "invalid pre-auth key")
 	}
 
-	if err := h.keys.MarkRedeemed(ctx, key.ID); err != nil {
+	// Atomically consume the redemption. The earlier use_count check is a
+	// fast-path; this is the real single-use guard and closes the TOCTOU
+	// race (audit M-3) — two concurrent Register calls with the same
+	// single-use key can both pass the check above, but only one gets
+	// consumed==true here; the loser is rejected instead of onboarding a
+	// second device.
+	consumed, err := h.keys.MarkRedeemed(ctx, key.ID)
+	if err != nil {
 		return nil, status.Errorf(codes.Internal, "mark redeemed: %v", err)
+	}
+	if !consumed {
+		return nil, status.Error(codes.PermissionDenied, "pre-auth key already used")
 	}
 
 	auditLog(ctx, h.audits, &repo.AuditEvent{

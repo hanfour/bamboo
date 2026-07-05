@@ -91,16 +91,27 @@ func (r *PreAuthKeys) GetByID(ctx context.Context, id uuid.UUID) (*PreAuthKey, e
 	return &k, nil
 }
 
-// MarkRedeemed atomically increments use_count and, for non-reusable keys,
-// records the revocation timestamp so the key cannot be reused.
-func (r *PreAuthKeys) MarkRedeemed(ctx context.Context, id uuid.UUID) error {
-	_, err := r.pool.Exec(ctx, `
+// MarkRedeemed atomically consumes a redemption: it increments use_count
+// and, for non-reusable keys, records revoked_at so the key can't be
+// reused. The WHERE guard makes the single-use check atomic with the
+// increment (audit M-3): a non-reusable key only updates while use_count
+// is still 0, so two concurrent redemptions can't both succeed. Returns
+// consumed=false (no row updated) when the key was already used, revoked,
+// or expired — the caller treats that as "already used".
+func (r *PreAuthKeys) MarkRedeemed(ctx context.Context, id uuid.UUID) (consumed bool, err error) {
+	tag, err := r.pool.Exec(ctx, `
 		UPDATE pre_auth_keys
 		   SET use_count  = use_count + 1,
 		       revoked_at = CASE WHEN reusable THEN revoked_at ELSE now() END
 		 WHERE id = $1
+		   AND revoked_at IS NULL
+		   AND (expires_at IS NULL OR expires_at > now())
+		   AND (reusable OR use_count = 0)
 	`, id)
-	return err
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() == 1, nil
 }
 
 // ListByTenant returns all keys for a tenant, newest first.
