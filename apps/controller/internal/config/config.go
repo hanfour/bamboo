@@ -120,6 +120,16 @@ type AuthConfig struct {
 	// state tokens. Must be at least 32 bytes; rotate by re-issuing all
 	// tokens.
 	SessionSecret string `yaml:"session_secret"`
+	// RelaySecret is a SEPARATE HMAC key for relay tokens (audit C-1).
+	// The relay server runs on more exposed infrastructure — it accepts
+	// connections from any internet peer — so isolating its signing key
+	// means a relay-host compromise leaks only the relay secret and can
+	// NOT forge session JWTs or peer-session tokens (both signed with
+	// SessionSecret). When empty, falls back to SessionSecret for
+	// backward compatibility with existing single-secret deploys; set
+	// BAMBOO_RELAY_SECRET (and the relay's BAMBOO_RELAY_SHARED_SECRET to
+	// the same value) to enable isolation.
+	RelaySecret string `yaml:"relay_secret"`
 	// SessionTTL controls how long an issued session remains valid.
 	// Defaults to 24h if empty.
 	SessionTTL string `yaml:"session_ttl"`
@@ -135,6 +145,17 @@ type AuthConfig struct {
 	// keep working unchanged.
 	RequireAuth bool          `yaml:"require_auth"`
 	OIDC        OIDCProviders `yaml:"oidc"`
+}
+
+// ResolvedRelaySecret returns the key used to sign relay tokens: the
+// dedicated RelaySecret when set, otherwise SessionSecret. This keeps
+// existing single-secret deployments working while letting operators
+// opt into key isolation (audit C-1) by setting BAMBOO_RELAY_SECRET.
+func (a AuthConfig) ResolvedRelaySecret() string {
+	if a.RelaySecret != "" {
+		return a.RelaySecret
+	}
+	return a.SessionSecret
 }
 
 // OIDCProviders bundles per-provider credentials.
@@ -231,6 +252,9 @@ func (c *Config) applyEnvOverrides() {
 	}
 	if v := os.Getenv("BAMBOO_SESSION_SECRET"); v != "" {
 		c.Auth.SessionSecret = v
+	}
+	if v := os.Getenv("BAMBOO_RELAY_SECRET"); v != "" {
+		c.Auth.RelaySecret = v
 	}
 	if v := os.Getenv("BAMBOO_REQUIRE_AUTH"); v != "" {
 		// Any value other than "true" / "1" disables prod mode; this

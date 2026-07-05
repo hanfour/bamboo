@@ -75,6 +75,10 @@ Fill in:
 DOMAIN=bamboo.yourdomain.com
 RELAY_DOMAIN=relay.yourdomain.com
 BAMBOO_SESSION_SECRET=$(openssl rand -base64 48)   # paste the output
+# Dedicated relay-token key — set it to a DIFFERENT value so a relay-host
+# compromise can't forge controller session JWTs (recommended). If you
+# omit it, the stack falls back to BAMBOO_SESSION_SECRET.
+BAMBOO_RELAY_SECRET=$(openssl rand -base64 48)      # paste the output
 POSTGRES_PASSWORD=$(openssl rand -base64 24)
 CLICKHOUSE_PASSWORD=$(openssl rand -base64 24)
 
@@ -265,12 +269,28 @@ NEW=$(openssl rand -base64 48)
 # Edit .env, replace BAMBOO_SESSION_SECRET
 $EDITOR .env
 
-# Roll controller + relay (both share the secret)
+# Roll the controller (signs session JWTs) — and the relay too if you
+# left BAMBOO_RELAY_SECRET unset, since it then falls back to this key.
 docker compose up -d --force-recreate controller relay
 ```
 
-All existing session tokens + relay tokens invalidate; users have
-to sign in again.
+All existing session tokens invalidate; users have to sign in again.
+
+### Rotating BAMBOO_RELAY_SECRET
+
+The relay-token key is isolated from the session secret (audit C-1), so
+you can rotate it independently — session logins are unaffected.
+
+```bash
+# Edit .env, replace BAMBOO_RELAY_SECRET (keep it different from the
+# session secret), then roll BOTH so the controller (issuer) and the
+# relay (verifier) pick up the new key together.
+$EDITOR .env
+docker compose up -d --force-recreate controller relay
+```
+
+Only relay tokens invalidate (TTL 1h); peers re-mint one automatically
+on their next heartbeat, so there's no user-visible disruption.
 
 ## Capacity expectations
 

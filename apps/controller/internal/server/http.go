@@ -63,8 +63,13 @@ type HTTPServer struct {
 	// (zero entries) when no env is set, in which case every
 	// resolveRegion call returns "" and the register response
 	// omits preferredRegion.
-	regionMap   *regionMap
-	secret      []byte
+	regionMap *regionMap
+	secret    []byte
+	// relaySecret signs relay tokens. Kept separate from `secret` so a
+	// relay-host compromise cannot forge session JWTs (audit C-1). Nil
+	// until SetRelaySecret is called; relayTokenSecret() then falls back
+	// to `secret` (single-secret deploys and tests).
+	relaySecret []byte
 	baseURL     string
 	ttl         time.Duration
 	requireAuth bool
@@ -346,6 +351,23 @@ func (h *HTTPServer) Handler() http.Handler {
 // cfg.Auth.RequireAuth (env: BAMBOO_REQUIRE_AUTH).
 func (h *HTTPServer) SetRequireAuth(require bool) {
 	h.requireAuth = require
+}
+
+// SetRelaySecret sets the dedicated relay-token signing key (audit
+// C-1). When unset or empty, relay tokens are signed with the session
+// secret — the backward-compatible single-secret behavior. Callers wire
+// this from cfg.Auth.ResolvedRelaySecret (env: BAMBOO_RELAY_SECRET).
+func (h *HTTPServer) SetRelaySecret(secret []byte) {
+	h.relaySecret = secret
+}
+
+// relayTokenSecret returns the key used to sign relay tokens: the
+// dedicated relaySecret when configured, else the session secret.
+func (h *HTTPServer) relayTokenSecret() []byte {
+	if len(h.relaySecret) > 0 {
+		return h.relaySecret
+	}
+	return h.secret
 }
 
 // SetMailer wires the SMTP sender used by invitation email delivery
