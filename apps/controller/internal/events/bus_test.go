@@ -3,6 +3,7 @@
 package events_test
 
 import (
+	"sync"
 	"testing"
 	"time"
 
@@ -10,6 +11,59 @@ import (
 	"github.com/hanfour/bamboo/apps/controller/internal/events"
 	bamboov1 "github.com/hanfour/bamboo/proto/gen/go/bamboo/v1"
 )
+
+// TestBus_ConcurrentPublishAndCancelNoPanic is the regression for the
+// send-on-closed-channel panic. Publish snapshotted a subscriber channel
+// under the lock, released the lock, then did a non-blocking send — which
+// could land AFTER cancel() closed that same channel, panicking with
+// "send on closed channel" and crashing the whole controller (the
+// select/default guard does NOT protect a send against a closed channel).
+//
+// This hammers Publish + PublishAll against Subscribe/cancel churn on the
+// same tenant, so cancel() closes a channel a publisher may be mid-send
+// on. It panics on the buggy Bus and passes once send and close are made
+// mutually exclusive under the lock. Run with -race for extra
+// interleavings.
+func TestBus_ConcurrentPublishAndCancelNoPanic(t *testing.T) {
+	bus := events.NewBus()
+	tenantID := uuid.New()
+	ev := &bamboov1.WatchPeersEvent{
+		Event: &bamboov1.WatchPeersEvent_PolicyChanged{
+			PolicyChanged: &bamboov1.PolicyChanged{PolicyRevision: 1},
+		},
+	}
+
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+
+	// A storm of concurrent publishers over both delivery paths.
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+					bus.Publish(tenantID, ev)
+					bus.PublishAll(ev)
+				}
+			}
+		}()
+	}
+
+	// Subscribe + immediately cancel, on the same tenant the publishers
+	// target — so cancel() closes a channel a publisher may hold a stale
+	// snapshot of and be about to send to.
+	for i := 0; i < 3000; i++ {
+		_, cancel := bus.Subscribe(tenantID)
+		cancel()
+	}
+
+	close(stop)
+	wg.Wait()
+}
 
 func TestBus_singleSubscriberReceivesEvent(t *testing.T) {
 	bus := events.NewBus()

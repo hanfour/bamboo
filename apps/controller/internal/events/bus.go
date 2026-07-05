@@ -7,9 +7,13 @@
 // can be dropped in without changing handler call sites.
 //
 // Events delivered to slow subscribers are dropped — the client then
-// reconciles by reopening WatchPeers, which sends fresh state. This keeps
-// the Bus lock-free in the hot path and prevents one stuck client from
-// pausing the rest.
+// reconciles by reopening WatchPeers, which sends fresh state. Delivery
+// is a non-blocking send performed under the subscriber lock, so a stuck
+// client never pauses the rest AND send/close stay mutually exclusive:
+// cancel() closes a subscriber channel under the same lock, so a
+// publisher can never send to a channel that is being closed (which
+// would panic — the select/default guard does not protect against a
+// closed channel).
 package events
 
 import (
@@ -49,11 +53,19 @@ func (b *Bus) Subscribe(tenantID uuid.UUID) (<-chan *bamboov1.WatchPeersEvent, f
 
 	cancel := func() {
 		b.mu.Lock()
+		defer b.mu.Unlock()
+		if _, ok := b.subscribers[tenantID][ch]; !ok {
+			// Already cancelled — closing again would panic. cancel is
+			// wired via defer at two call sites (gRPC + REST), so an
+			// idempotent guard is cheap insurance.
+			return
+		}
 		delete(b.subscribers[tenantID], ch)
 		if len(b.subscribers[tenantID]) == 0 {
 			delete(b.subscribers, tenantID)
 		}
-		b.mu.Unlock()
+		// Close under the lock so it can't interleave with a concurrent
+		// Publish's send to this same channel (both hold b.mu).
 		close(ch)
 	}
 	return ch, cancel
@@ -65,14 +77,13 @@ func (b *Bus) Publish(tenantID uuid.UUID, event *bamboov1.WatchPeersEvent) {
 	if event == nil {
 		return
 	}
+	// Hold the lock across the non-blocking sends so a subscriber's
+	// channel can't be closed by cancel() mid-send (see the package doc).
+	// Each send is a select/default, so the critical section is O(subs)
+	// of pure channel ops — no blocking, no I/O.
 	b.mu.Lock()
-	subs := make([]chan *bamboov1.WatchPeersEvent, 0, len(b.subscribers[tenantID]))
+	defer b.mu.Unlock()
 	for ch := range b.subscribers[tenantID] {
-		subs = append(subs, ch)
-	}
-	b.mu.Unlock()
-
-	for _, ch := range subs {
 		select {
 		case ch <- event:
 		default:
@@ -95,20 +106,17 @@ func (b *Bus) PublishAll(event *bamboov1.WatchPeersEvent) {
 	if event == nil {
 		return
 	}
+	// Same lock discipline as Publish: non-blocking sends under the lock
+	// keep send and cancel's close mutually exclusive.
 	b.mu.Lock()
-	subs := make([]chan *bamboov1.WatchPeersEvent, 0)
+	defer b.mu.Unlock()
 	for _, perTenant := range b.subscribers {
 		for ch := range perTenant {
-			subs = append(subs, ch)
-		}
-	}
-	b.mu.Unlock()
-
-	for _, ch := range subs {
-		select {
-		case ch <- event:
-		default:
-			// dropped — slow consumer reconciles by reopening WatchPeers.
+			select {
+			case ch <- event:
+			default:
+				// dropped — slow consumer reconciles by reopening WatchPeers.
+			}
 		}
 	}
 }
