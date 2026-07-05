@@ -79,6 +79,11 @@ type HTTPServer struct {
 	baseURL         string
 	ttl             time.Duration
 	requireAuth     bool
+	// rateLimit holds per-IP token-bucket limiters for the brute-force
+	// surfaces (login / register / relay-token). Nil ⇒ limiting off (the
+	// default; tests and the e2e fixture never enable it). Set via
+	// SetRateLimiting, which the production wiring calls (audit H-4).
+	rateLimit *rateLimiters
 }
 
 // NewHTTPServer constructs the OIDC + REST HTTP frontend. ch may be nil
@@ -182,7 +187,7 @@ func NewHTTPServer(
 	mux.Handle("/metrics", h.metrics.Handler())
 	h.srv = &http.Server{
 		Addr:              addr,
-		Handler:           withCORS(metricsMiddleware(h.metrics, mux)),
+		Handler:           withCORS(metricsMiddleware(h.metrics, h.rateLimitMiddleware(mux))),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      30 * time.Second,
@@ -675,6 +680,7 @@ func (h *HTTPServer) Run(ctx context.Context) error {
 	h.StartNAT64EgressHealthReaper(ctx)
 	h.StartRevokedSessionsReaper(ctx)
 	h.StartReleaseFeedPoller(ctx)
+	h.StartRateLimitCleanup(ctx)
 	errCh := make(chan error, 1)
 	go func() {
 		slog.Info("HTTP server listening", "addr", h.addr)

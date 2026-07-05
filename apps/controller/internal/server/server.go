@@ -82,6 +82,10 @@ func New(cfg *config.Config, pool *db.Pool, ch *clickhouse.Conn) (*Server, error
 		}
 		httpSrv.SetRelaySigningKey(signKey)
 	}
+	// Per-IP brute-force limiting on login / register / relay-token
+	// (audit H-4). On by default; set BAMBOO_RATE_LIMIT_DISABLED=true to
+	// opt out (e.g. load testing).
+	httpSrv.SetRateLimiting(os.Getenv("BAMBOO_RATE_LIMIT_DISABLED") != "true")
 	coordHandler.SetRequireAuth(cfg.Auth.RequireAuth)
 	// Wire SMTP. New() returns a no-op sender when SMTP is unconfigured;
 	// the public base URL for invite links falls back to the OIDC base
