@@ -23,9 +23,11 @@ import (
 //  3. Match wg_public_key against the CLIENT_HELLO so the client
 //     can't impersonate another peer.
 //
-// HMAC signing matches SessionClaims (same secret, different claim
-// shape). A future ADR will move to asymmetric signing so the relay
-// only needs the public half.
+// HMAC signing mixes in relayTokenDomain so a relay token can never be
+// verified as a SessionToken (and vice versa) even under a shared
+// signing secret — the audit's H-1 token-confusion fix. A future ADR
+// will move to asymmetric signing so the relay only needs the public
+// half.
 type RelayClaims struct {
 	TenantID    uuid.UUID `json:"tid"`
 	PeerID      uuid.UUID `json:"pid"`
@@ -33,6 +35,15 @@ type RelayClaims struct {
 	IssuedAt    int64     `json:"iat"`
 	ExpiresAt   int64     `json:"exp"`
 }
+
+// relayTokenDomain is mixed into the HMAC input so this token type is
+// cryptographically distinct from SessionToken / OIDCState even when
+// they share the signing secret. It mirrors peerSessionDomain (see
+// peer_session_token.go). The relay binary vendors a copy of the verify
+// path in apps/relay/auth — this constant MUST stay byte-identical to
+// the relayTokenDomain there, or controller-issued tokens stop
+// verifying at the relay.
+const relayTokenDomain = "bamboo.relay-token.v1"
 
 // IssueRelayToken signs a fresh token. Use a short TTL (e.g. 1 hour);
 // clients should call /api/v1/relay-tokens to refresh.
@@ -49,6 +60,7 @@ func IssueRelayToken(secret []byte, claims RelayClaims, ttl time.Duration) (stri
 	}
 	encoded := base64Encode(body)
 	mac := hmac.New(sha256.New, secret)
+	mac.Write([]byte(relayTokenDomain))
 	mac.Write([]byte(encoded))
 	sig := base64Encode(mac.Sum(nil))
 	return encoded + "." + sig, nil
@@ -63,6 +75,7 @@ func VerifyRelayToken(secret []byte, token string) (*RelayClaims, error) {
 		return nil, ErrInvalidToken
 	}
 	expectedMAC := hmac.New(sha256.New, secret)
+	expectedMAC.Write([]byte(relayTokenDomain))
 	expectedMAC.Write([]byte(body))
 	expectedSig := base64Encode(expectedMAC.Sum(nil))
 	gotSig, err := base64Decode(sig)

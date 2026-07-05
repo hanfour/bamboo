@@ -69,6 +69,9 @@ func New(cfg *config.Config, pool *db.Pool, ch *clickhouse.Conn) (*Server, error
 
 	httpSrv := NewHTTPServer(cfg.Server.HTTPAddr, pool, providers, ch, secret, cfg.Auth.OIDC.BaseURL, ttl, coordHandler, feed)
 	httpSrv.SetRequireAuth(cfg.Auth.RequireAuth)
+	// Relay tokens are signed with a dedicated key when BAMBOO_RELAY_SECRET
+	// is set, else the session secret (audit C-1 — see ResolvedRelaySecret).
+	httpSrv.SetRelaySecret([]byte(cfg.Auth.ResolvedRelaySecret()))
 	coordHandler.SetRequireAuth(cfg.Auth.RequireAuth)
 	// Wire SMTP. New() returns a no-op sender when SMTP is unconfigured;
 	// the public base URL for invite links falls back to the OIDC base

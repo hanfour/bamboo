@@ -358,6 +358,15 @@ func (h *AuthHandler) resolveBearerToken(ctx context.Context, token string) (*re
 	if err != nil {
 		return nil, status.Error(codes.Unauthenticated, "invalid bearer token")
 	}
+	// Defense in depth (audit H-1): a user-session JWT always carries a
+	// non-nil subject (UserID). Reject any token that verified but has no
+	// user — a relay / peer-session token shape must never stand in for a
+	// user session on this Register bearer path, even if a future change
+	// re-shared the signing construction. The relay-token HMAC domain is
+	// the primary guard; this is the belt to that suspenders.
+	if claims.UserID == uuid.Nil {
+		return nil, status.Error(codes.Unauthenticated, "bearer token is not a user session")
+	}
 	t, err := h.tenants.GetByID(ctx, claims.TenantID)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "tenant by id: %v", err)

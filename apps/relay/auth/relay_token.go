@@ -25,6 +25,15 @@ import (
 // leak validation details over the wire.
 var ErrInvalidToken = errors.New("invalid relay token")
 
+// relayTokenDomain is mixed into the HMAC input, matching the
+// controller's IssueRelayToken. It makes a relay token cryptographically
+// distinct from a session / peer-session token even under a shared
+// signing secret (the audit's H-1 token-confusion fix). This value MUST
+// stay byte-identical to relayTokenDomain in
+// apps/controller/internal/auth/relay_token.go — if they drift, every
+// controller-issued relay token stops verifying here.
+const relayTokenDomain = "bamboo.relay-token.v1"
+
 // RelayClaims is the verified payload. Field names match the JSON
 // emitted by apps/controller/internal/auth.IssueRelayToken.
 type RelayClaims struct {
@@ -44,6 +53,7 @@ func VerifyRelayToken(secret []byte, token string) (*RelayClaims, error) {
 		return nil, ErrInvalidToken
 	}
 	expectedMAC := hmac.New(sha256.New, secret)
+	expectedMAC.Write([]byte(relayTokenDomain))
 	expectedMAC.Write([]byte(body))
 	gotSig, err := base64.RawURLEncoding.DecodeString(sig)
 	if err != nil {

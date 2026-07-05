@@ -103,7 +103,7 @@ func (h *HTTPServer) routeRelayToken(w http.ResponseWriter, r *http.Request) {
 	}
 
 	exp := time.Now().Add(relayTokenTTL)
-	tok, err := auth.IssueRelayToken(h.secret, auth.RelayClaims{
+	tok, err := auth.IssueRelayToken(h.relayTokenSecret(), auth.RelayClaims{
 		TenantID:    tenant.ID,
 		PeerID:      peerID,
 		WGPublicKey: body.WGPublicKey,
