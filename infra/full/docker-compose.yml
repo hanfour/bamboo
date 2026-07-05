@@ -47,7 +47,7 @@ services:
       start_period: 30s
 
   controller:
-    image: ghcr.io/hanfour/bamboo-controller:latest
+    image: ghcr.io/hanfour/bamboo-controller:${BAMBOO_IMAGE_TAG:-latest}
     restart: unless-stopped
     depends_on:
       postgres:
@@ -93,7 +93,7 @@ services:
     command: ["serve", "--log-json"]
 
   web:
-    image: ghcr.io/hanfour/bamboo-web:latest
+    image: ghcr.io/hanfour/bamboo-web:${BAMBOO_IMAGE_TAG:-latest}
     restart: unless-stopped
     depends_on:
       - controller
@@ -105,7 +105,7 @@ services:
       BAMBOO_TENANT: "default"
 
   relay:
-    image: ghcr.io/hanfour/bamboo-relay:latest
+    image: ghcr.io/hanfour/bamboo-relay:${BAMBOO_IMAGE_TAG:-latest}
     restart: unless-stopped
     environment:
       # Must equal the controller's BAMBOO_RELAY_SECRET so relay tokens

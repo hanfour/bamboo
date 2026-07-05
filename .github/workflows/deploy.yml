@@ -1,0 +1,75 @@
+name: Deploy to VPS
+
+# OPT-IN continuous deployment for the single-VPS stack. Manual only
+# (workflow_dispatch): you pick the image tag, it SSHes to the box and
+# runs infra/full/deploy.sh (pull -> backup -> migrate -> recreate).
+#
+# This does NOT run until you configure the four secrets below — an
+# unconfigured repo simply never triggers it. Storing an SSH key with
+# prod access in CI is a deliberate security tradeoff; enable it only if
+# you accept that. Prefer running deploy.sh over SSH by hand otherwise.
+#
+# Required repository secrets:
+#   DEPLOY_SSH_HOST   - VPS hostname or IP (e.g. bamboo.example.com)
+#   DEPLOY_SSH_USER   - SSH user (e.g. ubuntu)
+#   DEPLOY_SSH_KEY    - private key authorized on the box (PEM contents)
+#   DEPLOY_DIR        - compose dir on the box (e.g. /opt/bamboo/infra/full)
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Image tag to deploy (e.g. v0.1.15). Must already be published to ghcr.io."
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  # Never let two deploys race on the same box.
+  group: deploy-vps
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Guard — require deploy secrets
+        env:
+          HOST: ${{ secrets.DEPLOY_SSH_HOST }}
+        run: |
+          if [ -z "$HOST" ]; then
+            echo "::error::Deploy secrets are not configured (DEPLOY_SSH_HOST empty)." \
+                 "This workflow is opt-in — see the header of .github/workflows/deploy.yml."
+            exit 1
+          fi
+
+      - name: Validate tag input
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          # Only allow the tag shapes we publish: vX.Y.Z, main, or a short sha.
+          case "$TAG" in
+            v[0-9]*.[0-9]*.[0-9]* | main | [0-9a-f][0-9a-f][0-9a-f][0-9a-f]*) : ;;
+            *) echo "::error::Refusing to deploy tag '$TAG' (expected vX.Y.Z, main, or a short sha)."; exit 1 ;;
+          esac
+
+      - name: Deploy over SSH
+        env:
+          SSH_HOST: ${{ secrets.DEPLOY_SSH_HOST }}
+          SSH_USER: ${{ secrets.DEPLOY_SSH_USER }}
+          SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_DIR: ${{ secrets.DEPLOY_DIR }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          key="$(mktemp)"
+          printf '%s\n' "$SSH_KEY" > "$key"
+          chmod 600 "$key"
+          # StrictHostKeyChecking=accept-new pins the host key on first
+          # use; subsequent runs verify it.
+          ssh -i "$key" -o StrictHostKeyChecking=accept-new \
+            "${SSH_USER}@${SSH_HOST}" \
+            "cd '${DEPLOY_DIR:-/opt/bamboo/infra/full}' && ./deploy.sh '${TAG}'"
+          rm -f "$key"

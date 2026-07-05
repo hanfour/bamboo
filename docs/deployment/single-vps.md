@@ -160,47 +160,44 @@ docker compose logs -f --tail=200 relay
 
 ### Updating to a new image
 
-The compose file pins controller / web / relay to `:latest`, which
-tracks the most recent **release tag**, not main HEAD. Builds for
-`vX.Y.Z` tag pushes update `:latest`; main pushes only update
-`:main` and `:<short-sha>` (see `.github/workflows/images.yml`).
-Routine upgrades therefore mean "wait for a new release tag, then
-pull". To test main HEAD instead, override the image to `:main` —
-but `:latest` is the supported deploy target.
+The compose file resolves controller / web / relay from
+`BAMBOO_IMAGE_TAG` in `.env` (falling back to `:latest` when unset).
+**Pin an explicit release** — `BAMBOO_IMAGE_TAG=v0.1.14` — so what's
+running is reproducible and auditable, rather than whatever `:latest`
+happened to resolve to at pull time. (`:latest` only advances on
+`vX.Y.Z` tag pushes, never on plain main merges — see
+`.github/workflows/images.yml` — which is exactly how a box silently
+falls behind what you think is deployed.)
 
-`serve` does NOT auto-run migrations on boot, so an upgrade that
-introduces new schema columns needs an explicit `migrate up`
-between pulling the new image and recreating the controller.
-Otherwise the new controller will boot against an old schema and
-its first read query against the new columns will fail.
-
-The full upgrade flow:
+Use the deploy script — it does the whole sequence safely in order, so
+you can't skip the migration or forget to recreate `web`:
 
 ```bash
 cd /opt/bamboo/infra/full
-
-# (Recommended) snapshot the DB so a failed migration can roll back.
-docker compose exec -T postgres pg_dump -U bamboo bamboo \
-  | gzip > "/home/ubuntu/bamboo-pre-$(date +%Y%m%d-%H%M).sql.gz"
-
-# Pull the new images. This does not restart anything yet.
-docker compose pull controller web relay
-
-# Apply any pending migrations using the new controller image. The
-# old controller stays up against the same DB during this step —
-# additive migrations (the only kind we ship) are safe for the old
-# controller's read paths.
-docker compose run --rm controller migrate status   # confirm what's Pending
-docker compose run --rm controller migrate up
-
-# Recreate controller + web with the new images. ~5s downtime.
-docker compose up -d controller web relay
-docker compose ps                                    # all services Up
+./deploy.sh v0.1.15      # pins the tag in .env, then deploys
+# or, to redeploy the tag already in .env:
+./deploy.sh
 ```
 
-If something looks wrong after `migrate up` but before recreate,
-roll the schema back with `docker compose run --rm controller migrate down`
-and re-pull the previous image tag.
+`deploy.sh` runs: fresh verified DB backup → `docker compose pull
+controller web relay` → `migrate status` + `migrate up` → recreate all
+three app services → `docker compose ps` + a health check. `serve` does
+NOT auto-migrate on boot, which is why the explicit `migrate up` between
+pull and recreate matters: additive migrations (the only kind shipped)
+are safe to apply while the old controller is still serving.
+
+To roll back: set the previous `BAMBOO_IMAGE_TAG` in `.env`, run
+`docker compose run --rm controller migrate down` if you had migrated,
+then `./deploy.sh`.
+
+#### Deploying from CI (optional)
+
+`.github/workflows/deploy.yml` is an **opt-in** `workflow_dispatch` job
+that SSHes to the box and runs `deploy.sh` for you. It stays dormant
+until you add the `DEPLOY_SSH_HOST` / `DEPLOY_SSH_USER` / `DEPLOY_SSH_KEY`
+/ `DEPLOY_DIR` repository secrets — storing a prod SSH key in CI is a
+deliberate tradeoff, so it's off by default. Running `deploy.sh` over SSH
+by hand is the safer baseline.
 
 ### Backing up Postgres
 
