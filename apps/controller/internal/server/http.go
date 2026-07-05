@@ -4,6 +4,7 @@ package server
 
 import (
 	"context"
+	"crypto/ed25519"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -70,9 +71,14 @@ type HTTPServer struct {
 	// until SetRelaySecret is called; relayTokenSecret() then falls back
 	// to `secret` (single-secret deploys and tests).
 	relaySecret []byte
-	baseURL     string
-	ttl         time.Duration
-	requireAuth bool
+	// relaySigningKey, when non-nil, signs relay tokens with Ed25519
+	// instead of HMAC — the relay verifies with only the public half, so
+	// a relay-host compromise can't forge tokens (audit C-1 root fix).
+	// Nil ⇒ fall back to HMAC (relayTokenSecret). Set via SetRelaySigningKey.
+	relaySigningKey ed25519.PrivateKey
+	baseURL         string
+	ttl             time.Duration
+	requireAuth     bool
 }
 
 // NewHTTPServer constructs the OIDC + REST HTTP frontend. ch may be nil
@@ -359,6 +365,15 @@ func (h *HTTPServer) SetRequireAuth(require bool) {
 // this from cfg.Auth.ResolvedRelaySecret (env: BAMBOO_RELAY_SECRET).
 func (h *HTTPServer) SetRelaySecret(secret []byte) {
 	h.relaySecret = secret
+}
+
+// SetRelaySigningKey enables Ed25519 relay-token signing (audit C-1 root
+// fix). When set, relay tokens are signed asymmetrically and the relay
+// verifies with only the public half. Nil (the default) keeps the HMAC
+// path. Callers wire this from cfg.Auth.RelaySigningKey via
+// auth.ParseRelaySigningKey (env: BAMBOO_RELAY_SIGNING_KEY).
+func (h *HTTPServer) SetRelaySigningKey(key ed25519.PrivateKey) {
+	h.relaySigningKey = key
 }
 
 // relayTokenSecret returns the key used to sign relay tokens: the

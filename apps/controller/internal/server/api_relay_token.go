@@ -103,12 +103,21 @@ func (h *HTTPServer) routeRelayToken(w http.ResponseWriter, r *http.Request) {
 	}
 
 	exp := time.Now().Add(relayTokenTTL)
-	tok, err := auth.IssueRelayToken(h.relayTokenSecret(), auth.RelayClaims{
+	claims := auth.RelayClaims{
 		TenantID:    tenant.ID,
 		PeerID:      peerID,
 		WGPublicKey: body.WGPublicKey,
 		ExpiresAt:   exp.Unix(),
-	}, relayTokenTTL)
+	}
+	// Ed25519 (asymmetric) when a signing key is configured — the relay
+	// verifies with only the public half, so a relay-host compromise
+	// can't forge tokens (audit C-1 root fix). Otherwise HMAC as before.
+	var tok string
+	if h.relaySigningKey != nil {
+		tok, err = auth.IssueRelayTokenEd25519(h.relaySigningKey, claims, relayTokenTTL)
+	} else {
+		tok, err = auth.IssueRelayToken(h.relayTokenSecret(), claims, relayTokenTTL)
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return

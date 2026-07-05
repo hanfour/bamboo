@@ -292,6 +292,36 @@ docker compose up -d --force-recreate controller relay
 Only relay tokens invalidate (TTL 1h); peers re-mint one automatically
 on their next heartbeat, so there's no user-visible disruption.
 
+### Asymmetric relay tokens (Ed25519 — strongest)
+
+The relay accepts connections from any peer on the internet, so it's the
+most exposed component. With HMAC (above), the relay holds a key that can
+also *forge* tokens if its host is compromised. Ed25519 signing fixes that
+at the root: the controller signs with a private key, the relay verifies
+with only the public half — a compromised relay can't mint anything.
+
+```bash
+cd /opt/bamboo/infra/full
+
+# Generate a matching keypair.
+docker compose run --rm controller relaykey
+# prints:
+#   BAMBOO_RELAY_SIGNING_KEY=<signing key>   (controller — keep secret)
+#   BAMBOO_RELAY_PUBLIC_KEY=<public key>     (relay — safe to distribute)
+
+# Paste BOTH lines into .env (the controller reads the signing key, the
+# relay reads the public key), then roll both.
+$EDITOR .env
+docker compose up -d --force-recreate controller relay
+```
+
+When `BAMBOO_RELAY_SIGNING_KEY` / `BAMBOO_RELAY_PUBLIC_KEY` are set they
+take precedence over the HMAC `BAMBOO_RELAY_SECRET`. Rotate the same way
+you rotate the HMAC key (regenerate, edit `.env`, roll both) — only relay
+tokens invalidate, peers re-mint within one heartbeat. Roll the relay
+first (accepts the new public key) then the controller, or both together
+for a brief token-refresh gap.
+
 ## Capacity expectations
 
 A single 4GB / 2 vCPU VPS handles:

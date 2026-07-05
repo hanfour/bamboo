@@ -20,4 +20,5 @@ func init() {
 	rootCmd.AddCommand(serveCmd)
 	rootCmd.AddCommand(versionCmd)
 	rootCmd.AddCommand(migrateCmd)
+	rootCmd.AddCommand(relaykeyCmd)
 }

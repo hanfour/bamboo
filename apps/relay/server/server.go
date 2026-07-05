@@ -12,6 +12,7 @@ package server
 
 import (
 	"context"
+	"crypto/ed25519"
 	"crypto/subtle"
 	"encoding/base64"
 	"errors"
@@ -31,7 +32,12 @@ import (
 type Options struct {
 	Log          *slog.Logger
 	SharedSecret []byte // HMAC key shared with the controller's relay-token issuer
-	AllowNoAuth  bool   // if true, accept any CLIENT_HELLO (single global tenant)
+	// PublicKey, when set, verifies Ed25519-signed relay tokens instead of
+	// HMAC (audit C-1 root fix). The relay then holds ONLY this public
+	// half — a relay-host compromise can't forge tokens. Takes precedence
+	// over SharedSecret when both are set.
+	PublicKey   ed25519.PublicKey
+	AllowNoAuth bool // if true, accept any CLIENT_HELLO (single global tenant)
 }
 
 // Server is the in-process router. Sessions are partitioned by
@@ -40,6 +46,7 @@ type Options struct {
 type Server struct {
 	log         *slog.Logger
 	secret      []byte
+	publicKey   ed25519.PublicKey
 	allowNoAuth bool
 
 	mu       sync.RWMutex
@@ -64,6 +71,7 @@ func New(opts Options) *Server {
 	return &Server{
 		log:         log,
 		secret:      opts.SharedSecret,
+		publicKey:   opts.PublicKey,
 		allowNoAuth: opts.AllowNoAuth,
 		sessions:    make(map[sessionKey]*session),
 	}
@@ -309,13 +317,24 @@ func (s *Server) verifyAuth(ch ClientHello) (string, error) {
 	if s.allowNoAuth {
 		return "dev", nil
 	}
-	if len(s.secret) == 0 {
-		return "", errors.New("server has no shared secret configured")
+	if len(s.secret) == 0 && len(s.publicKey) == 0 {
+		return "", errors.New("server has no relay-token verification key configured")
 	}
 	if ch.AuthToken == "" {
 		return "", errors.New("client_hello missing auth token")
 	}
-	claims, err := auth.VerifyRelayToken(s.secret, ch.AuthToken)
+	// Ed25519 (asymmetric) when a public key is configured — the relay
+	// holds only the public half, so a relay-host compromise can't forge
+	// tokens (audit C-1 root fix). Otherwise the shared-secret HMAC path.
+	var (
+		claims *auth.RelayClaims
+		err    error
+	)
+	if len(s.publicKey) > 0 {
+		claims, err = auth.VerifyRelayTokenEd25519(s.publicKey, ch.AuthToken)
+	} else {
+		claims, err = auth.VerifyRelayToken(s.secret, ch.AuthToken)
+	}
 	if err != nil {
 		return "", err
 	}

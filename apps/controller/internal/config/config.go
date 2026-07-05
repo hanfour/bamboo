@@ -130,6 +130,13 @@ type AuthConfig struct {
 	// BAMBOO_RELAY_SECRET (and the relay's BAMBOO_RELAY_SHARED_SECRET to
 	// the same value) to enable isolation.
 	RelaySecret string `yaml:"relay_secret"`
+	// RelaySigningKey is a base64 Ed25519 private-key seed. When set, the
+	// controller signs relay tokens with it (asymmetric) instead of HMAC,
+	// and the relay verifies with only the matching public key — so a
+	// relay-host compromise can't forge tokens at all (audit C-1 root
+	// fix). Generate a keypair with `controller relaykey`. Empty ⇒ HMAC
+	// (RelaySecret / SessionSecret) as before.
+	RelaySigningKey string `yaml:"relay_signing_key"`
 	// SessionTTL controls how long an issued session remains valid.
 	// Defaults to 24h if empty.
 	SessionTTL string `yaml:"session_ttl"`
@@ -255,6 +262,9 @@ func (c *Config) applyEnvOverrides() {
 	}
 	if v := os.Getenv("BAMBOO_RELAY_SECRET"); v != "" {
 		c.Auth.RelaySecret = v
+	}
+	if v := os.Getenv("BAMBOO_RELAY_SIGNING_KEY"); v != "" {
+		c.Auth.RelaySigningKey = v
 	}
 	if v := os.Getenv("BAMBOO_REQUIRE_AUTH"); v != "" {
 		// Any value other than "true" / "1" disables prod mode; this

@@ -72,6 +72,16 @@ func New(cfg *config.Config, pool *db.Pool, ch *clickhouse.Conn) (*Server, error
 	// Relay tokens are signed with a dedicated key when BAMBOO_RELAY_SECRET
 	// is set, else the session secret (audit C-1 — see ResolvedRelaySecret).
 	httpSrv.SetRelaySecret([]byte(cfg.Auth.ResolvedRelaySecret()))
+	// Ed25519 relay-token signing (audit C-1 root fix) when a signing key
+	// is configured; otherwise the HMAC path above stands. Fail fast on a
+	// malformed key rather than silently falling back to HMAC.
+	if cfg.Auth.RelaySigningKey != "" {
+		signKey, err := auth.ParseRelaySigningKey(cfg.Auth.RelaySigningKey)
+		if err != nil {
+			return nil, fmt.Errorf("parse BAMBOO_RELAY_SIGNING_KEY: %w", err)
+		}
+		httpSrv.SetRelaySigningKey(signKey)
+	}
 	coordHandler.SetRequireAuth(cfg.Auth.RequireAuth)
 	// Wire SMTP. New() returns a no-op sender when SMTP is unconfigured;
 	// the public base URL for invite links falls back to the OIDC base
