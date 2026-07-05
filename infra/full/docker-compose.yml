@@ -63,6 +63,12 @@ services:
       # JWTs. Falls back to the session secret when BAMBOO_RELAY_SECRET is
       # unset — must match the relay's BAMBOO_RELAY_SHARED_SECRET below.
       BAMBOO_RELAY_SECRET: "${BAMBOO_RELAY_SECRET:-${BAMBOO_SESSION_SECRET}}"
+      # Ed25519 relay-token signing (audit C-1 root fix). When set, the
+      # controller signs relay tokens with this private key and the relay
+      # verifies with only BAMBOO_RELAY_PUBLIC_KEY below — so the relay
+      # holds nothing that could forge tokens. Empty ⇒ the HMAC path above.
+      # Generate a pair with: docker compose run --rm controller relaykey
+      BAMBOO_RELAY_SIGNING_KEY: "${BAMBOO_RELAY_SIGNING_KEY:-}"
       BAMBOO_BASE_URL: "https://${DOMAIN}"
       BAMBOO_GRPC_ADDR: "0.0.0.0:8080"
       BAMBOO_HTTP_ADDR: "0.0.0.0:8081"
@@ -110,8 +116,13 @@ services:
     environment:
       # Must equal the controller's BAMBOO_RELAY_SECRET so relay tokens
       # verify. Same fallback expression keeps them in lockstep whether or
-      # not a dedicated relay secret is set (audit C-1).
+      # not a dedicated relay secret is set (audit C-1). Ignored when a
+      # public key is set below (Ed25519 takes precedence).
       BAMBOO_RELAY_SHARED_SECRET: "${BAMBOO_RELAY_SECRET:-${BAMBOO_SESSION_SECRET}}"
+      # Ed25519 public key matching the controller's BAMBOO_RELAY_SIGNING_KEY
+      # (audit C-1 root fix). When set, the relay verifies asymmetrically and
+      # holds NO forge-capable secret. Empty ⇒ the HMAC path above.
+      BAMBOO_RELAY_PUBLIC_KEY: "${BAMBOO_RELAY_PUBLIC_KEY:-}"
     command: ["--addr=:8443", "--dev-plaintext"]
     # Plaintext inside the docker network; Caddy adds TLS in front.
 

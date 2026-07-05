@@ -9,6 +9,7 @@ package main
 
 import (
 	"context"
+	"crypto/ed25519"
 	"crypto/tls"
 	"encoding/json"
 	"errors"
@@ -20,6 +21,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/hanfour/bamboo/apps/relay/auth"
 	"github.com/hanfour/bamboo/apps/relay/server"
 )
 
@@ -40,14 +42,27 @@ func main() {
 	slog.SetDefault(logger)
 
 	secret := []byte(os.Getenv("BAMBOO_RELAY_SHARED_SECRET"))
-	if !*devNoAuth && len(secret) == 0 {
-		slog.Error("BAMBOO_RELAY_SHARED_SECRET is required (or pass --dev-no-auth)")
+	// Ed25519 public key (audit C-1 root fix): when set, the relay
+	// verifies asymmetrically and holds NO secret that could forge tokens.
+	// Takes precedence over the HMAC shared secret.
+	var pubKey ed25519.PublicKey
+	if pk := os.Getenv("BAMBOO_RELAY_PUBLIC_KEY"); pk != "" {
+		var err error
+		pubKey, err = auth.ParseRelayPublicKey(pk)
+		if err != nil {
+			slog.Error("BAMBOO_RELAY_PUBLIC_KEY is invalid", "err", err)
+			os.Exit(2)
+		}
+	}
+	if !*devNoAuth && len(secret) == 0 && len(pubKey) == 0 {
+		slog.Error("BAMBOO_RELAY_PUBLIC_KEY or BAMBOO_RELAY_SHARED_SECRET is required (or pass --dev-no-auth)")
 		os.Exit(2)
 	}
 
 	srv := server.New(server.Options{
 		Log:          logger,
 		SharedSecret: secret,
+		PublicKey:    pubKey,
 		AllowNoAuth:  *devNoAuth,
 	})
 	mux := http.NewServeMux()

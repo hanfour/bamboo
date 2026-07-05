@@ -12,11 +12,13 @@
 package auth
 
 import (
+	"crypto/ed25519"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 )
@@ -74,4 +76,53 @@ func VerifyRelayToken(secret []byte, token string) (*RelayClaims, error) {
 		return nil, ErrInvalidToken
 	}
 	return &claims, nil
+}
+
+// VerifyRelayTokenEd25519 validates an Ed25519-signed relay token against
+// the controller's public key. Mirrors the controller's
+// IssueRelayTokenEd25519 — it verifies ed25519(relayTokenDomain || body).
+// The relay holds ONLY the public key, so a relay-host compromise can't
+// forge tokens (audit C-1 root fix).
+func VerifyRelayTokenEd25519(pub ed25519.PublicKey, token string) (*RelayClaims, error) {
+	if len(pub) != ed25519.PublicKeySize {
+		return nil, ErrInvalidToken
+	}
+	body, sig, ok := strings.Cut(token, ".")
+	if !ok {
+		return nil, ErrInvalidToken
+	}
+	rawSig, err := base64.RawURLEncoding.DecodeString(sig)
+	if err != nil {
+		return nil, ErrInvalidToken
+	}
+	if !ed25519.Verify(pub, []byte(relayTokenDomain+body), rawSig) {
+		return nil, ErrInvalidToken
+	}
+	rawBody, err := base64.RawURLEncoding.DecodeString(body)
+	if err != nil {
+		return nil, ErrInvalidToken
+	}
+	var claims RelayClaims
+	if err := json.Unmarshal(rawBody, &claims); err != nil {
+		return nil, ErrInvalidToken
+	}
+	if time.Now().Unix() > claims.ExpiresAt {
+		return nil, ErrInvalidToken
+	}
+	return &claims, nil
+}
+
+// ParseRelayPublicKey decodes the controller's base64 Ed25519 public key
+// (BAMBOO_RELAY_PUBLIC_KEY). MUST use the same base64 flavor as the
+// controller's key encoding (std, padded) — see relayKeyEncoding in
+// apps/controller/internal/auth/relay_token.go.
+func ParseRelayPublicKey(b64 string) (ed25519.PublicKey, error) {
+	pub, err := base64.StdEncoding.DecodeString(strings.TrimSpace(b64))
+	if err != nil {
+		return nil, fmt.Errorf("decode relay public key: %w", err)
+	}
+	if len(pub) != ed25519.PublicKeySize {
+		return nil, fmt.Errorf("relay public key: want %d bytes, got %d", ed25519.PublicKeySize, len(pub))
+	}
+	return ed25519.PublicKey(pub), nil
 }
