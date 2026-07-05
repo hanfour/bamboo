@@ -74,6 +74,29 @@ else
     echo "==> systemctl not found; skipping wg-state-reporter install"
 fi
 
+# 1c) Install the nightly Postgres backup timer. Local rotated dumps by
+# default (protects against a bad migration or accidental data loss);
+# set BACKUP_S3_URI in .env to also ship each dump off-box, which is what
+# actually protects against losing the whole box (a single point of
+# failure). A drop-in pins the compose dir to wherever THIS bootstrap
+# ran, so the timer works whether the deploy lives at /opt/bamboo or
+# /opt/bamboo/infra/full. Idempotent.
+if command -v systemctl >/dev/null 2>&1; then
+    echo "==> installing bamboo-backup systemd timer (nightly Postgres dump)"
+    sudo install -d -m 0700 -o root -g root /var/backups/bamboo
+    sudo install -m 0755 backup.sh             /usr/local/sbin/bamboo-backup.sh
+    sudo install -m 0644 bamboo-backup.service /etc/systemd/system/bamboo-backup.service
+    sudo install -m 0644 bamboo-backup.timer   /etc/systemd/system/bamboo-backup.timer
+    sudo mkdir -p /etc/systemd/system/bamboo-backup.service.d
+    printf '[Service]\nEnvironment=BAMBOO_COMPOSE_DIR=%s\nWorkingDirectory=%s\n' "$PWD" "$PWD" \
+        | sudo tee /etc/systemd/system/bamboo-backup.service.d/compose-dir.conf >/dev/null
+    sudo systemctl daemon-reload
+    sudo systemctl enable --now bamboo-backup.timer
+    echo "    dumps -> /var/backups/bamboo (keep 14). Set BACKUP_S3_URI in .env for off-box DR."
+else
+    echo "==> systemctl not found; skipping bamboo-backup install"
+fi
+
 # 2) Run migrations via the controller container itself. We need the
 # embedded migration files which live in the image; running migrate
 # in a one-shot container is the simplest path.
