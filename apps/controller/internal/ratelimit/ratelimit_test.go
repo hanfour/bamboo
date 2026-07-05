@@ -39,8 +39,13 @@ func TestLimiter_RefillsOverTime(t *testing.T) {
 	l := newWithClock(60, 2, c) // 1 token/sec, burst 2
 	key := "k"
 
-	if !l.Allow(key) || !l.Allow(key) {
-		t.Fatal("burst of 2 should pass")
+	// Two separate calls (not `a || a`, which staticcheck SA4000 flags) —
+	// each Allow consumes a token, so the burst of 2 must both pass.
+	if !l.Allow(key) {
+		t.Fatal("1st of burst should pass")
+	}
+	if !l.Allow(key) {
+		t.Fatal("2nd of burst should pass")
 	}
 	if l.Allow(key) {
 		t.Fatal("3rd immediate request should be denied")
