@@ -142,6 +142,7 @@
         "connection": "Connection",
         "timestamps": "Timestamps",
         "advertise": "Advertised",
+        "useExitNode": "Exit node routing",
         "actions": "Actions",
         "bandwidth": "Bandwidth",
         "connectionTimeline": "Connection path",
@@ -151,6 +152,11 @@
         "window": "Last {window}",
         "peak": "peak {rate}",
         "sparklineAria": "{label} throughput sparkline, {total} transferred"
+      },
+      "useExitNode": {
+        "label": "Route default traffic via",
+        "none": "None (direct)",
+        "hint": "Send this peer's internet traffic through an approved exit node. Only exit nodes approved in this tenant appear here."
       },
       "advertise": {
         "routesHint": "This peer is offering to route the following CIDRs. Approve the ones you trust — other peers' allowed_ips merge in only what you approve.",

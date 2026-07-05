@@ -520,6 +520,37 @@ export async function setApprovedRoutesAction(
   }
 }
 
+// setUsingExitNodeAction is the CONSUME side of exit nodes (issue
+// #137): it selects which approved exit node `id` routes its default
+// traffic through. Pass the target peer's id to set, or null / "" to
+// clear. The controller validates the target is an approved exit node
+// in the same tenant (400 otherwise) and bumps the policy revision so
+// the peer re-pulls allowed_ips with the 0.0.0.0/0 default route.
+export async function setUsingExitNodeAction(
+  id: string,
+  exitNodePeerId: string | null,
+): Promise<ActionResult> {
+  try {
+    const res = await fetch(
+      `${BASE}/api/v1/peers/${encodeURIComponent(id)}/use-exit-node`,
+      {
+        method: 'POST',
+        headers: await buildHeaders(),
+        body: JSON.stringify({ exitNodePeerId: exitNodePeerId ?? '' }),
+        cache: 'no-store',
+      },
+    );
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      return { ok: false, error: `${res.status} ${text || res.statusText}` };
+    }
+    revalidatePath('/[locale]/peers', 'page');
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: (e as Error).message };
+  }
+}
+
 // setExitNodeApprovedAction is the admin sign-off side of exit
 // nodes (issue #137). Approving requires the peer to already be
 // exit_node_capable (api.go:1234) — the controller returns 409
