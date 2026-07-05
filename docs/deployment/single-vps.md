@@ -204,13 +204,62 @@ and re-pull the previous image tag.
 
 ### Backing up Postgres
 
+`bootstrap.sh` installs a **nightly backup timer** (`bamboo-backup.timer`,
+03:30 UTC) that runs [`backup.sh`](../../infra/full/backup.sh): it
+`pg_dump`s the `bamboo` database, verifies the gzip, writes a timestamped
+copy to `/var/backups/bamboo`, and keeps the newest 14 (older ones roll
+off). Postgres is the only durable store backed up — ClickHouse holds
+best-effort telemetry that's intentionally out of scope.
+
+Check it's armed and run one on demand:
+
 ```bash
-docker compose exec -T postgres pg_dump -U bamboo bamboo | gzip > bamboo-$(date +%Y%m%d).sql.gz
+systemctl list-timers bamboo-backup.timer     # next fire time
+sudo systemctl start bamboo-backup.service     # dump right now
+ls -lh /var/backups/bamboo                     # the dumps
 ```
 
-A nightly cron job that ships the dump to S3 / Cloudflare R2 is the
-production pattern. For first-user dogfood, weekly manual backups
-to your laptop are sufficient.
+**Off-box is what saves you if the VPS dies.** Local dumps live on the
+same disk as the database — they protect against a bad migration or an
+`DROP TABLE` accident, not against losing the box. To ship each dump off
+the box, install the `aws` CLI on the host and set in `.env`:
+
+```bash
+BACKUP_S3_URI=s3://your-bucket/bamboo
+# For Cloudflare R2 / MinIO / any S3-compatible store, also set:
+BACKUP_S3_ENDPOINT=https://<accountid>.r2.cloudflarestorage.com
+```
+
+(Provide the bucket credentials the standard way — `aws configure`, an
+instance role, or `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` in the
+service environment.) Let the bucket's lifecycle policy own long-term
+retention; `backup.sh` only rotates the local copies.
+
+### Restoring from a backup
+
+```bash
+cd /opt/bamboo/infra/full     # or wherever your compose file lives
+
+# 1. Pick a dump (local, or `aws s3 cp` one back from your bucket first).
+DUMP=/var/backups/bamboo/bamboo-20260705-033000.sql.gz
+
+# 2. Stop the controller so nothing writes mid-restore.
+docker compose stop controller web relay
+
+# 3. Drop + recreate the schema, then load the dump. pg_dump output is
+#    plain SQL, so psql replays it. --set ON_ERROR_STOP=1 aborts on the
+#    first error instead of limping through a half-restore.
+gunzip -c "$DUMP" \
+  | docker compose exec -T postgres \
+      psql -U bamboo -d bamboo --set ON_ERROR_STOP=1 -1
+
+# 4. Bring the stack back and sanity-check.
+docker compose up -d controller web relay
+docker compose run --rm controller migrate status   # should be all Applied
+```
+
+If the dump predates the running image's schema, run `migrate up` after
+step 3 to re-apply any newer migrations on top of the restored data.
 
 ### Adding OIDC sign-in
 

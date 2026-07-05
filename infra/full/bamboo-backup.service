@@ -1,0 +1,15 @@
+[Unit]
+Description=bamboo Postgres backup (dump + rotate + optional off-box upload)
+After=docker.service
+Wants=docker.service
+
+[Service]
+Type=oneshot
+# The installed script lives in /usr/local/sbin, so it can't find the
+# compose file from its own dir — point it at the deploy dir explicitly.
+Environment=BAMBOO_COMPOSE_DIR=/opt/bamboo/infra/full
+WorkingDirectory=/opt/bamboo/infra/full
+ExecStart=/usr/local/sbin/bamboo-backup.sh
+# Root: needs the docker socket to exec pg_dump in the postgres container
+# and write under /var/backups/bamboo.
+User=root
