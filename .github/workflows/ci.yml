@@ -142,7 +142,7 @@ jobs:
         run: ./bin/controller version
 
   web:
-    name: Web (lint + build)
+    name: Web (lint + test + build)
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -157,6 +157,7 @@ jobs:
       - run: npm ci --no-audit --no-fund
       - run: npm run lint
       - run: npm run typecheck
+      - run: npm run test
       - run: npm run build
 
   apple:
