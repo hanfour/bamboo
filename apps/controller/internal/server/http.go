@@ -187,7 +187,7 @@ func NewHTTPServer(
 	mux.Handle("/metrics", h.metrics.Handler())
 	h.srv = &http.Server{
 		Addr:              addr,
-		Handler:           withCORS(metricsMiddleware(h.metrics, h.rateLimitMiddleware(mux))),
+		Handler:           withCORS(metricsMiddleware(h.metrics, h.rateLimitMiddleware(mux)), parseCORSOrigins(os.Getenv("BAMBOO_CORS_ORIGINS"))),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      30 * time.Second,
@@ -329,21 +329,50 @@ func normalizeRoute(path string) string {
 	return path
 }
 
-// withCORS adds permissive CORS for the dev environment so the Next.js
-// app can call the controller from the browser when running outside of
-// SSR. Production should narrow Origin via configuration.
-func withCORS(next http.Handler) http.Handler {
+// withCORS adds CORS headers. When allowed is empty it echoes the dev-
+// friendly wildcard ("*") so a local Next.js dev server can call the
+// controller. When allowed is non-empty (BAMBOO_CORS_ORIGINS in prod,
+// audit M-5), it reflects the request Origin only if it's on the
+// allowlist — any other origin gets no CORS header and the browser
+// blocks the cross-origin read.
+func withCORS(next http.Handler, allowed map[string]bool) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Tenant-Slug")
-		w.Header().Set("Access-Control-Max-Age", "300")
+		acao := ""
+		if len(allowed) == 0 {
+			acao = "*"
+		} else if origin := r.Header.Get("Origin"); origin != "" && allowed[origin] {
+			acao = origin
+			w.Header().Set("Vary", "Origin")
+		}
+		if acao != "" {
+			w.Header().Set("Access-Control-Allow-Origin", acao)
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Tenant-Slug")
+			w.Header().Set("Access-Control-Max-Age", "300")
+		}
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// parseCORSOrigins builds the allowlist from a comma-separated env value
+// (e.g. "https://bamboo.example.com,https://admin.example.com"). Empty
+// input ⇒ nil map ⇒ withCORS falls back to the "*" dev default.
+func parseCORSOrigins(env string) map[string]bool {
+	env = strings.TrimSpace(env)
+	if env == "" {
+		return nil
+	}
+	out := make(map[string]bool)
+	for _, o := range strings.Split(env, ",") {
+		if o = strings.TrimSpace(o); o != "" {
+			out[o] = true
+		}
+	}
+	return out
 }
 
 // Handler returns the wired HTTP handler. Used by the e2e fixture so
@@ -730,7 +759,7 @@ func (h *HTTPServer) handleSignOut(w http.ResponseWriter, r *http.Request) {
 		Value:    "",
 		Path:     "/",
 		HttpOnly: true,
-		Secure:   r.TLS != nil,
+		Secure:   requestIsHTTPS(r),
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   -1,
 	})
@@ -966,7 +995,7 @@ func (h *HTTPServer) handleCallback(w http.ResponseWriter, r *http.Request, prov
 		Value:    token,
 		Path:     "/",
 		HttpOnly: true,
-		Secure:   r.TLS != nil,
+		Secure:   requestIsHTTPS(r),
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   int(h.ttl.Seconds()),
 	})
@@ -1098,6 +1127,21 @@ func (h *HTTPServer) resolveInvite(ctx context.Context, token string) (*repo.Use
 		return nil, "", fmt.Errorf("resolve tenant for invite: %w", err)
 	}
 	return inv, tenant.Slug, nil
+}
+
+// requestIsHTTPS reports whether the original client request was HTTPS,
+// used for the session cookie's Secure flag (audit H-2). Direct TLS
+// (r.TLS) is the obvious case; behind a TLS-terminating reverse proxy
+// (Caddy) the controller sees plain HTTP, so we also trust the proxy's
+// X-Forwarded-Proto. Trusting XFF here can only make the cookie MORE
+// restrictive (a spoofed value can't downgrade a legit user's cookie),
+// so it's safe; without it, prod behind Caddy shipped session cookies
+// without Secure.
+func requestIsHTTPS(r *http.Request) bool {
+	if r.TLS != nil {
+		return true
+	}
+	return strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
 }
 
 // requestIPString returns the best-effort client IP for audit

@@ -11,6 +11,12 @@
 # control-plane traffic.
 
 {$DOMAIN} {
+    # HSTS: after the first HTTPS visit, browsers refuse plain-HTTP to
+    # this host for a year — closes the first-request MITM window on the
+    # session cookie (audit H-2). Drop includeSubDomains if you host
+    # unrelated services on sibling subdomains you don't want pinned.
+    header Strict-Transport-Security "max-age=31536000; includeSubDomains"
+
     # Controller endpoints — REST + OIDC + healthz.
     @controller path /api/* /auth/* /healthz
     handle @controller {

@@ -119,7 +119,12 @@ func buildGRPCWithAuth(pool *db.Pool, ch *clickhouse.Conn, requireAuth bool, ses
 	bamboov1.RegisterCoordinatorServiceServer(s, coordHandler)
 	bamboov1.RegisterPolicyServiceServer(s, handlers.NewPolicyHandler(pool, ch, bus, authHandler))
 	bamboov1.RegisterTelemetryServiceServer(s, handlers.NewTelemetryHandler(pool, ch))
-	reflection.Register(s)
+	// gRPC reflection exposes the full service schema — handy for grpcurl
+	// in dev, needless attack-surface in prod (audit L-1). Off in prod
+	// mode (require_auth) unless explicitly re-enabled.
+	if !requireAuth || os.Getenv("BAMBOO_GRPC_REFLECTION") == "true" {
+		reflection.Register(s)
+	}
 
 	return s, authHandler, coordHandler
 }
