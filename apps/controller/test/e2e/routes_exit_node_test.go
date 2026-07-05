@@ -338,14 +338,174 @@ func TestApproveExitNode_BumpsPolicyRevision(t *testing.T) {
 	}
 }
 
+// TestUseExitNode_SetAndClear drives the CONSUME side of exit nodes
+// (the half that was previously a dead path: SetUsingExitNode had no
+// caller). Admin selects an approved exit node for a peer; the peer's
+// using_exit_node_peer_id is set and its view of the exit node's
+// allowed_ips gains the 0.0.0.0/0 default route. Clearing removes both.
+func TestUseExitNode_SetAndClear(t *testing.T) {
+	f := startFixture(t)
+
+	// Exit gateway: advertises + gets approved.
+	gwReg := postJSON(t, f.httpURL+"/api/v1/peers/register", map[string]any{
+		"hostname":           "exit-gw",
+		"wireguardPublicKey": randomPubKey(t),
+		"tenantSlug":         f.tenantSlug,
+		"advertiseExitNode":  true,
+	})
+	gwID := mustField(t, gwReg.body, "self.id")
+	approve := sendJSONWithTenant(t, http.MethodPost,
+		f.httpURL+"/api/v1/peers/"+gwID+"/exit-node", f.tenantSlug,
+		map[string]any{"approved": true})
+	if approve.status != http.StatusOK {
+		t.Fatalf("approve exit-node: %d body=%s", approve.status, approve.body)
+	}
+
+	// Client peer. Reuse its pubkey on re-register so it stays the same
+	// row (register upserts by wireguard_public_key).
+	lapKey := randomPubKey(t)
+	lapReg := postJSON(t, f.httpURL+"/api/v1/peers/register", map[string]any{
+		"hostname":           "laptop",
+		"wireguardPublicKey": lapKey,
+		"tenantSlug":         f.tenantSlug,
+	})
+	lapID := mustField(t, lapReg.body, "self.id")
+
+	// Select the exit node.
+	use := sendJSONWithTenant(t, http.MethodPost,
+		f.httpURL+"/api/v1/peers/"+lapID+"/use-exit-node", f.tenantSlug,
+		map[string]any{"exitNodePeerId": gwID})
+	if use.status != http.StatusOK {
+		t.Fatalf("use-exit-node: %d body=%s", use.status, use.body)
+	}
+	if row := getPeerWithRoutes(t, f, lapID); row.UsingExitNodePeerID != gwID {
+		t.Errorf("usingExitNodePeerId = %q, want %q", row.UsingExitNodePeerID, gwID)
+	}
+
+	// The laptop re-registers (same identity) and its view of the gw peer
+	// must now carry the default route through the exit node.
+	re := postJSON(t, f.httpURL+"/api/v1/peers/register", map[string]any{
+		"hostname":           "laptop",
+		"wireguardPublicKey": lapKey,
+		"tenantSlug":         f.tenantSlug,
+	})
+	if re.status != http.StatusOK {
+		t.Fatalf("re-register: %d body=%s", re.status, re.body)
+	}
+	if !gwAllowedIPsContain(t, re.body, gwID, "0.0.0.0/0") {
+		t.Errorf("after use-exit-node, gw allowedIps missing 0.0.0.0/0; body=%s", re.body)
+	}
+
+	// Clear the selection.
+	clear := sendJSONWithTenant(t, http.MethodPost,
+		f.httpURL+"/api/v1/peers/"+lapID+"/use-exit-node", f.tenantSlug,
+		map[string]any{"exitNodePeerId": ""})
+	if clear.status != http.StatusOK {
+		t.Fatalf("clear use-exit-node: %d body=%s", clear.status, clear.body)
+	}
+	if row := getPeerWithRoutes(t, f, lapID); row.UsingExitNodePeerID != "" {
+		t.Errorf("after clear, usingExitNodePeerId = %q, want empty", row.UsingExitNodePeerID)
+	}
+	re2 := postJSON(t, f.httpURL+"/api/v1/peers/register", map[string]any{
+		"hostname":           "laptop",
+		"wireguardPublicKey": lapKey,
+		"tenantSlug":         f.tenantSlug,
+	})
+	if gwAllowedIPsContain(t, re2.body, gwID, "0.0.0.0/0") {
+		t.Errorf("after clear, gw allowedIps still has 0.0.0.0/0; body=%s", re2.body)
+	}
+}
+
+// TestUseExitNode_RejectsUnapprovedTarget: an exit-node-capable but
+// not-yet-approved peer can't be selected as an exit node.
+func TestUseExitNode_RejectsUnapprovedTarget(t *testing.T) {
+	f := startFixture(t)
+
+	gwReg := postJSON(t, f.httpURL+"/api/v1/peers/register", map[string]any{
+		"hostname":           "unapproved-gw",
+		"wireguardPublicKey": randomPubKey(t),
+		"tenantSlug":         f.tenantSlug,
+		"advertiseExitNode":  true, // capable, but NOT approved
+	})
+	gwID := mustField(t, gwReg.body, "self.id")
+
+	lapReg := postJSON(t, f.httpURL+"/api/v1/peers/register", map[string]any{
+		"hostname":           "laptop",
+		"wireguardPublicKey": randomPubKey(t),
+		"tenantSlug":         f.tenantSlug,
+	})
+	lapID := mustField(t, lapReg.body, "self.id")
+
+	use := sendJSONWithTenant(t, http.MethodPost,
+		f.httpURL+"/api/v1/peers/"+lapID+"/use-exit-node", f.tenantSlug,
+		map[string]any{"exitNodePeerId": gwID})
+	if use.status != http.StatusBadRequest {
+		t.Errorf("use unapproved exit node: status=%d, want 400; body=%s", use.status, use.body)
+	}
+}
+
+// TestUseExitNode_RejectsSelfAndUnknown: a peer can't route through
+// itself, and an unknown target id is a 400 (not a 500/panic).
+func TestUseExitNode_RejectsSelfAndUnknown(t *testing.T) {
+	f := startFixture(t)
+
+	lapReg := postJSON(t, f.httpURL+"/api/v1/peers/register", map[string]any{
+		"hostname":           "laptop",
+		"wireguardPublicKey": randomPubKey(t),
+		"tenantSlug":         f.tenantSlug,
+	})
+	lapID := mustField(t, lapReg.body, "self.id")
+
+	self := sendJSONWithTenant(t, http.MethodPost,
+		f.httpURL+"/api/v1/peers/"+lapID+"/use-exit-node", f.tenantSlug,
+		map[string]any{"exitNodePeerId": lapID})
+	if self.status != http.StatusBadRequest {
+		t.Errorf("use self as exit node: status=%d, want 400; body=%s", self.status, self.body)
+	}
+
+	unknown := sendJSONWithTenant(t, http.MethodPost,
+		f.httpURL+"/api/v1/peers/"+lapID+"/use-exit-node", f.tenantSlug,
+		map[string]any{"exitNodePeerId": "00000000-0000-0000-0000-000000000000"})
+	if unknown.status != http.StatusBadRequest {
+		t.Errorf("use unknown exit node: status=%d, want 400; body=%s", unknown.status, unknown.body)
+	}
+}
+
 // --- helpers ------------------------------------------------------
 
+// gwAllowedIPsContain reports whether the peer `gwID` in a register
+// response's peers list has `cidr` among its allowedIps.
+func gwAllowedIPsContain(t *testing.T, body []byte, gwID, cidr string) bool {
+	t.Helper()
+	var parsed struct {
+		Peers []struct {
+			ID         string   `json:"id"`
+			AllowedIps []string `json:"allowedIps"`
+		} `json:"peers"`
+	}
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		t.Fatalf("decode peers: %v body=%s", err, body)
+	}
+	for _, p := range parsed.Peers {
+		if p.ID != gwID {
+			continue
+		}
+		for _, c := range p.AllowedIps {
+			if c == cidr {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 type peerRouteShape struct {
-	ID               string   `json:"id"`
-	AdvertisedRoutes []string `json:"advertisedRoutes"`
-	ApprovedRoutes   []string `json:"approvedRoutes"`
-	ExitNodeCapable  bool     `json:"exitNodeCapable"`
-	ExitNodeApproved bool     `json:"exitNodeApproved"`
+	ID                  string   `json:"id"`
+	AdvertisedRoutes    []string `json:"advertisedRoutes"`
+	ApprovedRoutes      []string `json:"approvedRoutes"`
+	ExitNodeCapable     bool     `json:"exitNodeCapable"`
+	ExitNodeApproved    bool     `json:"exitNodeApproved"`
+	UsingExitNodePeerID string   `json:"usingExitNodePeerId"`
 }
 
 func getPeerWithRoutes(t *testing.T, f *fixture, peerID string) peerRouteShape {

@@ -181,6 +181,20 @@ func (h *HTTPServer) routeAPI(w http.ResponseWriter, r *http.Request) {
 			h.apiPeerSetApprovedRoutes(w, r, authn, tenant, id)
 			return
 		}
+		// "{id}/use-exit-node" — admin selects which approved exit node
+		// this peer routes its default traffic through (the consume side
+		// of issue #137). Body: {"exitNodePeerId": "<uuid>"} to set, or
+		// "" / null to clear. Checked BEFORE "/exit-node" is irrelevant
+		// (the suffixes differ by "/use-" vs "/"), but kept adjacent for
+		// locality.
+		if id, found := strings.CutSuffix(rest, "/use-exit-node"); found && id != "" && !strings.Contains(id, "/") {
+			if r.Method != http.MethodPost {
+				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+				return
+			}
+			h.apiPeerUseExitNode(w, r, authn, tenant, id)
+			return
+		}
 		// "{id}/exit-node" — admin approves/revokes the peer's
 		// exit-node role (issue #137). Body: {"approved": bool}.
 		if id, found := strings.CutSuffix(rest, "/exit-node"); found && id != "" && !strings.Contains(id, "/") {
@@ -1552,6 +1566,121 @@ func (h *HTTPServer) apiPeerSetExitNodeApproved(w http.ResponseWriter, r *http.R
 	})
 	// #170: bump policy_revision + publish PolicyChanged so peers
 	// re-pull allowed_ips without a manual reconnect.
+	if _, err := h.coord.BumpPolicyRevision(r.Context(), tenant.ID); err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("bump policy revision: %w", err))
+		return
+	}
+	updated, err := h.peers.GetByID(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, peerToJSON(updated))
+}
+
+// apiPeerUseExitNodeReq is the request shape for selecting the exit node
+// a peer routes its default traffic through (the consume side of issue
+// #137). ExitNodePeerID is the target peer's UUID; "" (or null) clears
+// the selection so the peer stops using an exit node.
+type apiPeerUseExitNodeReq struct {
+	ExitNodePeerID string `json:"exitNodePeerId"`
+}
+
+// apiPeerUseExitNode implements POST /api/v1/peers/{id}/use-exit-node.
+// Admin selects which approved exit node this peer sends its default
+// traffic (0.0.0.0/0 + ::/0) through. This is the missing consume side
+// of exit nodes: advertise + approve already existed, but nothing wrote
+// using_exit_node_peer_id, so allowedIPsFor never opened the default
+// route (coordinator.go — the dst.ExitNodeApproved && src.Using==dst
+// branch). Setting it here + bumping the policy revision makes the peer
+// re-pull allowed_ips with the default route pointed at the exit node.
+//
+// Validation: the target must exist in the same tenant, be
+// exit_node_approved, and not be the peer itself.
+func (h *HTTPServer) apiPeerUseExitNode(w http.ResponseWriter, r *http.Request, authn *authnContext, tenant *repo.Tenant, idStr string) {
+	if !h.requireAdmin(w, r, authn, tenant, "peer.exit-node.use") {
+		return
+	}
+	id, err := uuid.Parse(idStr)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	current, err := h.peers.GetByID(r.Context(), id)
+	if errors.Is(err, repo.ErrNotFound) {
+		http.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if current.TenantID != tenant.ID {
+		http.NotFound(w, r)
+		return
+	}
+	var req apiPeerUseExitNodeReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("decode body: %w", err))
+		return
+	}
+
+	// Resolve + validate the target. Empty ⇒ clear the selection.
+	var target *uuid.UUID
+	if strings.TrimSpace(req.ExitNodePeerID) != "" {
+		targetID, err := uuid.Parse(strings.TrimSpace(req.ExitNodePeerID))
+		if err != nil {
+			writeError(w, http.StatusBadRequest, fmt.Errorf("invalid exitNodePeerId: %w", err))
+			return
+		}
+		if targetID == id {
+			writeError(w, http.StatusBadRequest, errors.New("a peer cannot use itself as an exit node"))
+			return
+		}
+		exitPeer, err := h.peers.GetByID(r.Context(), targetID)
+		if errors.Is(err, repo.ErrNotFound) || (err == nil && exitPeer.TenantID != tenant.ID) {
+			// Cross-tenant / missing target collapses to the same 400 so
+			// callers can't probe peer IDs in other tenants.
+			writeError(w, http.StatusBadRequest, errors.New("exit node not found in this tenant"))
+			return
+		}
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		if !exitPeer.ExitNodeApproved {
+			writeError(w, http.StatusBadRequest, errors.New("target peer is not an approved exit node"))
+			return
+		}
+		target = &targetID
+	}
+
+	if err := h.peers.SetUsingExitNode(r.Context(), id, target); err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("set using_exit_node: %w", err))
+		return
+	}
+
+	// Audit BEFORE the bump (preserve the trail across partial-failure
+	// retries — same idiom as apiPeerSetExitNodeApproved).
+	from := ""
+	if current.UsingExitNodePeerID != nil {
+		from = current.UsingExitNodePeerID.String()
+	}
+	to := ""
+	if target != nil {
+		to = target.String()
+	}
+	writePeerAudit(r.Context(), h.audits, authn, tenant.ID, id, "peer.exit-node.use", map[string]any{
+		"hostname": current.Hostname,
+		"using_exit_node_peer_id": map[string]any{
+			"from": from,
+			"to":   to,
+		},
+	})
+
+	// Bump policy_revision + publish PolicyChanged so this peer re-pulls
+	// allowed_ips (now including / excluding the 0.0.0.0/0 default route)
+	// without a manual reconnect (#170).
 	if _, err := h.coord.BumpPolicyRevision(r.Context(), tenant.ID); err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Errorf("bump policy revision: %w", err))
 		return

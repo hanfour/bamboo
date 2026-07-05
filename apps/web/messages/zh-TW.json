@@ -142,6 +142,7 @@
         "connection": "連線狀態",
         "timestamps": "時間",
         "advertise": "宣告路由",
+        "useExitNode": "Exit node 路由",
         "actions": "操作",
         "bandwidth": "頻寬流量",
         "connectionTimeline": "連線路徑變化",
@@ -151,6 +152,11 @@
         "window": "最近 {window}",
         "peak": "尖峰 {rate}",
         "sparklineAria": "{label} 流量走勢圖，共傳輸 {total}"
+      },
+      "useExitNode": {
+        "label": "預設流量路由經由",
+        "none": "無(直接連線)",
+        "hint": "將此節點的對外流量導向一個已核准的 exit node。只有本租戶已核准的 exit node 會出現在此。"
       },
       "advertise": {
         "routesHint": "此節點宣告以下 CIDR 可由它轉發。請核可你信任的範圍 —— 只有核可的部分才會合併進其他節點的 allowed_ips。",

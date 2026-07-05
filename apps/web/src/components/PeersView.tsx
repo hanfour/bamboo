@@ -53,6 +53,9 @@ export function PeersView({
 
   const pending = peers.filter((p) => p.approvalStatus === 'pending');
   const active = peers.filter((p) => p.approvalStatus === 'approved');
+  // Approved exit nodes are the selectable targets for the drawer's
+  // "route through exit node" picker (the consume side of #137).
+  const exitNodeOptions = active.filter((p) => p.exitNodeApproved);
 
   const setSelected = useCallback(
     (id: string | null) => {
@@ -83,6 +86,7 @@ export function PeersView({
         connectionEvents={selectedConnectionEvents}
         routeConflicts={selectedRouteConflicts}
         bandwidth={selectedBandwidth}
+        exitNodeOptions={exitNodeOptions}
         open={open}
         onClose={() => setSelected(null)}
         onDeleted={() => setSelected(null)}

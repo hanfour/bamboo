@@ -13,6 +13,7 @@ import {
  setNAT64EgressApprovedAction,
  setPeerStatusAction,
  setPeerTagsAction,
+ setUsingExitNodeAction,
 } from '@/lib/actions';
 import { useDialogA11y } from '@/hooks/useDialogA11y';
 import type {
@@ -59,6 +60,11 @@ type Props = {
  // controller without the endpoint) → section renders an empty
  // state rather than taking down the drawer.
  bandwidth: PeerBandwidthSample[];
+ // exitNodeOptions is the tenant's approved exit nodes — the
+ // selectable targets for the "route through exit node" picker (the
+ // consume side of #137). Passed from PeersView, which already holds
+ // the full peer list; the picker filters out the peer itself.
+ exitNodeOptions: Peer[];
  open: boolean;
  onClose: () => void;
  // onDeleted fires after a successful delete so PeersView can clear
@@ -72,7 +78,7 @@ type Props = {
 // forward and link-sharing both work; `peer` is null when the id
 // resolved to 404 (deleted peer or stale link), and the drawer
 // renders a not-found state in that case.
-export function PeerDrawer({ peerResult, events, connectionEvents, routeConflicts, bandwidth, open, onClose, onDeleted }: Props) {
+export function PeerDrawer({ peerResult, events, connectionEvents, routeConflicts, bandwidth, exitNodeOptions, open, onClose, onDeleted }: Props) {
  const peer = peerResult?.kind === 'ok' ? peerResult.value : null;
  const t = useTranslations('peers.drawer');
  const tStatus = useTranslations('peers.status');
@@ -106,7 +112,7 @@ export function PeerDrawer({ peerResult, events, connectionEvents, routeConflict
  >
  <DrawerHeader peer={peer} statusLabel={peer ? tStatus(peer.status) : ''} onClose={onClose} closeLabel={t('close')} />
  <div className="flex-1 overflow-y-auto px-6 py-4">
- {renderBody(peerResult, events, connectionEvents, routeConflicts, bandwidth, onDeleted, t)}
+ {renderBody(peerResult, events, connectionEvents, routeConflicts, bandwidth, exitNodeOptions, onDeleted, t)}
  </div>
  </div>
  </div>
@@ -160,6 +166,7 @@ function DrawerBody({
  connectionEvents,
  routeConflicts,
  bandwidth,
+ exitNodeOptions,
  onDeleted,
 }: {
  peer: Peer;
@@ -167,6 +174,7 @@ function DrawerBody({
  connectionEvents: PeerConnectionEvent[];
  routeConflicts: PeerRouteConflict[];
  bandwidth: PeerBandwidthSample[];
+ exitNodeOptions: Peer[];
  onDeleted: () => void;
 }) {
  const t = useTranslations('peers.drawer');
@@ -251,6 +259,8 @@ function DrawerBody({
  </Section>
 
  <AdvertiseSection peer={peer} routeConflicts={routeConflicts} onError={setError} />
+
+ <UseExitNodeSection peer={peer} options={exitNodeOptions} onError={setError} />
 
  <Section title={t('sections.actions')}>
  <DisableToggle peer={peer} onError={setError} />
@@ -731,6 +741,59 @@ function ExitNodeApprovalRow({
  );
 }
 
+// UseExitNodeSection is the CONSUME side of exit nodes (#137): it lets
+// an admin route THIS peer's default traffic through an approved exit
+// node. Distinct from ExitNodeApprovalRow (which marks a peer AS an exit
+// node). Rendered only when there's an approved exit node to pick
+// (excluding the peer itself) OR the peer already uses one — so it
+// doesn't clutter every drawer in tenants with no exit nodes.
+function UseExitNodeSection({
+ peer,
+ options,
+ onError,
+}: {
+ peer: Peer;
+ options: Peer[];
+ onError: (msg: string | null) => void;
+}) {
+ const t = useTranslations('peers.drawer');
+ const [pending, startTransition] = useTransition();
+ const selectable = options.filter((o) => o.id !== peer.id);
+ const current = peer.usingExitNodePeerId ?? '';
+ if (selectable.length === 0 && current === '') return null;
+
+ function apply(next: string) {
+ startTransition(async () => {
+ const res = await setUsingExitNodeAction(peer.id, next === '' ? null : next);
+ if (res.ok) onError(null);
+ else onError(res.error);
+ });
+ }
+
+ return (
+ <Section title={t('sections.useExitNode')}>
+ <label className="flex items-center gap-2 text-sm text-bamboo-100">
+ <span className="flex-1">{t('useExitNode.label')}</span>
+ <select
+ value={current}
+ disabled={pending}
+ onChange={(e) => apply(e.target.value)}
+ className="rounded-md border border-bamboo-200/30 bg-ink-950 px-2 py-1 text-sm text-bamboo-50 outline-none focus:border-bamboo-300 focus:ring-1 focus:ring-bamboo-300 disabled:opacity-50"
+ >
+ <option value="">{t('useExitNode.none')}</option>
+ {selectable.map((o) => (
+ <option key={o.id} value={o.id}>
+ {o.hostname || o.id}
+ </option>
+ ))}
+ </select>
+ </label>
+ <p className="text-xs text-bamboo-200/60">{t('useExitNode.hint')}</p>
+ {pending && <span className="text-xs text-bamboo-200/60">{t('inline.working')}</span>}
+ </Section>
+ );
+}
+
 // NAT64EgressApprovalRow is the single-toggle equivalent of
 // RouteApprovalRow. Revoking (false) is always allowed regardless
 // of capable state; approving (true) requires the peer to remain
@@ -1152,6 +1215,7 @@ function renderBody(
  connectionEvents: PeerConnectionEvent[],
  routeConflicts: PeerRouteConflict[],
  bandwidth: PeerBandwidthSample[],
+ exitNodeOptions: Peer[],
  onDeleted: () => void,
  t: ReturnType<typeof useTranslations>,
 ) {
@@ -1168,6 +1232,7 @@ function renderBody(
  connectionEvents={connectionEvents}
  routeConflicts={routeConflicts}
  bandwidth={bandwidth}
+ exitNodeOptions={exitNodeOptions}
  onDeleted={onDeleted}
  />
  );
