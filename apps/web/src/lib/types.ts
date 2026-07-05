@@ -307,9 +307,13 @@ export type User = {
 
 // DNSConfig is the tenant DNS surface from /api/v1/dns. tailnetName
 // is a derived display field; the rest map 1:1 to tenant_dns_config
-// columns. updatedAt = zero ISO string when no row has been written
-// (defaults are surfaced). PUT is not yet implemented — the UI shows
-// these as read-only with a "managed via API" hint.
+// columns (plus the tenant-level DNS64 fields). updatedAt = zero ISO
+// string when no row has been written (defaults are surfaced).
+//
+// PATCH /api/v1/dns writes the DNS64 settings (nat64Prefix +
+// dns64Enabled), so those two are editable in the UI. The MagicDNS /
+// nameserver fields stay read-only — the controller has no mutation
+// handler for them yet.
 export type DNSConfig = {
   tenantId: string;
   tenantSlug: string;
@@ -318,6 +322,11 @@ export type DNSConfig = {
   globalNameservers: string[];
   searchDomains: string[];
   overrideDnsServers: boolean;
+  // nat64Prefix is the tenant's DNS64 synthesis prefix (a /96, e.g. the
+  // well-known 64:ff9b::/96). dns64Enabled is the tenant-level NAT64
+  // master switch. Both are writable via PATCH /api/v1/dns.
+  nat64Prefix: string;
+  dns64Enabled: boolean;
   updatedAt: string;
   updatedBy?: string;
 };
