@@ -441,9 +441,9 @@
       "title": "MagicDNS not configured yet",
       "body": "Once enabled, peers can resolve each other by short hostname — e.g. mac-mini.bamboo → 100.64.0.1, no memorizing IPs. The controller auto-derives a DNS-safe label from each peer's hostname on register (migration 00008 onwards).",
       "example": "dig +short mac-mini.bamboo  →  100.64.0.1",
-      "note": "Controller-side PUT/PATCH for DNS config isn't wired in this release. Register a new peer to seed the row, or wait for the upcoming Web settings UI."
+      "note": "DNS64 (NAT64 prefix + enable switch) is editable once a config row exists; MagicDNS and nameservers are still managed via the controller API. Register a new peer to seed the row."
     },
-    "subtitle": "Manage tenant DNS settings. This view is read-only; updates to MagicDNS and nameservers happen via the controller API today.",
+    "subtitle": "Manage tenant DNS settings. DNS64 (NAT64 synthesis) is editable below; MagicDNS and nameservers stay read-only and are managed via the controller API today.",
     "tenantSection": "Tailnet",
     "tenantName": "Tailnet name",
     "magicDnsSection": "MagicDNS",
@@ -456,6 +456,15 @@
     "overrideSection": "Override local DNS",
     "overrideEnabled": "Override peer local DNS",
     "overrideHint": "When on, tenant nameservers replace each peer's local DNS; when off, they're merged.",
+    "dns64Section": "DNS64 / NAT64",
+    "dns64Enabled": "Enable DNS64",
+    "dns64Hint": "When on, the client DNS proxy synthesizes AAAA records for IPv4-only names so IPv6-only peers can reach them through a NAT64 egress.",
+    "nat64Prefix": "NAT64 prefix",
+    "nat64PrefixHint": "The /96 used for AAAA synthesis. Keep the well-known 64:ff9b::/96 unless you run a custom translator; leave blank to reset to it.",
+    "save": "Save",
+    "saving": "Saving…",
+    "saved": "Saved",
+    "saveError": "Couldn't save",
     "status": {
       "enabled": "Enabled",
       "disabled": "Disabled"

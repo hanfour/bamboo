@@ -2,12 +2,14 @@
 
 import { useTranslations } from 'next-intl';
 import { FetchErrorState } from '@/components/FetchErrorState';
+import { DNS64Editor } from '@/components/DNS64Editor';
 import { fetchDNS } from '@/lib/api';
 import type { DNSConfig } from '@/lib/types';
 
 // DNS page surfaces the tenant's resolver config from /api/v1/dns.
-// Read-only in v1 — the controller's PUT handler isn't shipped yet,
-// and the data-plane MagicDNS implementation is the larger blocker.
+// The DNS64 settings (NAT64 prefix + enable switch) are editable via
+// PATCH /api/v1/dns (see DNS64Editor); the MagicDNS / nameserver fields
+// stay read-only — the controller has no mutation handler for them yet.
 //
 // Layout mirrors Tailscale's /admin/dns: tailnet identifier on top,
 // then MagicDNS toggle (rendered as a status badge here, not an
@@ -132,6 +134,13 @@ function DNSView({ dns }: { dns: DNSConfig }) {
  value={<StatusBadge enabled={dns.overrideDnsServers} />}
  />
  <p className="text-xs text-bamboo-200/60">{t('overrideHint')}</p>
+ </Section>
+
+ <Section title={t('dns64Section')}>
+ <DNS64Editor
+ dns64Enabled={dns.dns64Enabled}
+ nat64Prefix={dns.nat64Prefix}
+ />
  </Section>
 
  <footer className="border-t border-ink-800 pt-4 text-xs text-bamboo-200/60">

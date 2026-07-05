@@ -437,7 +437,7 @@
   "dns": {
     "title": "DNS",
     "titleAccent": "resolution",
-    "subtitle": "租戶的 DNS 設定。目前為唯讀檢視。",
+    "subtitle": "租戶的 DNS 設定。下方的 DNS64(NAT64 合成)可編輯;MagicDNS 與 nameservers 目前仍為唯讀,透過 controller API 管理。",
     "empty": {
       "title": "MagicDNS 尚未設定",
       "body": "啟用 MagicDNS 後，租戶內的節點可以用短主機名互相連線——例如 mac-mini.bamboo 直達 100.64.0.1，不必背 IP。控制器會自動依 hostname 派生 DNS 名稱（migration 00008 之後產生）。",
@@ -456,6 +456,15 @@
     "overrideSection": "覆寫本地 DNS",
     "overrideEnabled": "覆寫節點本地 DNS 設定",
     "overrideHint": "啟用後，節點以租戶 nameservers 取代本機 DNS；停用時為合併。",
+    "dns64Section": "DNS64 / NAT64",
+    "dns64Enabled": "啟用 DNS64",
+    "dns64Hint": "啟用後,用戶端 DNS proxy 會為僅有 IPv4 的名稱合成 AAAA 記錄,讓純 IPv6 節點可透過 NAT64 egress 連線。",
+    "nat64Prefix": "NAT64 前綴",
+    "nat64PrefixHint": "用於 AAAA 合成的 /96。除非自行架設 translator,否則請維持公認的 64:ff9b::/96;留空則重置為預設值。",
+    "save": "儲存",
+    "saving": "儲存中…",
+    "saved": "已儲存",
+    "saveError": "儲存失敗",
     "status": {
       "enabled": "已啟用",
       "disabled": "未啟用"

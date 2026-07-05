@@ -580,6 +580,35 @@ export async function setNAT64EgressApprovedAction(
   }
 }
 
+// updateDNS64Action writes the tenant's DNS64 settings (NAT64 Phase B)
+// via PATCH /api/v1/dns. Admin-only on the wire — the controller 403s
+// non-admins, surfaced here as the error string. Both fields are
+// optional: an omitted field leaves the stored value unchanged, and
+// nat64Prefix "" clears the override back to the well-known
+// 64:ff9b::/96. The controller validates the prefix as a /96 and
+// returns 400 on a malformed value, passed through verbatim.
+export async function updateDNS64Action(input: {
+  dns64Enabled?: boolean;
+  nat64Prefix?: string;
+}): Promise<ActionResult> {
+  try {
+    const res = await fetch(`${BASE}/api/v1/dns`, {
+      method: 'PATCH',
+      headers: await buildHeaders(),
+      body: JSON.stringify(input),
+      cache: 'no-store',
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      return { ok: false, error: `${res.status} ${text || res.statusText}` };
+    }
+    revalidatePath('/[locale]/dns', 'page');
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: (e as Error).message };
+  }
+}
+
 async function peerApprovalAction(
   id: string,
   verb: 'approve' | 'reject',
