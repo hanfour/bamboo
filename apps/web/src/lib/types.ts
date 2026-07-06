@@ -165,10 +165,15 @@ export type PreAuthKey = {
 // keeping the controller agnostic of UI status enums lets the UI
 // change presentation without a coordinated wire-shape bump
 // (same pattern as PreAuthKey).
+export type APITokenScope = 'admin' | 'read-only';
+
 export type APIToken = {
   id: string;
   name: string;
   description?: string;
+  // scope gates the token's privilege (audit M-4): 'admin' is full
+  // tenant-admin, 'read-only' can drive read endpoints but no mutations.
+  scope: APITokenScope;
   createdAt: string;
   expiresAt?: string;
   revokedAt?: string;

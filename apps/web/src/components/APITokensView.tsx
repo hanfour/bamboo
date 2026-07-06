@@ -5,7 +5,7 @@
 import { useState, useTransition } from 'react';
 import { useTranslations } from 'next-intl';
 import { mintAPITokenAction, revokeAPITokenAction } from '@/lib/actions';
-import type { APIToken } from '@/lib/types';
+import type { APIToken, APITokenScope } from '@/lib/types';
 
 // APITokensView is the §4 P2 API-tokens admin surface. Layout
 // mirrors WebhooksView:
@@ -94,6 +94,7 @@ function MintForm({
   const t = useTranslations('apiTokens.form');
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
+  const [scope, setScope] = useState<APITokenScope>('admin');
   const [expiresOn, setExpiresOn] = useState('');
   const [pending, startTransition] = useTransition();
 
@@ -107,11 +108,12 @@ function MintForm({
       if (expiresOn) {
         iso = `${expiresOn}T23:59:59Z`;
       }
-      const res = await mintAPITokenAction({ name, description, expiresAt: iso });
+      const res = await mintAPITokenAction({ name, description, scope, expiresAt: iso });
       if (res.ok) {
         onMinted({ id: res.id, name: name.trim(), token: res.token });
         setName('');
         setDescription('');
+        setScope('admin');
         setExpiresOn('');
       } else {
         onError(res.error);
@@ -140,6 +142,17 @@ function MintForm({
           disabled={pending}
           className="w-full rounded border border-bamboo-200/30 bg-ink-950 px-2 py-1.5 text-sm text-bamboo-50 outline-none focus:border-bamboo-300 focus:ring-1 focus:ring-bamboo-300"
         />
+      </FormField>
+      <FormField label={t('scopeLabel')} hint={t('scopeHint')}>
+        <select
+          value={scope}
+          onChange={(e) => setScope(e.target.value as APITokenScope)}
+          disabled={pending}
+          className="w-full rounded border border-bamboo-200/30 bg-ink-950 px-2 py-1.5 text-sm text-bamboo-50 outline-none focus:border-bamboo-300 focus:ring-1 focus:ring-bamboo-300"
+        >
+          <option value="admin">{t('scopeAdmin')}</option>
+          <option value="read-only">{t('scopeReadOnly')}</option>
+        </select>
       </FormField>
       <FormField label={t('expiresLabel')} hint={t('expiresHint')}>
         <input
@@ -221,6 +234,11 @@ function TokenRow({ token, onError }: { token: APIToken; onError: (msg: string |
           <div className="flex items-baseline gap-2">
             <span className="font-medium text-bamboo-50">{token.name}</span>
             <StatusBadge status={status} />
+            {token.scope === 'read-only' && (
+              <span className="rounded-sm border border-bamboo-200/30 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-bamboo-200/70">
+                {t('row.readOnly')}
+              </span>
+            )}
           </div>
           {token.description && (
             <p className="text-xs text-bamboo-200/70">{token.description}</p>

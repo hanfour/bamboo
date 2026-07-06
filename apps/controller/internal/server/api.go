@@ -1997,12 +1997,16 @@ func (h *HTTPServer) apiCreatePreAuthKey(w http.ResponseWriter, r *http.Request,
 // dev-fallback warn branch is unreachable.
 func (h *HTTPServer) requireAdmin(w http.ResponseWriter, r *http.Request, authn *authnContext, tenant *repo.Tenant, action string) bool {
 	if authn != nil && authn.apiToken != nil {
-		// v1: every API token grants full tenant-admin. Tenant scope
-		// is still enforced via resolveTenant (the apiToken row's
-		// tenant_id is the only tenant the caller can act on), so
-		// this branch doesn't open a cross-tenant escalation.
-		// Future scope work tightens the per-action check without
-		// changing the field shape.
+		// Scope enforcement (audit M-4). A read-only token authenticates
+		// and passes read endpoints, but must not perform admin mutations.
+		// Legacy tokens are 'admin' (migration default), so existing
+		// behavior is unchanged. Tenant scope is still enforced via
+		// resolveTenant (the token's tenant_id is the only tenant it can
+		// act on), so admin here is never cross-tenant.
+		if authn.apiToken.Scope == repo.APITokenScopeReadOnly {
+			writeError(w, http.StatusForbidden, fmt.Errorf("read-only API token cannot perform %s", action))
+			return false
+		}
 		return true
 	}
 	if authn != nil && authn.claims != nil {
@@ -3308,6 +3312,7 @@ type apiAPITokenListJSON struct {
 	ID          string     `json:"id"`
 	Name        string     `json:"name"`
 	Description string     `json:"description,omitempty"`
+	Scope       string     `json:"scope"`
 	CreatedAt   time.Time  `json:"createdAt"`
 	ExpiresAt   *time.Time `json:"expiresAt,omitempty"`
 	RevokedAt   *time.Time `json:"revokedAt,omitempty"`
@@ -3327,6 +3332,7 @@ func apiTokenToListJSON(t *repo.APIToken) apiAPITokenListJSON {
 		ID:          t.ID.String(),
 		Name:        t.Name,
 		Description: t.Description,
+		Scope:       t.Scope,
 		CreatedAt:   t.CreatedAt,
 		ExpiresAt:   t.ExpiresAt,
 		RevokedAt:   t.RevokedAt,
@@ -3338,9 +3344,12 @@ func apiTokenToListJSON(t *repo.APIToken) apiAPITokenListJSON {
 // expiresAt is optional; absent ⇒ never expires (rotate via
 // revoke + re-mint, same convention as webhooks).
 type apiMintAPITokenReq struct {
-	Name        string     `json:"name"`
-	Description string     `json:"description,omitempty"`
-	ExpiresAt   *time.Time `json:"expiresAt,omitempty"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	// Scope is "admin" (default, full tenant-admin) or "read-only"
+	// (reads only — audit M-4). Absent ⇒ admin, for backward compat.
+	Scope     string     `json:"scope,omitempty"`
+	ExpiresAt *time.Time `json:"expiresAt,omitempty"`
 }
 
 // apiMintAPIToken creates a new token and returns the plaintext
@@ -3366,6 +3375,15 @@ func (h *HTTPServer) apiMintAPIToken(w http.ResponseWriter, r *http.Request, aut
 		writeError(w, http.StatusBadRequest, errors.New("name exceeds 200 chars"))
 		return
 	}
+	scope := req.Scope
+	if scope == "" {
+		scope = repo.APITokenScopeAdmin // default preserves v1 behavior
+	}
+	if !repo.ValidAPITokenScope(scope) {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid scope %q (want %q or %q)",
+			req.Scope, repo.APITokenScopeAdmin, repo.APITokenScopeReadOnly))
+		return
+	}
 	id := uuid.New()
 	plaintext, hash, err := auth.GenerateAPIToken(id)
 	if err != nil {
@@ -3378,6 +3396,7 @@ func (h *HTTPServer) apiMintAPIToken(w http.ResponseWriter, r *http.Request, aut
 		Name:        strings.TrimSpace(req.Name),
 		Description: req.Description,
 		SecretHash:  hash,
+		Scope:       scope,
 		ExpiresAt:   req.ExpiresAt,
 		CreatedBy:   authnActorID(authn),
 	})

@@ -11,7 +11,7 @@
 
 import { cookies } from 'next/headers';
 import { revalidatePath } from 'next/cache';
-import type { PolicySimulation } from '@/lib/types';
+import type { APITokenScope, PolicySimulation } from '@/lib/types';
 
 const BASE = process.env.BAMBOO_API_URL ?? 'http://localhost:8081';
 const TENANT = process.env.BAMBOO_TENANT ?? 'default';
@@ -803,13 +803,15 @@ export type APITokenMintResult =
   | { ok: true; id: string; token: string }
   | { ok: false; error: string };
 
-// mintAPITokenAction creates a new API token. v1 grants every
-// token tenant-admin scope; per-action scopes are a future
-// follow-up. expiresAt is optional — absent means "never
-// expires" (rotate via revoke + re-mint).
+// mintAPITokenAction creates a new API token. scope is 'admin'
+// (full tenant-admin) or 'read-only' (reads only — audit M-4);
+// omitted ⇒ the controller defaults to 'admin' for backward compat.
+// expiresAt is optional — absent means "never expires" (rotate via
+// revoke + re-mint).
 export async function mintAPITokenAction(input: {
   name: string;
   description: string;
+  scope?: APITokenScope;
   expiresAt?: string;
 }): Promise<APITokenMintResult> {
   try {
@@ -817,6 +819,9 @@ export async function mintAPITokenAction(input: {
       name: input.name.trim(),
       description: input.description.trim(),
     };
+    if (input.scope) {
+      body.scope = input.scope;
+    }
     if (input.expiresAt) {
       body.expiresAt = input.expiresAt;
     }

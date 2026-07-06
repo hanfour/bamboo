@@ -517,6 +517,10 @@
       "namePlaceholder": "github-actions",
       "descriptionLabel": "備註",
       "descriptionPlaceholder": "此 token 用途說明",
+      "scopeLabel": "權限範圍",
+      "scopeHint": "唯讀 token 只能讀取,無法變更任何資料。",
+      "scopeAdmin": "管理員 —— 完整存取",
+      "scopeReadOnly": "唯讀",
       "expiresLabel": "到期日",
       "expiresHint": "可留空。空白 = 永不過期（輪替路徑：撤銷後重新產生）。"
     },
@@ -534,7 +538,8 @@
     "row": {
       "created": "建立於 {when}",
       "lastUsed": "上次使用 {when}",
-      "expires": "到期 {when}"
+      "expires": "到期 {when}",
+      "readOnly": "唯讀"
     },
     "secretModal": {
       "title": "API token",
