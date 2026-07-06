@@ -4,6 +4,7 @@ package e2e
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"strings"
 	"testing"
@@ -163,4 +164,94 @@ func apiTokenWorks(t *testing.T, baseURL, token string) bool {
 	}
 	_ = resp.Body.Close()
 	return resp.StatusCode == http.StatusOK
+}
+
+// bearerStatus does one request authenticated with an API token bearer
+// (no X-Tenant-Slug — the token's own tenant_id resolves the tenant) and
+// returns the status code. body is the JSON request body ("" for none).
+func bearerStatus(t *testing.T, method, url, token, body string) int {
+	t.Helper()
+	var rdr io.Reader
+	if body != "" {
+		rdr = strings.NewReader(body)
+	}
+	req, _ := http.NewRequest(method, url, rdr)
+	req.Header.Set("Authorization", "Bearer "+token)
+	if body != "" {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("%s %s: %v", method, url, err)
+	}
+	defer resp.Body.Close()
+	return resp.StatusCode
+}
+
+// TestRESTAPITokens_ReadOnlyScopeCannotMutate is the audit M-4 regression:
+// a read-only token authenticates and can hit read endpoints, but every
+// admin mutation is 403. Before scopes, every token was full tenant-admin.
+func TestRESTAPITokens_ReadOnlyScopeCannotMutate(t *testing.T) {
+	f := startFixture(t)
+
+	mint := sendJSONWithTenant(t, http.MethodPost,
+		f.httpURL+"/api/v1/api-tokens", f.tenantSlug,
+		map[string]any{"name": "monitoring", "scope": "read-only"})
+	if mint.status != http.StatusCreated {
+		t.Fatalf("mint: status=%d body=%s", mint.status, mint.body)
+	}
+	var minted struct {
+		Token string `json:"token"`
+		Scope string `json:"scope"`
+	}
+	if err := json.Unmarshal(mint.body, &minted); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if minted.Scope != "read-only" {
+		t.Errorf("minted scope = %q, want read-only", minted.Scope)
+	}
+
+	// Member-readable endpoint → allowed (listing peers needs no admin).
+	if code := bearerStatus(t, http.MethodGet, f.httpURL+"/api/v1/peers", minted.Token, ""); code != http.StatusOK {
+		t.Errorf("read-only GET /peers = %d, want 200", code)
+	}
+	// Admin mutation → 403 (requireAdmin blocks before body handling, so a
+	// valid body still can't get through).
+	if code := bearerStatus(t, http.MethodPost, f.httpURL+"/api/v1/api-tokens", minted.Token, `{"name":"x"}`); code != http.StatusForbidden {
+		t.Errorf("read-only POST /api-tokens = %d, want 403", code)
+	}
+}
+
+// TestRESTAPITokens_DefaultScopeIsAdmin: an omitted scope defaults to
+// admin (backward compat) and can still mutate.
+func TestRESTAPITokens_DefaultScopeIsAdmin(t *testing.T) {
+	f := startFixture(t)
+
+	mint := sendJSONWithTenant(t, http.MethodPost,
+		f.httpURL+"/api/v1/api-tokens", f.tenantSlug, map[string]any{"name": "legacy"})
+	if mint.status != http.StatusCreated {
+		t.Fatalf("mint: status=%d body=%s", mint.status, mint.body)
+	}
+	var minted struct {
+		Token string `json:"token"`
+		Scope string `json:"scope"`
+	}
+	_ = json.Unmarshal(mint.body, &minted)
+	if minted.Scope != "admin" {
+		t.Errorf("default scope = %q, want admin", minted.Scope)
+	}
+	if code := bearerStatus(t, http.MethodPost, f.httpURL+"/api/v1/api-tokens", minted.Token, `{"name":"child"}`); code != http.StatusCreated {
+		t.Errorf("admin token mutation = %d, want 201", code)
+	}
+}
+
+// TestRESTAPITokens_RejectsInvalidScope: an unrecognized scope is a 400.
+func TestRESTAPITokens_RejectsInvalidScope(t *testing.T) {
+	f := startFixture(t)
+	mint := sendJSONWithTenant(t, http.MethodPost,
+		f.httpURL+"/api/v1/api-tokens", f.tenantSlug,
+		map[string]any{"name": "bad", "scope": "superuser"})
+	if mint.status != http.StatusBadRequest {
+		t.Errorf("invalid scope mint: status=%d, want 400; body=%s", mint.status, mint.body)
+	}
 }

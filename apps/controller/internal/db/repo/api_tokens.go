@@ -24,11 +24,27 @@ type APIToken struct {
 	Name        string
 	Description string
 	SecretHash  string
-	ExpiresAt   *time.Time
-	RevokedAt   *time.Time
-	LastUsedAt  *time.Time
-	CreatedBy   *uuid.UUID
-	CreatedAt   time.Time
+	// Scope is the token's privilege level (audit M-4): APITokenScopeAdmin
+	// (full tenant-admin) or APITokenScopeReadOnly (reads only; requireAdmin
+	// rejects it). Legacy rows are 'admin' via the migration default.
+	Scope      string
+	ExpiresAt  *time.Time
+	RevokedAt  *time.Time
+	LastUsedAt *time.Time
+	CreatedBy  *uuid.UUID
+	CreatedAt  time.Time
+}
+
+// API token scopes (audit M-4). Kept in sync with the CHECK constraint in
+// migration 00021.
+const (
+	APITokenScopeAdmin    = "admin"
+	APITokenScopeReadOnly = "read-only"
+)
+
+// ValidAPITokenScope reports whether s is a recognized scope.
+func ValidAPITokenScope(s string) bool {
+	return s == APITokenScopeAdmin || s == APITokenScopeReadOnly
 }
 
 // IsActive reports whether the token may be honored by the authn
@@ -69,19 +85,25 @@ func (r *APITokens) Insert(ctx context.Context, t *APIToken) (*APIToken, error) 
 	if t.ID == uuid.Nil {
 		t.ID = uuid.New()
 	}
+	if t.Scope == "" {
+		t.Scope = APITokenScopeAdmin // match the column default / legacy behavior
+	}
+	if !ValidAPITokenScope(t.Scope) {
+		return nil, fmt.Errorf("api_tokens.Insert: invalid scope %q", t.Scope)
+	}
 	var out APIToken
 	err := r.pool.QueryRow(ctx, `
 		INSERT INTO api_tokens
-		    (id, tenant_id, name, description, secret_hash, expires_at, created_by)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		    (id, tenant_id, name, description, secret_hash, scope, expires_at, created_by)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		RETURNING id, tenant_id, name, COALESCE(description, ''),
-		          secret_hash, expires_at, revoked_at, last_used_at,
+		          secret_hash, scope, expires_at, revoked_at, last_used_at,
 		          created_by, created_at
 	`,
-		t.ID, t.TenantID, t.Name, t.Description, t.SecretHash, t.ExpiresAt, t.CreatedBy,
+		t.ID, t.TenantID, t.Name, t.Description, t.SecretHash, t.Scope, t.ExpiresAt, t.CreatedBy,
 	).Scan(
 		&out.ID, &out.TenantID, &out.Name, &out.Description,
-		&out.SecretHash, &out.ExpiresAt, &out.RevokedAt, &out.LastUsedAt,
+		&out.SecretHash, &out.Scope, &out.ExpiresAt, &out.RevokedAt, &out.LastUsedAt,
 		&out.CreatedBy, &out.CreatedAt,
 	)
 	if err != nil {
@@ -97,13 +119,13 @@ func (r *APITokens) GetByID(ctx context.Context, id uuid.UUID) (*APIToken, error
 	var t APIToken
 	err := r.pool.QueryRow(ctx, `
 		SELECT id, tenant_id, name, COALESCE(description, ''),
-		       secret_hash, expires_at, revoked_at, last_used_at,
+		       secret_hash, scope, expires_at, revoked_at, last_used_at,
 		       created_by, created_at
 		  FROM api_tokens
 		 WHERE id = $1
 	`, id).Scan(
 		&t.ID, &t.TenantID, &t.Name, &t.Description,
-		&t.SecretHash, &t.ExpiresAt, &t.RevokedAt, &t.LastUsedAt,
+		&t.SecretHash, &t.Scope, &t.ExpiresAt, &t.RevokedAt, &t.LastUsedAt,
 		&t.CreatedBy, &t.CreatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -121,7 +143,7 @@ func (r *APITokens) GetByID(ctx context.Context, id uuid.UUID) (*APIToken, error
 func (r *APITokens) ListByTenant(ctx context.Context, tenantID uuid.UUID) ([]*APIToken, error) {
 	rows, err := r.pool.Query(ctx, `
 		SELECT id, tenant_id, name, COALESCE(description, ''),
-		       secret_hash, expires_at, revoked_at, last_used_at,
+		       secret_hash, scope, expires_at, revoked_at, last_used_at,
 		       created_by, created_at
 		  FROM api_tokens
 		 WHERE tenant_id = $1
@@ -136,7 +158,7 @@ func (r *APITokens) ListByTenant(ctx context.Context, tenantID uuid.UUID) ([]*AP
 		var t APIToken
 		if err := rows.Scan(
 			&t.ID, &t.TenantID, &t.Name, &t.Description,
-			&t.SecretHash, &t.ExpiresAt, &t.RevokedAt, &t.LastUsedAt,
+			&t.SecretHash, &t.Scope, &t.ExpiresAt, &t.RevokedAt, &t.LastUsedAt,
 			&t.CreatedBy, &t.CreatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("scan api_token: %w", err)

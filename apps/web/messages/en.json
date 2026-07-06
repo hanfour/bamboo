@@ -517,6 +517,10 @@
       "namePlaceholder": "github-actions",
       "descriptionLabel": "Description",
       "descriptionPlaceholder": "What this token is used for",
+      "scopeLabel": "Scope",
+      "scopeHint": "Read-only tokens can read but cannot change anything.",
+      "scopeAdmin": "Admin — full access",
+      "scopeReadOnly": "Read-only",
       "expiresLabel": "Expires on",
       "expiresHint": "Optional. Empty = never expires (rotate via revoke + re-mint)."
     },
@@ -534,7 +538,8 @@
     "row": {
       "created": "created {when}",
       "lastUsed": "last used {when}",
-      "expires": "expires {when}"
+      "expires": "expires {when}",
+      "readOnly": "read-only"
     },
     "secretModal": {
       "title": "API token",
