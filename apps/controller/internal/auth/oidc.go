@@ -25,12 +25,21 @@ type OIDCProvider interface {
 	Name() string
 	// AuthURL returns the URL to which a browser should be redirected to
 	// initiate login. state must round-trip back on the callback to defeat
-	// CSRF.
-	AuthURL(state, redirectURI string) string
+	// CSRF. verifier is the PKCE code verifier (audit M-6): its S256
+	// challenge is attached to the URL so the provider binds the code to
+	// this login attempt. Pass "" to omit PKCE.
+	AuthURL(state, redirectURI, verifier string) string
 	// Exchange takes the authorization code returned by the provider and
-	// returns the resolved user identity.
-	Exchange(ctx context.Context, code, redirectURI string) (*UserIdentity, error)
+	// returns the resolved user identity. verifier is the PKCE code verifier
+	// stored at login start; it must match the challenge sent to AuthURL.
+	// Pass "" when PKCE wasn't used for this flow.
+	Exchange(ctx context.Context, code, redirectURI, verifier string) (*UserIdentity, error)
 }
+
+// GeneratePKCEVerifier returns a fresh high-entropy PKCE code verifier
+// (audit M-6). The caller stores it in the signed OIDC state (so it
+// survives the redirect round-trip) and passes it to AuthURL + Exchange.
+func GeneratePKCEVerifier() string { return oauth2.GenerateVerifier() }
 
 // UserIdentity is the minimum we record about a user after OIDC.
 type UserIdentity struct {
@@ -62,17 +71,25 @@ func NewGoogleProvider(clientID, clientSecret string) *GoogleProvider {
 func (g *GoogleProvider) Name() string { return "google" }
 
 // AuthURL implements OIDCProvider.
-func (g *GoogleProvider) AuthURL(state, redirectURI string) string {
+func (g *GoogleProvider) AuthURL(state, redirectURI, verifier string) string {
 	conf := *g.conf
 	conf.RedirectURL = redirectURI
-	return conf.AuthCodeURL(state, oauth2.AccessTypeOffline)
+	opts := []oauth2.AuthCodeOption{oauth2.AccessTypeOffline}
+	if verifier != "" {
+		opts = append(opts, oauth2.S256ChallengeOption(verifier))
+	}
+	return conf.AuthCodeURL(state, opts...)
 }
 
 // Exchange implements OIDCProvider.
-func (g *GoogleProvider) Exchange(ctx context.Context, code, redirectURI string) (*UserIdentity, error) {
+func (g *GoogleProvider) Exchange(ctx context.Context, code, redirectURI, verifier string) (*UserIdentity, error) {
 	conf := *g.conf
 	conf.RedirectURL = redirectURI
-	tok, err := conf.Exchange(ctx, code)
+	var opts []oauth2.AuthCodeOption
+	if verifier != "" {
+		opts = append(opts, oauth2.VerifierOption(verifier))
+	}
+	tok, err := conf.Exchange(ctx, code, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("oauth exchange: %w", err)
 	}
@@ -126,17 +143,25 @@ func NewGitHubProvider(clientID, clientSecret string) *GitHubProvider {
 func (g *GitHubProvider) Name() string { return "github" }
 
 // AuthURL implements OIDCProvider.
-func (g *GitHubProvider) AuthURL(state, redirectURI string) string {
+func (g *GitHubProvider) AuthURL(state, redirectURI, verifier string) string {
 	conf := *g.conf
 	conf.RedirectURL = redirectURI
-	return conf.AuthCodeURL(state)
+	var opts []oauth2.AuthCodeOption
+	if verifier != "" {
+		opts = append(opts, oauth2.S256ChallengeOption(verifier))
+	}
+	return conf.AuthCodeURL(state, opts...)
 }
 
 // Exchange implements OIDCProvider.
-func (g *GitHubProvider) Exchange(ctx context.Context, code, redirectURI string) (*UserIdentity, error) {
+func (g *GitHubProvider) Exchange(ctx context.Context, code, redirectURI, verifier string) (*UserIdentity, error) {
 	conf := *g.conf
 	conf.RedirectURL = redirectURI
-	tok, err := conf.Exchange(ctx, code)
+	var opts []oauth2.AuthCodeOption
+	if verifier != "" {
+		opts = append(opts, oauth2.VerifierOption(verifier))
+	}
+	tok, err := conf.Exchange(ctx, code, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("oauth exchange: %w", err)
 	}
@@ -214,7 +239,13 @@ type stateClaims struct {
 	// the signed state so a tampered query-string can't redirect the
 	// session token to an attacker-controlled URI.
 	AppCallback string `json:"a,omitempty"`
-	ExpiresAt   int64  `json:"exp"`
+	// Verifier is the PKCE code verifier (audit M-6). It rides in the
+	// signed state so the callback can replay it to the token exchange
+	// without the controller holding server-side per-flow state. Empty for
+	// flows minted before PKCE (self-consistent: no challenge was sent, so
+	// no verifier is expected on exchange).
+	Verifier  string `json:"v,omitempty"`
+	ExpiresAt int64  `json:"exp"`
 }
 
 // OIDCStateClaims is the public projection of state contents returned
@@ -224,6 +255,7 @@ type OIDCStateClaims struct {
 	Tenant      string
 	Invite      string
 	AppCallback string
+	Verifier    string
 }
 
 // IssueOIDCState returns a signed state token bound to a tenant slug.
@@ -231,7 +263,7 @@ type OIDCStateClaims struct {
 // via an invite link, or empty for a regular sign-in. appCallback is the
 // native-app callback URI (e.g. "bamboo://auth/callback") set when the
 // flow was initiated by a native client; empty for browser flows.
-func IssueOIDCState(secret []byte, tenantSlug, inviteID, appCallback string, ttl time.Duration) (string, error) {
+func IssueOIDCState(secret []byte, tenantSlug, inviteID, appCallback, verifier string, ttl time.Duration) (string, error) {
 	nonce := make([]byte, 16)
 	if _, err := rand.Read(nonce); err != nil {
 		return "", err
@@ -241,6 +273,7 @@ func IssueOIDCState(secret []byte, tenantSlug, inviteID, appCallback string, ttl
 		Tenant:      tenantSlug,
 		Invite:      inviteID,
 		AppCallback: appCallback,
+		Verifier:    verifier,
 		ExpiresAt:   time.Now().Add(ttl).Unix(),
 	}
 	body, err := json.Marshal(claims)
@@ -283,5 +316,6 @@ func VerifyOIDCState(secret []byte, state string) (OIDCStateClaims, error) {
 	out.Tenant = claims.Tenant
 	out.Invite = claims.Invite
 	out.AppCallback = claims.AppCallback
+	out.Verifier = claims.Verifier
 	return out, nil
 }

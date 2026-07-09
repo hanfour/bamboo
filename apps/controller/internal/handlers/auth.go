@@ -78,7 +78,10 @@ func (h *AuthHandler) StartOIDCFlow(ctx context.Context, req *bamboov1.StartOIDC
 	// Tenant slug is taken from x-tenant-slug metadata for now; a future
 	// API might include it on the request itself.
 	tenantSlug := tenantSlugFromMetadata(ctx)
-	state, err := auth.IssueOIDCState(h.sessionSec, tenantSlug, "", "", 10*time.Minute)
+	// No PKCE verifier here: this state only points the client at the HTTP
+	// /auth/{provider}/login endpoint, which mints its own PKCE-bound state
+	// for the actual provider exchange (audit M-6). Verifier stays "".
+	state, err := auth.IssueOIDCState(h.sessionSec, tenantSlug, "", "", "", 10*time.Minute)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "issue state: %v", err)
 	}

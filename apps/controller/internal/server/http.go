@@ -840,13 +840,18 @@ func (h *HTTPServer) handleLogin(w http.ResponseWriter, r *http.Request, provide
 		return
 	}
 
-	state, err := auth.IssueOIDCState(h.secret, tenant, inviteID, appCallback, 10*time.Minute)
+	// PKCE (audit M-6): mint a per-flow verifier, stash it in the signed
+	// state, and send its S256 challenge on the authorize URL. The provider
+	// then binds the code to this attempt, so an intercepted code is
+	// useless without the verifier (which never leaves the signed state).
+	verifier := auth.GeneratePKCEVerifier()
+	state, err := auth.IssueOIDCState(h.secret, tenant, inviteID, appCallback, verifier, 10*time.Minute)
 	if err != nil {
 		http.Error(w, "issue state: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 	redirect := fmt.Sprintf("%s/auth/%s/callback", h.baseURL, provider.Name())
-	http.Redirect(w, r, provider.AuthURL(state, redirect), http.StatusFound)
+	http.Redirect(w, r, provider.AuthURL(state, redirect, verifier), http.StatusFound)
 }
 
 // validateAppCallback narrows the accepted app_callback URI to ones
@@ -886,7 +891,7 @@ func (h *HTTPServer) handleCallback(w http.ResponseWriter, r *http.Request, prov
 	}
 
 	redirect := fmt.Sprintf("%s/auth/%s/callback", h.baseURL, provider.Name())
-	identity, err := provider.Exchange(r.Context(), code, redirect)
+	identity, err := provider.Exchange(r.Context(), code, redirect, claims.Verifier)
 	if err != nil {
 		http.Error(w, "exchange: "+err.Error(), http.StatusBadGateway)
 		return
