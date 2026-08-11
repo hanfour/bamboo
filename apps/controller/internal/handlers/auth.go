@@ -383,6 +383,20 @@ func bearerFromMetadata(ctx context.Context) string {
 	return ""
 }
 
+// tenantFromBearer returns the tenant_id carried by a verified peer- or
+// user-session bearer, ok=false when the token verifies as neither. Handlers
+// use it to bind their tenant to the credential the controller issued, rather
+// than to the client-supplied x-tenant-slug header.
+func tenantFromBearer(sec []byte, token string) (uuid.UUID, bool) {
+	if c, err := auth.VerifyPeerSessionToken(sec, token); err == nil {
+		return c.TenantID, true
+	}
+	if c, err := auth.VerifySessionToken(sec, token); err == nil {
+		return c.TenantID, true
+	}
+	return uuid.Nil, false
+}
+
 // resolveBearerToken validates a session JWT and returns the bound tenant.
 func (h *AuthHandler) resolveBearerToken(ctx context.Context, token string) (*repo.Tenant, error) {
 	if h.sessionSec == nil {

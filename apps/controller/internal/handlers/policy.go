@@ -344,9 +344,23 @@ func (h *PolicyHandler) loadParsedPolicy(ctx context.Context, tenantID uuid.UUID
 	return parsed, nil
 }
 
-// resolveTenant centralises the metadata-fallback path used by every
-// handler in this file.
+// resolveTenant returns the tenant every handler in this file operates on.
+// It prefers the verified bearer's tenant claim (the production path) so a
+// caller cannot act on another tenant's policy by spoofing x-tenant-slug.
+// The header fallback is honored only when no bearer is present
+// (require_auth=off / dev), matching the coordinator's convention.
 func (h *PolicyHandler) resolveTenant(ctx context.Context) (*repo.Tenant, error) {
+	if h.auth != nil && len(h.auth.sessionSec) > 0 {
+		if token := bearerFromMetadata(ctx); token != "" {
+			if tid, ok := tenantFromBearer(h.auth.sessionSec, token); ok {
+				t, err := h.tenants.GetByID(ctx, tid)
+				if err != nil {
+					return nil, status.Errorf(codes.Internal, "tenant by id: %v", err)
+				}
+				return t, nil
+			}
+		}
+	}
 	slug := tenantSlugFromMetadata(ctx)
 	t, err := h.tenants.GetOrCreate(ctx, slug, "Default Tenant", repo.DefaultTenantCIDR)
 	if err != nil {
