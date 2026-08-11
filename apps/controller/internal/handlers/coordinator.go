@@ -607,7 +607,7 @@ func (h *CoordinatorHandler) Heartbeat(ctx context.Context, req *bamboov1.Heartb
 // valid peer-session token for peer A could Heartbeat / WatchPeers as
 // peer B — endpoint poisoning, netmap snooping. Only the peer-session
 // credential is bound; a user-session bearer (admin) or no bearer (dev /
-// require_auth off) skips the check, matching the REST peerCredentialAllows
+// require_auth off) skips the check, matching the REST peerCredentialStatus
 // behavior. The interceptor already validated the bearer's signature; this
 // adds the identity binding the interceptor can't (it lacks the peer_id).
 func (h *CoordinatorHandler) enforcePeerBinding(ctx context.Context, reqPeerID string) error {
@@ -618,15 +618,45 @@ func (h *CoordinatorHandler) enforcePeerBinding(ctx context.Context, reqPeerID s
 	if token == "" {
 		return nil
 	}
-	claims, err := auth.VerifyPeerSessionToken(h.auth.sessionSec, token)
-	if err != nil {
-		// Not a peer-session token (user session, other shape). Peer
-		// binding applies only to peer-session credentials.
+	// Peer-session token: bound to the exact peer_id it was minted for.
+	if claims, err := auth.VerifyPeerSessionToken(h.auth.sessionSec, token); err == nil {
+		if claims.PeerID.String() != reqPeerID {
+			return status.Error(codes.PermissionDenied, "peer-session token is not bound to the requested peer")
+		}
 		return nil
 	}
-	if claims.PeerID.String() != reqPeerID {
-		return status.Error(codes.PermissionDenied, "peer-session token is not bound to the requested peer")
+	// User-session JWT (a human/admin driving a peer): the claim's tenant
+	// must own reqPeerID. Without this a tenant-A user could Heartbeat /
+	// WatchPeers a tenant-B peer — the gRPC twin of the REST
+	// peerCredentialStatus hole (see crosstenant_grpc_authz_test.go).
+	if claims, err := auth.VerifySessionToken(h.auth.sessionSec, token); err == nil {
+		// The tenant check needs the peers repo. Production always wires
+		// it; a unit-test handler without one skips (same convention as
+		// authenticate's `h.users != nil` guard). The enforced path is
+		// covered end-to-end by crosstenant_grpc_authz_test.go.
+		if h.peers == nil {
+			return nil
+		}
+		peerID, perr := uuid.Parse(reqPeerID)
+		if perr != nil {
+			return status.Errorf(codes.InvalidArgument, "invalid peer_id: %v", perr)
+		}
+		peer, gerr := h.peers.GetByID(ctx, peerID)
+		if gerr != nil {
+			if errors.Is(gerr, repo.ErrNotFound) {
+				return status.Error(codes.NotFound, "peer not found")
+			}
+			return status.Errorf(codes.Internal, "get peer: %v", gerr)
+		}
+		if peer.TenantID != claims.TenantID {
+			// NotFound rather than PermissionDenied so a foreign caller
+			// can't probe peer existence across tenants.
+			return status.Error(codes.NotFound, "peer not found")
+		}
+		return nil
 	}
+	// Neither token type verified; nothing to bind here. Authentication
+	// is the interceptor's responsibility (it already ran in prod mode).
 	return nil
 }
 
