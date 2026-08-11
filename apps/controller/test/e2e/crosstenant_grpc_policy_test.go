@@ -95,4 +95,3 @@ func TestCrossTenant_GRPCPutPolicyBindsToJWTTenant(t *testing.T) {
 		t.Errorf("PutPolicy should have written 1 ACL row into the JWT's tenant A; got %d", a)
 	}
 }
-
