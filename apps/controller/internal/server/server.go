@@ -118,7 +118,7 @@ func buildGRPCWithAuth(pool *db.Pool, ch *clickhouse.Conn, requireAuth bool, ses
 	bamboov1.RegisterAuthServiceServer(s, authHandler)
 	bamboov1.RegisterCoordinatorServiceServer(s, coordHandler)
 	bamboov1.RegisterPolicyServiceServer(s, handlers.NewPolicyHandler(pool, ch, bus, authHandler))
-	bamboov1.RegisterTelemetryServiceServer(s, handlers.NewTelemetryHandler(pool, ch))
+	bamboov1.RegisterTelemetryServiceServer(s, handlers.NewTelemetryHandler(pool, ch, authHandler))
 	// gRPC reflection exposes the full service schema — handy for grpcurl
 	// in dev, needless attack-surface in prod (audit L-1). Off in prod
 	// mode (require_auth) unless explicitly re-enabled.
@@ -140,7 +140,7 @@ func BuildGRPCServer(pool *db.Pool) *grpc.Server {
 	bamboov1.RegisterAuthServiceServer(s, authHandler)
 	bamboov1.RegisterCoordinatorServiceServer(s, handlers.NewCoordinatorHandler(pool, authHandler, bus))
 	bamboov1.RegisterPolicyServiceServer(s, handlers.NewPolicyHandler(pool, nil, bus, authHandler))
-	bamboov1.RegisterTelemetryServiceServer(s, handlers.NewTelemetryHandler(pool, nil))
+	bamboov1.RegisterTelemetryServiceServer(s, handlers.NewTelemetryHandler(pool, nil, authHandler))
 
 	reflection.Register(s)
 	return s

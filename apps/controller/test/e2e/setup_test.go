@@ -138,7 +138,7 @@ func buildGRPCFixture(pool *db.Pool) (*grpc.Server, *handlers.CoordinatorHandler
 	bamboov1.RegisterAuthServiceServer(s, authHandler)
 	bamboov1.RegisterCoordinatorServiceServer(s, coord)
 	bamboov1.RegisterPolicyServiceServer(s, handlers.NewPolicyHandler(pool, nil, bus, authHandler))
-	bamboov1.RegisterTelemetryServiceServer(s, handlers.NewTelemetryHandler(pool, nil))
+	bamboov1.RegisterTelemetryServiceServer(s, handlers.NewTelemetryHandler(pool, nil, authHandler))
 	return s, coord
 }
 

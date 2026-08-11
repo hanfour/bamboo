@@ -397,6 +397,30 @@ func tenantFromBearer(sec []byte, token string) (uuid.UUID, bool) {
 	return uuid.Nil, false
 }
 
+// resolveTenantFromCredential returns the tenant a gRPC caller operates on.
+// It prefers the verified bearer's tenant claim so a caller cannot act on
+// another tenant by spoofing the x-tenant-slug header; the header is honored
+// only when no bearer is present (require_auth=off / dev). Shared by the
+// Policy and Telemetry handlers.
+func resolveTenantFromCredential(ctx context.Context, authH *AuthHandler, tenants *repo.Tenants) (*repo.Tenant, error) {
+	if authH != nil && len(authH.sessionSec) > 0 {
+		if token := bearerFromMetadata(ctx); token != "" {
+			if tid, ok := tenantFromBearer(authH.sessionSec, token); ok {
+				t, err := tenants.GetByID(ctx, tid)
+				if err != nil {
+					return nil, status.Errorf(codes.Internal, "tenant by id: %v", err)
+				}
+				return t, nil
+			}
+		}
+	}
+	t, err := tenants.GetOrCreate(ctx, tenantSlugFromMetadata(ctx), "Default Tenant", repo.DefaultTenantCIDR)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "tenant resolve: %v", err)
+	}
+	return t, nil
+}
+
 // resolveBearerToken validates a session JWT and returns the bound tenant.
 func (h *AuthHandler) resolveBearerToken(ctx context.Context, token string) (*repo.Tenant, error) {
 	if h.sessionSec == nil {

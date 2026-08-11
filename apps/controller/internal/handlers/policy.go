@@ -350,23 +350,7 @@ func (h *PolicyHandler) loadParsedPolicy(ctx context.Context, tenantID uuid.UUID
 // The header fallback is honored only when no bearer is present
 // (require_auth=off / dev), matching the coordinator's convention.
 func (h *PolicyHandler) resolveTenant(ctx context.Context) (*repo.Tenant, error) {
-	if h.auth != nil && len(h.auth.sessionSec) > 0 {
-		if token := bearerFromMetadata(ctx); token != "" {
-			if tid, ok := tenantFromBearer(h.auth.sessionSec, token); ok {
-				t, err := h.tenants.GetByID(ctx, tid)
-				if err != nil {
-					return nil, status.Errorf(codes.Internal, "tenant by id: %v", err)
-				}
-				return t, nil
-			}
-		}
-	}
-	slug := tenantSlugFromMetadata(ctx)
-	t, err := h.tenants.GetOrCreate(ctx, slug, "Default Tenant", repo.DefaultTenantCIDR)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "tenant resolve: %v", err)
-	}
-	return t, nil
+	return resolveTenantFromCredential(ctx, h.auth, h.tenants)
 }
 
 // buildEvalRequest converts a proto EvaluateAccessRequest into the

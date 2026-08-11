@@ -22,14 +22,18 @@ type TelemetryHandler struct {
 
 	tenants *repo.Tenants
 	events  *clickhouse.ConnectionEvents
+	auth    *AuthHandler
 }
 
 // NewTelemetryHandler constructs a fresh TelemetryHandler. ch may be nil
-// (degrades to writing nothing).
-func NewTelemetryHandler(pool *db.Pool, ch *clickhouse.Conn) *TelemetryHandler {
+// (degrades to writing nothing). authH carries the session secret used to
+// resolve the caller's tenant from its bearer; may be nil in tests that
+// don't exercise tenant binding (falls back to the x-tenant-slug header).
+func NewTelemetryHandler(pool *db.Pool, ch *clickhouse.Conn, authH *AuthHandler) *TelemetryHandler {
 	return &TelemetryHandler{
 		tenants: repo.NewTenants(pool),
 		events:  clickhouse.NewConnectionEvents(ch),
+		auth:    authH,
 	}
 }
 
@@ -38,20 +42,17 @@ func NewTelemetryHandler(pool *db.Pool, ch *clickhouse.Conn) *TelemetryHandler {
 // closes. The batch keeps the round-trip cost flat regardless of how
 // many events the peer queued up.
 //
-// Tenant resolution: the calling peer's tenant comes from the
-// x-tenant-slug metadata header (Phase 1 simplification). A future
-// follow-up will swap in JWT bearer-token resolution.
+// Tenant resolution: the caller's tenant comes from the verified bearer
+// (peer- or user-session), not the client-supplied x-tenant-slug header —
+// otherwise any authenticated caller could inject connection_events into
+// another tenant by spoofing the slug. The header is honored only in dev
+// (no bearer). Shared with PolicyHandler via resolveTenantFromCredential.
 func (h *TelemetryHandler) ReportConnectionEvents(stream bamboov1.TelemetryService_ReportConnectionEventsServer) error {
 	ctx := stream.Context()
 
-	tenant, err := h.tenants.GetOrCreate(
-		ctx,
-		tenantSlugFromMetadata(ctx),
-		"Default Tenant",
-		repo.DefaultTenantCIDR,
-	)
+	tenant, err := resolveTenantFromCredential(ctx, h.auth, h.tenants)
 	if err != nil {
-		return status.Errorf(codes.Internal, "tenant resolve: %v", err)
+		return err
 	}
 
 	const flushAt = 256
