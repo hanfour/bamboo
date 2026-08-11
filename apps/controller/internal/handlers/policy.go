@@ -28,9 +28,13 @@ import (
 type PolicyHandler struct {
 	bamboov1.UnimplementedPolicyServiceServer
 
+	// pool opens per-request WithTenant transactions for tenant-scoped
+	// tables (policies, audit_log) so the Postgres RLS backstop (ADR-0014)
+	// sees app.tenant_id. tenants is resolved on the pool directly — the
+	// tenants table is not RLS-scoped.
+	pool      *db.Pool
 	tenants   *repo.Tenants
 	policies  *repo.Policies
-	audits    *repo.AuditLogs
 	traces    *clickhouse.Traces
 	anomalies *clickhouse.Anomalies
 	bus       *events.Bus
@@ -45,9 +49,9 @@ type PolicyHandler struct {
 // admin-RBAC check; may be nil in tests that don't exercise the gate.
 func NewPolicyHandler(pool *db.Pool, ch *clickhouse.Conn, bus *events.Bus, authH *AuthHandler) *PolicyHandler {
 	return &PolicyHandler{
+		pool:      pool,
 		tenants:   repo.NewTenants(pool),
 		policies:  repo.NewPolicies(pool),
-		audits:    repo.NewAuditLogs(pool),
 		traces:    clickhouse.NewTraces(ch),
 		anomalies: clickhouse.NewAnomalies(ch),
 		bus:       bus,
@@ -63,19 +67,27 @@ func (h *PolicyHandler) GetPolicy(ctx context.Context, _ *bamboov1.GetPolicyRequ
 		return nil, err
 	}
 
-	rec, err := h.policies.Get(ctx, tenant.ID)
-	if errors.Is(err, repo.ErrNotFound) {
-		return &bamboov1.GetPolicyResponse{Policy: &bamboov1.Policy{
-			TenantId: tenant.ID.String(),
-			Revision: 0,
-		}}, nil
-	}
+	var resp *bamboov1.GetPolicyResponse
+	err = db.WithTenant(ctx, h.pool, tenant.ID, func(q db.Querier) error {
+		rec, gerr := repo.NewPolicies(q).Get(ctx, tenant.ID)
+		if errors.Is(gerr, repo.ErrNotFound) {
+			resp = &bamboov1.GetPolicyResponse{Policy: &bamboov1.Policy{
+				TenantId: tenant.ID.String(),
+				Revision: 0,
+			}}
+			return nil
+		}
+		if gerr != nil {
+			return status.Errorf(codes.Internal, "load policy: %v", gerr)
+		}
+		parsed, _ := policy.Parse("policy.hcl", rec.HCLSource)
+		resp = &bamboov1.GetPolicyResponse{Policy: toProtoPolicy(rec, parsed)}
+		return nil
+	})
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "load policy: %v", err)
+		return nil, err
 	}
-
-	parsed, _ := policy.Parse("policy.hcl", rec.HCLSource)
-	return &bamboov1.GetPolicyResponse{Policy: toProtoPolicy(rec, parsed)}, nil
+	return resp, nil
 }
 
 // PutPolicy validates and persists a new policy revision.
@@ -95,25 +107,34 @@ func (h *PolicyHandler) PutPolicy(ctx context.Context, req *bamboov1.PutPolicyRe
 		return nil, status.Errorf(codes.InvalidArgument, "invalid policy: %v", parseErr)
 	}
 
-	rec, err := h.policies.Put(ctx, tenant.ID, req.GetHclSource(), nil, req.GetExpectedRevision())
-	if errors.Is(err, repo.ErrRevisionMismatch) {
-		return nil, status.Error(codes.FailedPrecondition, "expected_revision does not match current")
-	}
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "put policy: %v", err)
-	}
-
-	auditLog(ctx, h.audits, &repo.AuditEvent{
-		TenantID:     &tenant.ID,
-		ActorType:    "system",
-		Action:       "policy.update",
-		ResourceType: "policy",
-		Diff: marshalDiff(map[string]any{
-			"revision":  rec.Revision,
-			"rules":     len(parsed.Rules),
-			"hcl_bytes": len(rec.HCLSource),
-		}),
+	var rec *repo.PolicyRecord
+	err = db.WithTenant(ctx, h.pool, tenant.ID, func(q db.Querier) error {
+		r, perr := repo.NewPolicies(q).Put(ctx, tenant.ID, req.GetHclSource(), nil, req.GetExpectedRevision())
+		if errors.Is(perr, repo.ErrRevisionMismatch) {
+			return status.Error(codes.FailedPrecondition, "expected_revision does not match current")
+		}
+		if perr != nil {
+			return status.Errorf(codes.Internal, "put policy: %v", perr)
+		}
+		rec = r
+		// Audit inside the same tx: atomic with the write, and the RLS
+		// backstop (which will cover audit_log) sees app.tenant_id.
+		auditLog(ctx, repo.NewAuditLogs(q), &repo.AuditEvent{
+			TenantID:     &tenant.ID,
+			ActorType:    "system",
+			Action:       "policy.update",
+			ResourceType: "policy",
+			Diff: marshalDiff(map[string]any{
+				"revision":  r.Revision,
+				"rules":     len(parsed.Rules),
+				"hcl_bytes": len(r.HCLSource),
+			}),
+		})
+		return nil
 	})
+	if err != nil {
+		return nil, err
+	}
 
 	if h.bus != nil {
 		h.bus.Publish(tenant.ID, &bamboov1.WatchPeersEvent{
