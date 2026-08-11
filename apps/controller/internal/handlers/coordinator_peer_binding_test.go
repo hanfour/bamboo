@@ -48,7 +48,11 @@ func TestEnforcePeerBinding(t *testing.T) {
 		t.Errorf("no bearer should skip binding, got %v", err)
 	}
 
-	// A user-session bearer (admin) is not a peer-session token → skip.
+	// A user-session bearer (admin) is now tenant-bound too, but that
+	// check needs a wired peers repo; this no-DB handler has none, so it
+	// skips (the h.peers==nil guard). The enforced cross-tenant denial —
+	// a tenant-A user JWT acting on a tenant-B peer → NotFound — is
+	// covered by e2e TestCrossTenant_GRPC* with a real peers repo.
 	userTok, err := auth.IssueSessionToken(secret, auth.SessionClaims{
 		UserID: uuid.New(), TenantID: tenant,
 	}, time.Hour)
@@ -56,7 +60,7 @@ func TestEnforcePeerBinding(t *testing.T) {
 		t.Fatalf("issue session token: %v", err)
 	}
 	if err := h.enforcePeerBinding(incomingBearer(userTok), peerB.String()); err != nil {
-		t.Errorf("user-session bearer should skip peer binding, got %v", err)
+		t.Errorf("user-session bearer with no peers repo should skip, got %v", err)
 	}
 
 	// Not configured (no session secret) → skip.
