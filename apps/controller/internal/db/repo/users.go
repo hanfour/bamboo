@@ -12,11 +12,11 @@ import (
 
 // Users is the repository for users table.
 type Users struct {
-	pool *db.Pool
+	pool db.Querier
 }
 
 // NewUsers constructs a Users repository.
-func NewUsers(pool *db.Pool) *Users {
+func NewUsers(pool db.Querier) *Users {
 	return &Users{pool: pool}
 }
 

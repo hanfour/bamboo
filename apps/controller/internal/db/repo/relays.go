@@ -12,11 +12,11 @@ import (
 
 // Relays is the repository for the relay_servers table.
 type Relays struct {
-	pool *db.Pool
+	pool db.Querier
 }
 
 // NewRelays constructs a Relays repository.
-func NewRelays(pool *db.Pool) *Relays {
+func NewRelays(pool db.Querier) *Relays {
 	return &Relays{pool: pool}
 }
 

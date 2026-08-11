@@ -38,11 +38,11 @@ type WebhookSubscription struct {
 
 // Webhooks is the repository for webhook_subscriptions.
 type Webhooks struct {
-	pool *db.Pool
+	pool db.Querier
 }
 
 // NewWebhooks constructs the repository.
-func NewWebhooks(pool *db.Pool) *Webhooks {
+func NewWebhooks(pool db.Querier) *Webhooks {
 	return &Webhooks{pool: pool}
 }
 

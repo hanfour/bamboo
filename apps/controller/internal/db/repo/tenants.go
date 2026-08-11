@@ -26,11 +26,11 @@ const DefaultTenantCIDR = "100.127.0.0/24"
 
 // Tenants is the repository for tenants table.
 type Tenants struct {
-	pool *db.Pool
+	pool db.Querier
 }
 
 // NewTenants constructs a Tenants repository.
-func NewTenants(pool *db.Pool) *Tenants {
+func NewTenants(pool db.Querier) *Tenants {
 	return &Tenants{pool: pool}
 }
 

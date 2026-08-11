@@ -19,6 +19,11 @@ type Querier interface {
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+	// Begin opens a transaction. On a *pgxpool.Pool it is a real tx on a
+	// fresh connection; on a pgx.Tx (i.e. inside WithTenant) it is a
+	// savepoint nested in the tenant tx — either way the repo's own
+	// multi-statement atomicity is preserved.
+	Begin(ctx context.Context) (pgx.Tx, error)
 }
 
 // WithTenant runs fn inside a transaction whose transaction-local

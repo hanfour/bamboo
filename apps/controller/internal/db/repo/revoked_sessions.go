@@ -16,11 +16,11 @@ import (
 // claim) as invalid before its natural exp; the auth middleware
 // consults this on every authenticated request.
 type RevokedSessions struct {
-	pool *db.Pool
+	pool db.Querier
 }
 
 // NewRevokedSessions constructs the repository.
-func NewRevokedSessions(pool *db.Pool) *RevokedSessions {
+func NewRevokedSessions(pool db.Querier) *RevokedSessions {
 	return &RevokedSessions{pool: pool}
 }
 

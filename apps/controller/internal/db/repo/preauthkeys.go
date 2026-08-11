@@ -12,11 +12,11 @@ import (
 
 // PreAuthKeys is the repository for pre_auth_keys table.
 type PreAuthKeys struct {
-	pool *db.Pool
+	pool db.Querier
 }
 
 // NewPreAuthKeys constructs a PreAuthKeys repository.
-func NewPreAuthKeys(pool *db.Pool) *PreAuthKeys {
+func NewPreAuthKeys(pool db.Querier) *PreAuthKeys {
 	return &PreAuthKeys{pool: pool}
 }
 
