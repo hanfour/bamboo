@@ -607,7 +607,7 @@ func (h *CoordinatorHandler) Heartbeat(ctx context.Context, req *bamboov1.Heartb
 // valid peer-session token for peer A could Heartbeat / WatchPeers as
 // peer B — endpoint poisoning, netmap snooping. Only the peer-session
 // credential is bound; a user-session bearer (admin) or no bearer (dev /
-// require_auth off) skips the check, matching the REST peerCredentialAllows
+// require_auth off) skips the check, matching the REST peerCredentialStatus
 // behavior. The interceptor already validated the bearer's signature; this
 // adds the identity binding the interceptor can't (it lacks the peer_id).
 func (h *CoordinatorHandler) enforcePeerBinding(ctx context.Context, reqPeerID string) error {
@@ -628,7 +628,7 @@ func (h *CoordinatorHandler) enforcePeerBinding(ctx context.Context, reqPeerID s
 	// User-session JWT (a human/admin driving a peer): the claim's tenant
 	// must own reqPeerID. Without this a tenant-A user could Heartbeat /
 	// WatchPeers a tenant-B peer — the gRPC twin of the REST
-	// peerCredentialAllows hole (see crosstenant_grpc_authz_test.go).
+	// peerCredentialStatus hole (see crosstenant_grpc_authz_test.go).
 	if claims, err := auth.VerifySessionToken(h.auth.sessionSec, token); err == nil {
 		// The tenant check needs the peers repo. Production always wires
 		// it; a unit-test handler without one skips (same convention as

@@ -505,9 +505,9 @@ func (h *HTTPServer) apiPeersHeartbeat(w http.ResponseWriter, r *http.Request) {
 	// driving a peer manually). The previous slug-only path is
 	// rejected.
 	if h.requireAuth {
-		if !h.peerCredentialAllows(r, body.PeerID) {
+		if code := h.peerCredentialStatus(r, body.PeerID); code != 0 {
 			outcome = "denied"
-			writeError(w, http.StatusUnauthorized, errors.New("heartbeat requires a peer-session bearer matching the peerId, or a user-session credential"))
+			writeError(w, code, errors.New("heartbeat requires a peer-session bearer matching the peerId, or a user-session credential for the peer's tenant"))
 			return
 		}
 	}
@@ -607,8 +607,8 @@ func (h *HTTPServer) apiPeersWatch(w http.ResponseWriter, r *http.Request) {
 	// Prod-mode gate. Same logic as heartbeat — watch is peer-id-
 	// scoped, so the credential must bind to this peer.
 	if h.requireAuth {
-		if !h.peerCredentialAllows(r, peerID) {
-			writeError(w, http.StatusUnauthorized, errors.New("watch requires a peer-session bearer matching the peerId, or a user-session credential"))
+		if code := h.peerCredentialStatus(r, peerID); code != 0 {
+			writeError(w, code, errors.New("watch requires a peer-session bearer matching the peerId, or a user-session credential for the peer's tenant"))
 			return
 		}
 	}

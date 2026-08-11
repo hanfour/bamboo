@@ -270,53 +270,57 @@ func bearerToken(r *http.Request) string {
 	return strings.TrimSpace(v[len(prefix):])
 }
 
-// peerCredentialAllows reports whether the request carries a
-// credential that proves the caller may act for the given peer_id.
-// Two paths are accepted:
+// peerCredentialStatus reports whether the request may act on the given
+// peer_id, as the HTTP status the caller should return: 0 means authorized;
+// otherwise 401 or 404. It returns 404 — not 403/401 — when the caller holds
+// a valid user session whose tenant does NOT own the target peer (or the peer
+// doesn't exist), so a foreign caller can't probe peer existence across
+// tenants, matching GET /peers/{id}. Two credential paths:
 //
-//   - A peer-session bearer whose claim's peer_id equals expectedPeerID.
-//     Also re-validates the peer still exists, hasn't rotated pubkey,
-//     and hasn't been moved tenants (via usePeerSessionTenant).
-//   - A user-session JWT — a human (e.g. an admin driving a device
-//     from the Web UI) acting on a peer. The JWT's tenant MUST own the
-//     target peer; a valid JWT for a different tenant is refused. Without
-//     that binding, any authenticated user could watch/heartbeat any
-//     peer id across tenants — netmap disclosure + WireGuard endpoint
-//     poisoning (see crosstenant_authz_test.go).
+//   - A peer-session bearer whose claim's peer_id equals expectedPeerID (and
+//     whose peer still exists / hasn't rotated pubkey / moved tenants). A
+//     valid peer-session token aimed at a different peer is 401 — a real
+//     credential, just not for this peer.
+//   - A user-session JWT whose tenant owns expectedPeerID.
 //
-// Returns false when no credential is present so callers can write
-// the 401. Designed to be called only when h.requireAuth is true;
-// callers must not skip the check on the assumption that "the dev
-// fallback still works" — that's exactly the hole Finding #1 closes.
-func (h *HTTPServer) peerCredentialAllows(r *http.Request, expectedPeerID string) bool {
+// Without the tenant binding on the user-session path, any authenticated user
+// could watch/heartbeat any peer id across tenants — netmap disclosure +
+// WireGuard endpoint poisoning (see crosstenant_authz_test.go). Designed to be
+// called only when h.requireAuth is true.
+func (h *HTTPServer) peerCredentialStatus(r *http.Request, expectedPeerID string) int {
+	// Peer-session bearer: authorized only for its own peer_id.
 	if claims := h.peerSessionFromRequest(r); claims != nil {
-		// A peer-session bearer must carry the same peer_id the
-		// caller is acting on. A leaked token from one peer cannot
-		// be used to drive heartbeat / watch on a different peer.
 		if claims.PeerID.String() == expectedPeerID {
 			// Re-validate state (pubkey rotation, tenant move, etc.).
-			tenant, _ := h.usePeerSessionTenant(r)
-			if tenant != nil {
-				return true
+			if tenant, _ := h.usePeerSessionTenant(r); tenant != nil {
+				return 0
 			}
 		}
+		// Valid peer-session token, but not bound to this peer (or its peer
+		// state no longer matches) — unauthorized, not "not found".
+		return http.StatusUnauthorized
 	}
-	// User-session JWT path. Authentication alone is not enough: the
-	// claim's tenant must own expectedPeerID, otherwise a tenant-A user
-	// could act on a tenant-B peer (cross-tenant IDOR).
+	// User-session JWT path. Authentication alone is not enough: the claim's
+	// tenant must own expectedPeerID, otherwise a tenant-A user could act on
+	// a tenant-B peer (cross-tenant IDOR).
 	authn, err := h.authenticate(r)
 	if err != nil || authn.claims == nil {
-		return false
+		return http.StatusUnauthorized
+	}
+	// peers is always wired in production; a repo-less unit-test handler can't
+	// verify ownership, so fail closed rather than panic.
+	if h.peers == nil {
+		return http.StatusUnauthorized
 	}
 	peerID, err := uuid.Parse(expectedPeerID)
 	if err != nil {
-		return false
+		return http.StatusNotFound
 	}
 	peer, err := h.peers.GetByID(r.Context(), peerID)
-	if err != nil || peer == nil {
-		return false
+	if err != nil || peer == nil || peer.TenantID != authn.claims.TenantID {
+		return http.StatusNotFound
 	}
-	return peer.TenantID == authn.claims.TenantID
+	return 0
 }
 
 // peerSessionFromRequest extracts a peer-session bearer token from

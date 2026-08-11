@@ -4,10 +4,10 @@
 // REST endpoints (/peers/watch, /peers/heartbeat).
 //
 // These endpoints are dispatched BEFORE the routeAPI auth gate and
-// self-police via HTTPServer.peerCredentialAllows. Under prod-mode
+// self-police via HTTPServer.peerCredentialStatus. Under prod-mode
 // (require_auth=true) that helper accepts ANY valid user-session JWT
 // without comparing the JWT's tenant to the tenant that owns the
-// target peerId (see api.go peerCredentialAllows: the trailing
+// target peerId (see api.go peerCredentialStatus: the trailing
 // `authenticate(r); if authn.claims != nil { return true }` branch).
 // SubscribePeer / Heartbeat then act on the *named* peer's tenant.
 //
@@ -123,15 +123,12 @@ func TestCrossTenant_WatchStreamRejectsForeignPeer(t *testing.T) {
 	status := getStatusWithBearer(t,
 		f.httpURL+"/api/v1/peers/watch?peerId="+victimPeerID, attackerJWT)
 
-	switch status {
-	case http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound:
-		// Secured — cross-tenant access refused. Desired behavior.
-	default:
+	if status != http.StatusNotFound {
 		t.Errorf("CROSS-TENANT READ: tenant-A user JWT opened the watch stream "+
-			"for tenant-B peer %s (status=%d, want 401/403/404). "+
-			"peerCredentialAllows accepts any valid session JWT without binding "+
-			"it to the target peer's tenant; SubscribePeer then subscribes to "+
-			"peer.TenantID (the victim's).", victimPeerID, status)
+			"for tenant-B peer %s (status=%d, want 404 — same not-found response "+
+			"as GET /peers/{id}, so a foreign caller can't probe peer existence). "+
+			"peerCredentialStatus must bind the JWT to the target peer's tenant.",
+			victimPeerID, status)
 	}
 }
 
@@ -152,9 +149,9 @@ func TestCrossTenant_HeartbeatRejectsForeignPeerEndpoints(t *testing.T) {
 		"peerId":    victimPeerID,
 		"endpoints": []string{poisonEndpoint},
 	})
-	if resp.status == http.StatusOK {
+	if resp.status != http.StatusNotFound {
 		t.Errorf("CROSS-TENANT WRITE: tenant-A user JWT drove heartbeat on tenant-B "+
-			"peer %s (status=200, want 401/403/404).", victimPeerID)
+			"peer %s (status=%d, want 404).", victimPeerID, resp.status)
 	}
 
 	// Data proof: the victim's endpoints must be untouched. Best-effort —
