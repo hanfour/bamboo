@@ -18,7 +18,7 @@ import (
 // Phase 1; we will revisit once a real SOC 2 review demands stricter
 // semantics.
 type AuditLogs struct {
-	pool *db.Pool
+	pool db.Querier
 	hook AuditHook
 }
 
@@ -43,7 +43,7 @@ type AuditHook interface {
 }
 
 // NewAuditLogs constructs an AuditLogs repository.
-func NewAuditLogs(pool *db.Pool) *AuditLogs {
+func NewAuditLogs(pool db.Querier) *AuditLogs {
 	return &AuditLogs{pool: pool}
 }
 

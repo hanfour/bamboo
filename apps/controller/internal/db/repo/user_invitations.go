@@ -16,11 +16,11 @@ import (
 // follow-ups once the OIDC-callback "accept on first login" wiring
 // is designed and email delivery is decided.
 type UserInvitations struct {
-	pool *db.Pool
+	pool db.Querier
 }
 
 // NewUserInvitations constructs a UserInvitations repository.
-func NewUserInvitations(pool *db.Pool) *UserInvitations {
+func NewUserInvitations(pool db.Querier) *UserInvitations {
 	return &UserInvitations{pool: pool}
 }
 

@@ -18,11 +18,11 @@ import (
 // page before anyone has touched DNS settings; Upsert creates or
 // overwrites the row atomically.
 type TenantDNS struct {
-	pool *db.Pool
+	pool db.Querier
 }
 
 // NewTenantDNS constructs a TenantDNS repository.
-func NewTenantDNS(pool *db.Pool) *TenantDNS {
+func NewTenantDNS(pool db.Querier) *TenantDNS {
 	return &TenantDNS{pool: pool}
 }
 

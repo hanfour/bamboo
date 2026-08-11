@@ -63,11 +63,11 @@ func (t *APIToken) IsActive(now time.Time) bool {
 
 // APITokens is the repository for api_tokens.
 type APITokens struct {
-	pool *db.Pool
+	pool db.Querier
 }
 
 // NewAPITokens constructs the repository.
-func NewAPITokens(pool *db.Pool) *APITokens {
+func NewAPITokens(pool db.Querier) *APITokens {
 	return &APITokens{pool: pool}
 }
 

@@ -16,7 +16,7 @@ import (
 
 // Peers is the repository for peers table.
 type Peers struct {
-	pool *db.Pool
+	pool db.Querier
 }
 
 // peerTagsSubquery returns the SQL fragment used by every Peer read
@@ -33,7 +33,7 @@ const peerTagsSubquery = `COALESCE((
 ), ARRAY[]::text[])`
 
 // NewPeers constructs a Peers repository.
-func NewPeers(pool *db.Pool) *Peers {
+func NewPeers(pool db.Querier) *Peers {
 	return &Peers{pool: pool}
 }
 

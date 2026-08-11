@@ -16,11 +16,11 @@ import (
 // Policies is the repository for the per-tenant ACL policy and its
 // append-only history.
 type Policies struct {
-	pool *db.Pool
+	pool db.Querier
 }
 
 // NewPolicies constructs a Policies repository.
-func NewPolicies(pool *db.Pool) *Policies {
+func NewPolicies(pool db.Querier) *Policies {
 	return &Policies{pool: pool}
 }
 
@@ -84,7 +84,7 @@ func (r *Policies) Put(
 	updatedBy *uuid.UUID,
 	expectedRevision int64,
 ) (*PolicyRecord, error) {
-	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
+	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("begin tx: %w", err)
 	}
