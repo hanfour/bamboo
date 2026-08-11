@@ -277,9 +277,12 @@ func bearerToken(r *http.Request) string {
 //   - A peer-session bearer whose claim's peer_id equals expectedPeerID.
 //     Also re-validates the peer still exists, hasn't rotated pubkey,
 //     and hasn't been moved tenants (via usePeerSessionTenant).
-//   - A user-session JWT — admin driving a peer manually through the
-//     API. The user need only be authenticated; per-peer admin scope
-//     is enforced separately by requireAdmin where applicable.
+//   - A user-session JWT — a human (e.g. an admin driving a device
+//     from the Web UI) acting on a peer. The JWT's tenant MUST own the
+//     target peer; a valid JWT for a different tenant is refused. Without
+//     that binding, any authenticated user could watch/heartbeat any
+//     peer id across tenants — netmap disclosure + WireGuard endpoint
+//     poisoning (see crosstenant_authz_test.go).
 //
 // Returns false when no credential is present so callers can write
 // the 401. Designed to be called only when h.requireAuth is true;
@@ -298,11 +301,22 @@ func (h *HTTPServer) peerCredentialAllows(r *http.Request, expectedPeerID string
 			}
 		}
 	}
+	// User-session JWT path. Authentication alone is not enough: the
+	// claim's tenant must own expectedPeerID, otherwise a tenant-A user
+	// could act on a tenant-B peer (cross-tenant IDOR).
 	authn, err := h.authenticate(r)
-	if err == nil && authn.claims != nil {
-		return true
+	if err != nil || authn.claims == nil {
+		return false
 	}
-	return false
+	peerID, err := uuid.Parse(expectedPeerID)
+	if err != nil {
+		return false
+	}
+	peer, err := h.peers.GetByID(r.Context(), peerID)
+	if err != nil || peer == nil {
+		return false
+	}
+	return peer.TenantID == authn.claims.TenantID
 }
 
 // peerSessionFromRequest extracts a peer-session bearer token from
