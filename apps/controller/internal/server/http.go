@@ -36,6 +36,7 @@ import (
 type HTTPServer struct {
 	addr        string
 	srv         *http.Server
+	pool        *db.Pool // opens per-request WithTenant txs for the RLS backstop (ADR-0014)
 	providers   map[string]auth.OIDCProvider
 	tenants     *repo.Tenants
 	users       *repo.Users
@@ -105,6 +106,7 @@ func NewHTTPServer(
 	mux := http.NewServeMux()
 	h := &HTTPServer{
 		addr:        addr,
+		pool:        pool,
 		providers:   providers,
 		tenants:     repo.NewTenants(pool),
 		users:       repo.NewUsers(pool),

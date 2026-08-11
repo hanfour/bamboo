@@ -19,6 +19,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/hanfour/bamboo/apps/controller/internal/auth"
+	"github.com/hanfour/bamboo/apps/controller/internal/db"
 	"github.com/hanfour/bamboo/apps/controller/internal/db/repo"
 	"github.com/hanfour/bamboo/apps/controller/internal/handlers"
 	"github.com/hanfour/bamboo/apps/controller/internal/nat64"
@@ -3578,19 +3579,28 @@ func (h *HTTPServer) apiCreateWebhook(w http.ResponseWriter, r *http.Request, au
 		uid := authn.claims.UserID
 		createdBy = &uid
 	}
-	created, err := h.webhooks.Create(r.Context(), &repo.WebhookSubscription{
-		TenantID:    tenant.ID,
-		URL:         req.URL,
-		Secret:      secret,
-		EventTypes:  req.EventTypes,
-		Description: req.Description,
-		Active:      true,
-		CreatedBy:   createdBy,
-	})
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Errorf("create webhook: %w", err))
+	var created *repo.WebhookSubscription
+	if txErr := db.WithTenant(r.Context(), h.pool, tenant.ID, func(q db.Querier) error {
+		c, err := repo.NewWebhooks(q).Create(r.Context(), &repo.WebhookSubscription{
+			TenantID:    tenant.ID,
+			URL:         req.URL,
+			Secret:      secret,
+			EventTypes:  req.EventTypes,
+			Description: req.Description,
+			Active:      true,
+			CreatedBy:   createdBy,
+		})
+		if err != nil {
+			return fmt.Errorf("create webhook: %w", err)
+		}
+		created = c
+		return nil
+	}); txErr != nil {
+		writeError(w, http.StatusInternalServerError, txErr)
 		return
 	}
+	// Audit on the hook-bearing repo (fires webhook delivery), post-commit.
+	// audit_log gets its own WithTenant slice later.
 	insertAudit(r.Context(), h.audits, &repo.AuditEvent{
 		TenantID:     &tenant.ID,
 		ActorType:    authnActorType(authn),
@@ -3615,9 +3625,16 @@ func (h *HTTPServer) apiListWebhooks(w http.ResponseWriter, r *http.Request, aut
 	if !h.requireAdmin(w, r, authn, tenant, "webhooks.list") {
 		return
 	}
-	subs, err := h.webhooks.ListByTenant(r.Context(), tenant.ID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
+	var subs []*repo.WebhookSubscription
+	if txErr := db.WithTenant(r.Context(), h.pool, tenant.ID, func(q db.Querier) error {
+		s, err := repo.NewWebhooks(q).ListByTenant(r.Context(), tenant.ID)
+		if err != nil {
+			return err
+		}
+		subs = s
+		return nil
+	}); txErr != nil {
+		writeError(w, http.StatusInternalServerError, txErr)
 		return
 	}
 	out := make([]apiWebhookJSON, 0, len(subs))
@@ -3648,15 +3665,6 @@ func (h *HTTPServer) apiPatchWebhook(w http.ResponseWriter, r *http.Request, aut
 		http.NotFound(w, r)
 		return
 	}
-	current, err := h.webhooks.GetByID(r.Context(), id)
-	if errors.Is(err, repo.ErrNotFound) || (current != nil && current.TenantID != tenant.ID) {
-		http.NotFound(w, r)
-		return
-	}
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
 	var req apiPatchWebhookReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, fmt.Errorf("decode body: %w", err))
@@ -3672,18 +3680,39 @@ func (h *HTTPServer) apiPatchWebhook(w http.ResponseWriter, r *http.Request, aut
 			return
 		}
 	}
-	updated, err := h.webhooks.Update(r.Context(), id, repo.WebhookPatch{
-		URL:         req.URL,
-		EventTypes:  req.EventTypes,
-		Description: req.Description,
-		Active:      req.Active,
-	})
-	if errors.Is(err, repo.ErrNotFound) {
-		http.NotFound(w, r)
+	var updated *repo.WebhookSubscription
+	var notFound bool
+	if txErr := db.WithTenant(r.Context(), h.pool, tenant.ID, func(q db.Querier) error {
+		wh := repo.NewWebhooks(q)
+		current, err := wh.GetByID(r.Context(), id)
+		if errors.Is(err, repo.ErrNotFound) || (current != nil && current.TenantID != tenant.ID) {
+			notFound = true
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		u, err := wh.Update(r.Context(), id, repo.WebhookPatch{
+			URL:         req.URL,
+			EventTypes:  req.EventTypes,
+			Description: req.Description,
+			Active:      req.Active,
+		})
+		if errors.Is(err, repo.ErrNotFound) {
+			notFound = true
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		updated = u
+		return nil
+	}); txErr != nil {
+		writeError(w, http.StatusInternalServerError, txErr)
 		return
 	}
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
+	if notFound {
+		http.NotFound(w, r)
 		return
 	}
 	insertAudit(r.Context(), h.audits, &repo.AuditEvent{
@@ -3713,33 +3742,46 @@ func (h *HTTPServer) apiDeleteWebhook(w http.ResponseWriter, r *http.Request, au
 		http.NotFound(w, r)
 		return
 	}
-	current, err := h.webhooks.GetByID(r.Context(), id)
-	if errors.Is(err, repo.ErrNotFound) {
-		// Already gone — DELETE is idempotent. Return 204.
-		w.WriteHeader(http.StatusNoContent)
+	var notFound, deleted bool
+	var deletedURL string
+	if txErr := db.WithTenant(r.Context(), h.pool, tenant.ID, func(q db.Querier) error {
+		wh := repo.NewWebhooks(q)
+		current, err := wh.GetByID(r.Context(), id)
+		if errors.Is(err, repo.ErrNotFound) {
+			return nil // already gone — DELETE is idempotent (204)
+		}
+		if err != nil {
+			return err
+		}
+		if current.TenantID != tenant.ID {
+			notFound = true
+			return nil
+		}
+		if err := wh.Delete(r.Context(), id); err != nil {
+			return err
+		}
+		deleted = true
+		deletedURL = current.URL
+		return nil
+	}); txErr != nil {
+		writeError(w, http.StatusInternalServerError, txErr)
 		return
 	}
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-	if current.TenantID != tenant.ID {
+	if notFound {
 		http.NotFound(w, r)
 		return
 	}
-	if err := h.webhooks.Delete(r.Context(), id); err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
+	if deleted {
+		insertAudit(r.Context(), h.audits, &repo.AuditEvent{
+			TenantID:     &tenant.ID,
+			ActorType:    authnActorType(authn),
+			ActorID:      authnActorID(authn),
+			Action:       "webhook.delete",
+			ResourceType: "webhook",
+			ResourceID:   &id,
+			Diff:         marshalDiff(map[string]any{"url": deletedURL}),
+		})
 	}
-	insertAudit(r.Context(), h.audits, &repo.AuditEvent{
-		TenantID:     &tenant.ID,
-		ActorType:    authnActorType(authn),
-		ActorID:      authnActorID(authn),
-		Action:       "webhook.delete",
-		ResourceType: "webhook",
-		ResourceID:   &id,
-		Diff:         marshalDiff(map[string]any{"url": current.URL}),
-	})
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -3849,16 +3891,24 @@ func (h *HTTPServer) apiTestWebhook(w http.ResponseWriter, r *http.Request, auth
 		http.NotFound(w, r)
 		return
 	}
-	sub, err := h.webhooks.GetByID(r.Context(), id)
-	if errors.Is(err, repo.ErrNotFound) {
-		http.NotFound(w, r)
+	var sub *repo.WebhookSubscription
+	var notFound bool
+	if txErr := db.WithTenant(r.Context(), h.pool, tenant.ID, func(q db.Querier) error {
+		s, err := repo.NewWebhooks(q).GetByID(r.Context(), id)
+		if errors.Is(err, repo.ErrNotFound) || (s != nil && s.TenantID != tenant.ID) {
+			notFound = true
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		sub = s
+		return nil
+	}); txErr != nil {
+		writeError(w, http.StatusInternalServerError, txErr)
 		return
 	}
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-	if sub.TenantID != tenant.ID {
+	if notFound {
 		http.NotFound(w, r)
 		return
 	}
