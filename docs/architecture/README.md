@@ -57,4 +57,8 @@ decisions, see [`../adr/`](../adr/).
 ## Multi-tenancy
 
 Single deployment serves many tenants. Isolation is enforced at the database
-row level using `tenant_id`. See ADR (TBD) for the rationale.
+row level using `tenant_id` — today entirely in application code (every query
+filters by `tenant_id`). A Postgres RLS backstop is planned so a forgotten
+check fails closed rather than leaking across tenants; see
+[ADR 0014](../adr/0014-tenant-isolation-rls-backstop.md) for the rationale and
+rollout.
