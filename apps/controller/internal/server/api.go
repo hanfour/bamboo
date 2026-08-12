@@ -3409,18 +3409,25 @@ func (h *HTTPServer) apiMintAPIToken(w http.ResponseWriter, r *http.Request, aut
 		writeError(w, http.StatusInternalServerError, fmt.Errorf("mint token: %w", err))
 		return
 	}
-	created, err := h.apiTokens.Insert(r.Context(), &repo.APIToken{
-		ID:          id,
-		TenantID:    tenant.ID,
-		Name:        strings.TrimSpace(req.Name),
-		Description: req.Description,
-		SecretHash:  hash,
-		Scope:       scope,
-		ExpiresAt:   req.ExpiresAt,
-		CreatedBy:   authnActorID(authn),
-	})
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Errorf("persist token: %w", err))
+	var created *repo.APIToken
+	if txErr := db.WithTenant(r.Context(), h.pool, tenant.ID, func(q db.Querier) error {
+		c, err := repo.NewAPITokens(q).Insert(r.Context(), &repo.APIToken{
+			ID:          id,
+			TenantID:    tenant.ID,
+			Name:        strings.TrimSpace(req.Name),
+			Description: req.Description,
+			SecretHash:  hash,
+			Scope:       scope,
+			ExpiresAt:   req.ExpiresAt,
+			CreatedBy:   authnActorID(authn),
+		})
+		if err != nil {
+			return fmt.Errorf("persist token: %w", err)
+		}
+		created = c
+		return nil
+	}); txErr != nil {
+		writeError(w, http.StatusInternalServerError, txErr)
 		return
 	}
 	insertAudit(r.Context(), h.audits, &repo.AuditEvent{
@@ -3444,9 +3451,16 @@ func (h *HTTPServer) apiListAPITokens(w http.ResponseWriter, r *http.Request, au
 	if !h.requireAdmin(w, r, authn, tenant, "api_tokens.list") {
 		return
 	}
-	rows, err := h.apiTokens.ListByTenant(r.Context(), tenant.ID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
+	var rows []*repo.APIToken
+	if txErr := db.WithTenant(r.Context(), h.pool, tenant.ID, func(q db.Querier) error {
+		rs, err := repo.NewAPITokens(q).ListByTenant(r.Context(), tenant.ID)
+		if err != nil {
+			return err
+		}
+		rows = rs
+		return nil
+	}); txErr != nil {
+		writeError(w, http.StatusInternalServerError, txErr)
 		return
 	}
 	out := make([]apiAPITokenListJSON, 0, len(rows))
@@ -3469,21 +3483,29 @@ func (h *HTTPServer) apiRevokeAPIToken(w http.ResponseWriter, r *http.Request, a
 		http.NotFound(w, r)
 		return
 	}
-	current, err := h.apiTokens.GetByID(r.Context(), id)
-	if errors.Is(err, repo.ErrNotFound) {
+	var notFound bool
+	var revokedName string
+	if txErr := db.WithTenant(r.Context(), h.pool, tenant.ID, func(q db.Querier) error {
+		at := repo.NewAPITokens(q)
+		current, err := at.GetByID(r.Context(), id)
+		if errors.Is(err, repo.ErrNotFound) || (current != nil && current.TenantID != tenant.ID) {
+			notFound = true
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if err := at.Revoke(r.Context(), id); err != nil && !errors.Is(err, repo.ErrNotFound) {
+			return err
+		}
+		revokedName = current.Name
+		return nil
+	}); txErr != nil {
+		writeError(w, http.StatusInternalServerError, txErr)
+		return
+	}
+	if notFound {
 		http.NotFound(w, r)
-		return
-	}
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-	if current.TenantID != tenant.ID {
-		http.NotFound(w, r)
-		return
-	}
-	if err := h.apiTokens.Revoke(r.Context(), id); err != nil && !errors.Is(err, repo.ErrNotFound) {
-		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
 	insertAudit(r.Context(), h.audits, &repo.AuditEvent{
@@ -3493,7 +3515,7 @@ func (h *HTTPServer) apiRevokeAPIToken(w http.ResponseWriter, r *http.Request, a
 		Action:       "api_token.revoke",
 		ResourceType: "api_token",
 		ResourceID:   &id,
-		Diff:         marshalDiff(map[string]any{"name": current.Name}),
+		Diff:         marshalDiff(map[string]any{"name": revokedName}),
 	})
 	w.WriteHeader(http.StatusNoContent)
 }
