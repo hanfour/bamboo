@@ -23,12 +23,12 @@ func TestCrossTenant_GRPCGetPolicyBindsToJWTTenant(t *testing.T) {
 	jwt, _ := f.mintJWTWithUser(t, false) // user in tenant A (f.tenantSlug)
 
 	var tenantAID string
-	if err := f.pool.QueryRow(context.Background(),
+	if err := f.admin.QueryRow(context.Background(),
 		`SELECT id FROM tenants WHERE slug = $1`, f.tenantSlug).Scan(&tenantAID); err != nil {
 		t.Fatalf("resolve tenant A id: %v", err)
 	}
 	spoof := "victim-" + f.tenantSlug
-	t.Cleanup(func() { cleanupTenant(f.pool, spoof) })
+	t.Cleanup(func() { cleanupTenant(f.admin, spoof) })
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -78,7 +78,7 @@ func TestCrossTenant_GRPCPutPolicyBindsToJWTTenant(t *testing.T) {
 
 	countFor := func(slug string) int {
 		var n int
-		if err := f.pool.QueryRow(context.Background(),
+		if err := f.admin.QueryRow(context.Background(),
 			`SELECT count(*) FROM acl_policies WHERE tenant_id = (SELECT id FROM tenants WHERE slug = $1)`,
 			slug).Scan(&n); err != nil {
 			t.Fatalf("count policies for %s: %v", slug, err)

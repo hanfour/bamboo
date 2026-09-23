@@ -52,9 +52,12 @@ Every tenant-scoped table has a `tenant_id` column with:
 - An index on `tenant_id`
 - A composite uniqueness constraint where applicable
 
-There is no row-level security policy in v1; isolation is enforced in
-application code. Future ADR may revisit RLS once we have measured the
-performance cost.
+Row-level security (migration 00022, ADR 0014) confines every
+tenant-scoped table to `current_setting('app.tenant_id')`. The
+controller pool assumes the `bamboo_app` role, which is subject to
+those policies. Cross-tenant jobs and bootstrap lookups assume
+`bamboo_maintenance` (`BYPASSRLS`) for one transaction. `tenants`,
+`relay_servers`, and `revoked_sessions` stay global.
 
 ## Tracking
 

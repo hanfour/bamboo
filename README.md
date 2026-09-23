@@ -23,10 +23,10 @@ apps/             server-side components (AGPLv3)
 
 clients/          agents and native clients (Apache 2.0)
   core/             shared client logic
-  cli/              command-line tool
-  macos/            macOS native app
-  windows/          Windows native app
-  linux/            Linux daemon
+  cli/              command-line agent (brings up WireGuard on Linux)
+  apple/            macOS and iOS apps
+  windows/          native app scaffold (no GUI yet)
+  linux/            packaging notes for the CLI agent
 
 sdks/             language SDKs (Apache 2.0)
   go/               Go SDK

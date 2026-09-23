@@ -34,7 +34,7 @@ func TestGRPC_RevokePreAuthKey_RejectsCrossTenant(t *testing.T) {
 		&bamboov1.CreatePreAuthKeyRequest{Description: "tenant-B seed"}); err != nil {
 		t.Fatalf("seed tenant B: %v", err)
 	}
-	t.Cleanup(func() { _, _ = f.pool.Exec(bg, `DELETE FROM tenants WHERE slug = $1`, slugB) })
+	t.Cleanup(func() { _, _ = f.admin.Exec(bg, `DELETE FROM tenants WHERE slug = $1`, slugB) })
 
 	// Revoking A's key while acting as tenant B must be NotFound — B can't
 	// even confirm A's key exists (no cross-tenant probe).

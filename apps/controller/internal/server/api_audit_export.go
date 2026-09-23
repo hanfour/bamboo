@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/hanfour/bamboo/apps/controller/internal/db"
 	"github.com/hanfour/bamboo/apps/controller/internal/db/repo"
 )
 
@@ -66,7 +67,15 @@ func (h *HTTPServer) routeAdminAuditExport(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusUnauthorized, errors.New("admin auth required"))
 		return
 	}
-	user, err := h.users.GetByID(r.Context(), authn.claims.UserID)
+	var user *repo.User
+	err = db.WithTenant(r.Context(), h.pool, authn.claims.TenantID, func(q db.Querier) error {
+		u, gerr := repo.NewUsers(q).GetByID(r.Context(), authn.claims.UserID)
+		if gerr != nil {
+			return gerr
+		}
+		user = u
+		return nil
+	})
 	if err != nil || user == nil || !user.IsAdmin {
 		writeError(w, http.StatusForbidden, errors.New("admin only"))
 		return
@@ -103,12 +112,14 @@ func (h *HTTPServer) routeAdminAuditExport(w http.ResponseWriter, r *http.Reques
 	}
 
 	written := 0
-	streamErr := h.audits.StreamByTenantInRange(r.Context(), user.TenantID, since, until, limit, func(ev *repo.AuditEvent) error {
-		if err := cw.Write(auditEventToCSVRow(ev)); err != nil {
-			return err
-		}
-		written++
-		return nil
+	streamErr := db.WithTenant(r.Context(), h.pool, user.TenantID, func(q db.Querier) error {
+		return repo.NewAuditLogs(q).StreamByTenantInRange(r.Context(), user.TenantID, since, until, limit, func(ev *repo.AuditEvent) error {
+			if err := cw.Write(auditEventToCSVRow(ev)); err != nil {
+				return err
+			}
+			written++
+			return nil
+		})
 	})
 	cw.Flush()
 	if err := cw.Error(); err != nil {

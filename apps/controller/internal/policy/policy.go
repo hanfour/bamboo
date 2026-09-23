@@ -49,6 +49,7 @@ package policy
 import (
 	"fmt"
 	"net/netip"
+	"sort"
 	"strings"
 )
 
@@ -222,4 +223,29 @@ func (p *Policy) CanAssignTag(name, email string) bool {
 		}
 	}
 	return false
+}
+
+// GroupsFor returns the group names (without the "group:" prefix)
+// whose member list contains email. A member of "*" matches every
+// non-empty email. Comparison is case-insensitive, matching
+// CanAssignTag. The result is sorted so callers can compare it.
+func GroupsFor(p *Policy, email string) []string {
+	if p == nil || email == "" || len(p.Groups) == 0 {
+		return nil
+	}
+	var names []string
+	for key, members := range p.Groups {
+		name, ok := strings.CutPrefix(key, "group:")
+		if !ok || name == "" {
+			continue
+		}
+		for _, member := range members {
+			if member == "*" || strings.EqualFold(member, email) {
+				names = append(names, name)
+				break
+			}
+		}
+	}
+	sort.Strings(names)
+	return names
 }

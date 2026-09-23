@@ -195,13 +195,13 @@ func TestAuthenticate_RejectsStaleTenantClaim(t *testing.T) {
 	// carries the original TenantID claim; the controller must detect
 	// the mismatch and reject the request.
 	otherTenantID := uuid.New()
-	if _, err := f.pool.Exec(ctx, `
+	if _, err := f.admin.Exec(ctx, `
 		INSERT INTO tenants (id, slug, name, ip_pool)
 		VALUES ($1, $2, 'Other Tenant', '100.65.0.0/24')
 	`, otherTenantID, "e2e-other-"+uuid.NewString()[:8]); err != nil {
 		t.Fatalf("create other tenant: %v", err)
 	}
-	if _, err := f.pool.Exec(ctx, `UPDATE users SET tenant_id = $1 WHERE id = $2`,
+	if _, err := f.admin.Exec(ctx, `UPDATE users SET tenant_id = $1 WHERE id = $2`,
 		otherTenantID, userID); err != nil {
 		t.Fatalf("move user: %v", err)
 	}

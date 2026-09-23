@@ -131,7 +131,7 @@ func TestHeartbeat_UpdatesLastSeen(t *testing.T) {
 	}
 
 	var lastSeen *time.Time
-	row := f.pool.QueryRow(context.Background(),
+	row := f.admin.QueryRow(context.Background(),
 		`SELECT last_seen_at FROM peers WHERE id = $1`, resp.GetSelf().GetId())
 	if err := row.Scan(&lastSeen); err != nil {
 		t.Fatalf("scan: %v", err)
@@ -292,7 +292,7 @@ func TestRegister_AllowedIpsReflectsACL(t *testing.T) {
 		t.Fatalf("parse db id: %v", err)
 	}
 
-	peers := repo.NewPeers(f.pool)
+	peers := repo.NewPeers(f.admin)
 	if _, err := peers.SetTags(ctx, devID, []string{"dev"}); err != nil {
 		t.Fatalf("SetTags dev: %v", err)
 	}

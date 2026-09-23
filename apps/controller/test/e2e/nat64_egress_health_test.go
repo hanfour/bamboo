@@ -20,7 +20,7 @@ func TestNAT64EgressHealth_HeartbeatPersists(t *testing.T) {
 	f := startFixture(t)
 	ctx := f.outgoingCtx(context.Background())
 	bg := context.Background()
-	peers := repo.NewPeers(f.pool)
+	peers := repo.NewPeers(f.admin)
 
 	reg, err := f.coord.Register(ctx, &bamboov1.RegisterRequest{
 		Hostname: "egress", WireguardPublicKey: randomPubKey(t), Os: "linux",

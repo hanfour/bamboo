@@ -178,7 +178,18 @@ func (h *HTTPServer) authenticate(r *http.Request) (*authnContext, error) {
 	// exercise JWT parsing in isolation; skip the membership check in
 	// that case. Production always wires users via NewHTTPServer.
 	if h.users != nil {
-		user, err := h.users.GetByID(r.Context(), claims.UserID)
+		// Membership check already knows the tenant from the verified
+		// JWT. Run it inside WithTenant so RLS on users fails closed
+		// instead of seeing an unset app.tenant_id (ADR-0014).
+		var user *repo.User
+		err := db.WithTenant(r.Context(), h.pool, claims.TenantID, func(q db.Querier) error {
+			u, gerr := repo.NewUsers(q).GetByID(r.Context(), claims.UserID)
+			if gerr != nil {
+				return gerr
+			}
+			user = u
+			return nil
+		})
 		if err != nil {
 			if errors.Is(err, repo.ErrNotFound) {
 				return nil, errors.New("user not found")
@@ -235,7 +246,16 @@ func (h *HTTPServer) verifyAPIToken(ctx context.Context, plaintext string) (*rep
 	if h.apiTokens == nil {
 		return nil, errors.New(errMsg)
 	}
-	tok, err := h.apiTokens.GetByID(ctx, id)
+	// Bootstrap: the token row is how we learn the tenant.
+	var tok *repo.APIToken
+	err = db.WithBypass(ctx, h.pool, func(q db.Querier) error {
+		row, gerr := repo.NewAPITokens(q).GetByID(ctx, id)
+		if gerr != nil {
+			return gerr
+		}
+		tok = row
+		return nil
+	})
 	if err != nil {
 		return nil, errors.New(errMsg)
 	}
@@ -252,7 +272,10 @@ func (h *HTTPServer) verifyAPIToken(ctx context.Context, plaintext string) (*rep
 	go func(id uuid.UUID, at time.Time) {
 		bgCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
-		if uerr := h.apiTokens.MarkUsed(bgCtx, id, at); uerr != nil {
+		uerr := db.WithBypass(bgCtx, h.pool, func(q db.Querier) error {
+			return repo.NewAPITokens(q).MarkUsed(bgCtx, id, at)
+		})
+		if uerr != nil {
 			slog.Warn("api_token: mark-used failed", "token_id", id, "err", uerr)
 		}
 	}(tok.ID, now)
@@ -317,7 +340,20 @@ func (h *HTTPServer) peerCredentialStatus(r *http.Request, expectedPeerID string
 	if err != nil {
 		return http.StatusNotFound
 	}
-	peer, err := h.peers.GetByID(r.Context(), peerID)
+	// The session claim already names the tenant; scope the peer
+	// lookup so RLS hides foreign rows as not-found (same 404).
+	var peer *repo.Peer
+	err = db.WithTenant(r.Context(), h.pool, authn.claims.TenantID, func(q db.Querier) error {
+		p, gerr := repo.NewPeers(q).GetByID(r.Context(), peerID)
+		if errors.Is(gerr, repo.ErrNotFound) {
+			return nil
+		}
+		if gerr != nil {
+			return gerr
+		}
+		peer = p
+		return nil
+	})
 	if err != nil || peer == nil || peer.TenantID != authn.claims.TenantID {
 		return http.StatusNotFound
 	}
@@ -367,7 +403,21 @@ func (h *HTTPServer) usePeerSessionTenant(r *http.Request) (*repo.Tenant, *auth.
 	if claims == nil {
 		return nil, nil
 	}
-	peer, err := h.peers.GetByID(r.Context(), claims.PeerID)
+	// Peer-session claims already carry tenant_id. The peer row is
+	// re-checked inside that tenant; tenants.GetByID below stays on
+	// the pool (tenants is not RLS-scoped).
+	var peer *repo.Peer
+	err := db.WithTenant(r.Context(), h.pool, claims.TenantID, func(q db.Querier) error {
+		p, gerr := repo.NewPeers(q).GetByID(r.Context(), claims.PeerID)
+		if errors.Is(gerr, repo.ErrNotFound) {
+			return nil
+		}
+		if gerr != nil {
+			return gerr
+		}
+		peer = p
+		return nil
+	})
 	if err != nil || peer == nil {
 		return nil, nil
 	}
@@ -433,8 +483,19 @@ func (h *HTTPServer) apiMe(w http.ResponseWriter, r *http.Request, authn *authnC
 		writeJSON(w, http.StatusOK, out)
 		return
 	}
-	user, err := h.users.GetByID(r.Context(), authn.claims.UserID)
-	if err != nil && !errors.Is(err, repo.ErrNotFound) {
+	var user *repo.User
+	err := db.WithTenant(r.Context(), h.pool, tenant.ID, func(q db.Querier) error {
+		u, gerr := repo.NewUsers(q).GetByID(r.Context(), authn.claims.UserID)
+		if errors.Is(gerr, repo.ErrNotFound) {
+			return nil
+		}
+		if gerr != nil {
+			return gerr
+		}
+		user = u
+		return nil
+	})
+	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
@@ -617,8 +678,15 @@ func augmentUpgradeAvailable(peers []apiPeerJSON, latest string) {
 }
 
 func (h *HTTPServer) apiPeers(w http.ResponseWriter, r *http.Request, tenant *repo.Tenant) {
-	peers, err := h.peers.ListByTenant(r.Context(), tenant.ID)
-	if err != nil {
+	var peers []*repo.Peer
+	if err := db.WithTenant(r.Context(), h.pool, tenant.ID, func(q db.Querier) error {
+		ps, err := repo.NewPeers(q).ListByTenant(r.Context(), tenant.ID)
+		if err != nil {
+			return err
+		}
+		peers = ps
+		return nil
+	}); err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
@@ -643,16 +711,24 @@ func (h *HTTPServer) apiPeer(w http.ResponseWriter, r *http.Request, tenant *rep
 		http.NotFound(w, r)
 		return
 	}
-	p, err := h.peers.GetByID(r.Context(), id)
-	if errors.Is(err, repo.ErrNotFound) {
-		http.NotFound(w, r)
+	var p *repo.Peer
+	var notFound bool
+	if txErr := db.WithTenant(r.Context(), h.pool, tenant.ID, func(q db.Querier) error {
+		got, ok, gerr := getPeerInTenant(r.Context(), q, tenant.ID, id)
+		if gerr != nil {
+			return gerr
+		}
+		if !ok {
+			notFound = true
+			return nil
+		}
+		p = got
+		return nil
+	}); txErr != nil {
+		writeError(w, http.StatusInternalServerError, txErr)
 		return
 	}
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-	if p.TenantID != tenant.ID {
+	if notFound {
 		http.NotFound(w, r)
 		return
 	}
@@ -695,20 +771,6 @@ func (h *HTTPServer) apiPeerPatch(w http.ResponseWriter, r *http.Request, authn 
 		return
 	}
 
-	current, err := h.peers.GetByID(r.Context(), id)
-	if errors.Is(err, repo.ErrNotFound) {
-		http.NotFound(w, r)
-		return
-	}
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-	if current.TenantID != tenant.ID {
-		http.NotFound(w, r)
-		return
-	}
-
 	// Validate before any write so we never half-apply.
 	var newHostname string
 	if req.Hostname != nil {
@@ -738,116 +800,174 @@ func (h *HTTPServer) apiPeerPatch(w http.ResponseWriter, r *http.Request, authn 
 	var (
 		setDNSName bool
 		newDNSPtr  *string
+		dnsTrimmed string
 	)
 	if req.DNSName != nil {
 		setDNSName = true
-		trimmed := strings.TrimSpace(*req.DNSName)
-		if trimmed != "" {
-			if trimmed != handlers.SlugifyHostname(trimmed) {
+		dnsTrimmed = strings.TrimSpace(*req.DNSName)
+		if dnsTrimmed != "" {
+			if dnsTrimmed != handlers.SlugifyHostname(dnsTrimmed) {
 				writeError(w, http.StatusBadRequest, errors.New("dnsName must be lowercase, [a-z0-9-], no leading/trailing dash"))
 				return
 			}
-			if len(trimmed) > 63 {
+			if len(dnsTrimmed) > 63 {
 				writeError(w, http.StatusBadRequest, errors.New("dnsName exceeds 63 chars"))
 				return
 			}
-			taken, terr := h.peers.IsDNSNameTaken(r.Context(), tenant.ID, trimmed)
-			if terr != nil {
-				writeError(w, http.StatusInternalServerError, fmt.Errorf("check dnsName: %w", terr))
-				return
-			}
-			// Skip the conflict when the row already holds this exact
-			// name — re-PATCHing to the same value should be idempotent,
-			// not a 409.
-			if taken && (current.PeerDNSName == nil || *current.PeerDNSName != trimmed) {
-				writeError(w, http.StatusConflict, fmt.Errorf("dnsName %q is already used by another peer in this tenant", trimmed))
-				return
-			}
-			newDNSPtr = &trimmed
+			newDNSPtr = &dnsTrimmed
 		}
-		// trimmed == "" => newDNSPtr stays nil; that's the explicit-
+		// dnsTrimmed == "" => newDNSPtr stays nil; that's the explicit-
 		// clear path. The partial unique index treats NULL rows as
 		// absent so the column can collide-free transition through
 		// NULL to a new value.
 	}
 
-	diff := map[string]any{}
-
-	if req.Hostname != nil && newHostname != current.Hostname {
-		if _, err := h.peers.UpdateHostname(r.Context(), id, newHostname); err != nil {
-			writeError(w, http.StatusInternalServerError, fmt.Errorf("update hostname: %w", err))
-			return
+	var (
+		current   *repo.Peer
+		updated   *repo.Peer
+		notFound  bool
+		conflict  bool
+		tagDenied string
+		diff      = map[string]any{}
+		auditEv   *repo.AuditEvent
+		auditOK   bool
+	)
+	// Tag writes + the audit row share the tenant tx with hostname /
+	// dnsName unless status is also changing. SetPeerStatus lives on
+	// the coordinator (its own pool connection) and updates the same
+	// peer row — calling it while this tx holds the row lock deadlocks.
+	// Status therefore runs between two tenant txs; tags stay after it
+	// so the status event still carries the pre-tag row, matching the
+	// previous autocommit order.
+	applyTags := func(q db.Querier) error {
+		if req.Tags == nil || current == nil {
+			return nil
 		}
-		diff["hostname"] = map[string]string{"from": current.Hostname, "to": newHostname}
-	}
-	if setDNSName {
-		curStr := ""
-		if current.PeerDNSName != nil {
-			curStr = *current.PeerDNSName
-		}
-		newStr := ""
-		if newDNSPtr != nil {
-			newStr = *newDNSPtr
-		}
-		if curStr != newStr {
-			if _, err := h.peers.UpdateDNSName(r.Context(), id, newDNSPtr); err != nil {
-				writeError(w, http.StatusInternalServerError, fmt.Errorf("update dnsName: %w", err))
-				return
-			}
-			diff["peer_dns_name"] = map[string]string{"from": curStr, "to": newStr}
-		}
-	}
-	if req.Status != nil && *req.Status != current.Status {
-		// Delegate to the coordinator so the WatchPeers event for
-		// the status change is published alongside the DB write. The
-		// idempotency check inside SetPeerStatus duplicates the
-		// outer `*req.Status != current.Status` guard; both are
-		// cheap and keep the handlers honest if either side gets
-		// reordered later.
-		if _, _, err := h.coord.SetPeerStatus(r.Context(), id, *req.Status); err != nil {
-			writeError(w, http.StatusInternalServerError, fmt.Errorf("set status: %w", err))
-			return
-		}
-		diff["status"] = map[string]string{"from": current.Status, "to": *req.Status}
-	}
-	if req.Tags != nil {
-		// Tag-owners RBAC (issue #139). When the tenant policy
-		// declares a tagOwners block, an admin can only assign /
-		// remove tags whose owner list includes their email (or
-		// the "*" wildcard). Dev-fallback (no claims) skips the
-		// check — local `make local-up` doesn't have an admin
-		// email to compare against, and require_auth=true is the
-		// gate that keeps that path off the prod surface.
 		if authn != nil && authn.claims != nil {
-			if rej, err := h.checkTagAssignPermission(r.Context(), tenant.ID, authn.claims.UserID, current.Tags, *req.Tags); err != nil {
-				writeError(w, http.StatusInternalServerError, fmt.Errorf("tag rbac: %w", err))
-				return
-			} else if rej != "" {
-				writeError(w, http.StatusForbidden, fmt.Errorf("not allowed to assign or remove tag %q (tagOwners)", rej))
-				return
+			rej, terr := h.checkTagAssignPermission(r.Context(), q, tenant.ID, authn.claims.UserID, current.Tags, *req.Tags)
+			if terr != nil {
+				return fmt.Errorf("tag rbac: %w", terr)
+			}
+			if rej != "" {
+				tagDenied = rej
+				return nil
 			}
 		}
-		newTags, err := h.peers.SetTags(r.Context(), id, *req.Tags)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, fmt.Errorf("set tags: %w", err))
-			return
+		newTags, terr := repo.NewPeers(q).SetTags(r.Context(), id, *req.Tags)
+		if terr != nil {
+			return fmt.Errorf("set tags: %w", terr)
 		}
 		if !stringSlicesEqual(current.Tags, newTags) {
 			diff["tags"] = map[string][]string{"from": current.Tags, "to": newTags}
 		}
+		return nil
+	}
+	finish := func(q db.Querier) error {
+		if err := applyTags(q); err != nil || tagDenied != "" {
+			return err
+		}
+		got, err := repo.NewPeers(q).GetByID(r.Context(), id)
+		if err != nil {
+			return err
+		}
+		updated = got
+		if len(diff) > 0 {
+			auditEv, auditOK = writePeerAuditTx(r.Context(), q, authn, tenant.ID, id, "peer.update", diff)
+		}
+		return nil
 	}
 
-	if len(diff) > 0 {
-		writePeerAudit(r.Context(), h.audits, authn, tenant.ID, id, "peer.update", diff)
-	}
-
-	// Re-read so the response carries the canonical post-update state
-	// (including the de-duped, sorted tag set from SetTags).
-	updated, err := h.peers.GetByID(r.Context(), id)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
+	txErr := db.WithTenant(r.Context(), h.pool, tenant.ID, func(q db.Querier) error {
+		peers := repo.NewPeers(q)
+		cur, ok, err := getPeerInTenant(r.Context(), q, tenant.ID, id)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			notFound = true
+			return nil
+		}
+		current = cur
+		if setDNSName && dnsTrimmed != "" {
+			taken, terr := peers.IsDNSNameTaken(r.Context(), tenant.ID, dnsTrimmed)
+			if terr != nil {
+				return fmt.Errorf("check dnsName: %w", terr)
+			}
+			// Skip the conflict when the row already holds this exact
+			// name — re-PATCHing to the same value should be idempotent,
+			// not a 409.
+			if taken && (cur.PeerDNSName == nil || *cur.PeerDNSName != dnsTrimmed) {
+				conflict = true
+				return nil
+			}
+		}
+		if req.Hostname != nil && newHostname != cur.Hostname {
+			if _, err := peers.UpdateHostname(r.Context(), id, newHostname); err != nil {
+				return fmt.Errorf("update hostname: %w", err)
+			}
+			diff["hostname"] = map[string]string{"from": cur.Hostname, "to": newHostname}
+		}
+		if setDNSName {
+			curStr := ""
+			if cur.PeerDNSName != nil {
+				curStr = *cur.PeerDNSName
+			}
+			newStr := ""
+			if newDNSPtr != nil {
+				newStr = *newDNSPtr
+			}
+			if curStr != newStr {
+				if _, err := peers.UpdateDNSName(r.Context(), id, newDNSPtr); err != nil {
+					return fmt.Errorf("update dnsName: %w", err)
+				}
+				diff["peer_dns_name"] = map[string]string{"from": curStr, "to": newStr}
+			}
+		}
+		if req.Status != nil && *req.Status != cur.Status {
+			return nil // status + tags + audit after this tx commits
+		}
+		return finish(q)
+	})
+	if txErr != nil {
+		writeError(w, http.StatusInternalServerError, txErr)
 		return
 	}
+	if notFound {
+		http.NotFound(w, r)
+		return
+	}
+	if conflict {
+		writeError(w, http.StatusConflict, fmt.Errorf("dnsName %q is already used by another peer in this tenant", dnsTrimmed))
+		return
+	}
+	if tagDenied != "" {
+		writeError(w, http.StatusForbidden, fmt.Errorf("not allowed to assign or remove tag %q (tagOwners)", tagDenied))
+		return
+	}
+
+	statusChanged := req.Status != nil && current != nil && *req.Status != current.Status
+	if statusChanged {
+		// Coordinator write is not on this package's querier (see
+		// handlers.CoordinatorHandler). It runs after the tenant tx
+		// releases the peer row.
+		if _, _, err := h.coord.SetPeerStatus(handlers.WithKnownTenantID(r.Context(), tenant.ID), id, *req.Status); err != nil {
+			writeError(w, http.StatusInternalServerError, fmt.Errorf("set status: %w", err))
+			return
+		}
+		diff["status"] = map[string]string{"from": current.Status, "to": *req.Status}
+		txErr = db.WithTenant(r.Context(), h.pool, tenant.ID, func(q db.Querier) error {
+			return finish(q)
+		})
+		if txErr != nil {
+			writeError(w, http.StatusInternalServerError, txErr)
+			return
+		}
+		if tagDenied != "" {
+			writeError(w, http.StatusForbidden, fmt.Errorf("not allowed to assign or remove tag %q (tagOwners)", tagDenied))
+			return
+		}
+	}
+	h.emitAuditHook(r.Context(), auditEv, auditOK)
 
 	// Publish a WatchPeers event for non-status field changes
 	// (hostname / dnsName / tags) so subscribers refresh their view
@@ -858,7 +978,6 @@ func (h *HTTPServer) apiPeerPatch(w http.ResponseWriter, r *http.Request, authn 
 	// PeerUpdated here would double-emit and, for the disabled
 	// transition, would even mislead subscribers into re-adding a
 	// peer the PeerRemoved just told them to drop.
-	statusChanged := req.Status != nil && *req.Status != current.Status
 	if len(diff) > 0 && !statusChanged {
 		h.coord.PublishPeerUpdatedIfVisible(tenant.ID, updated)
 	}
@@ -879,19 +998,20 @@ func (h *HTTPServer) apiPeerPatch(w http.ResponseWriter, r *http.Request, authn 
 // is restricted; one absent from tagOwners is unrestricted.
 func (h *HTTPServer) checkTagAssignPermission(
 	ctx context.Context,
+	q db.Querier,
 	tenantID uuid.UUID,
 	userID uuid.UUID,
 	current []string,
 	next []string,
 ) (string, error) {
-	policyDoc, err := h.loadPolicyForTagRBAC(ctx, tenantID)
+	policyDoc, err := h.loadPolicyForTagRBAC(ctx, q, tenantID)
 	if err != nil {
 		return "", err
 	}
 	if policyDoc == nil || len(policyDoc.TagOwners) == 0 {
 		return "", nil
 	}
-	user, err := h.users.GetByID(ctx, userID)
+	user, err := repo.NewUsers(q).GetByID(ctx, userID)
 	if err != nil {
 		// User row missing is treated as "permission denied" rather
 		// than allow-all — the JWT should never outlive the user.
@@ -933,8 +1053,8 @@ func prefixTag(t string) string {
 // the parsed shape (no revision tracking). Errors degrade to nil so
 // a borked policy row doesn't block tag PATCHes entirely; the data
 // plane already logs the parse failure.
-func (h *HTTPServer) loadPolicyForTagRBAC(ctx context.Context, tenantID uuid.UUID) (*policy.Policy, error) {
-	rec, err := h.policies.Get(ctx, tenantID)
+func (h *HTTPServer) loadPolicyForTagRBAC(ctx context.Context, q db.Querier, tenantID uuid.UUID) (*policy.Policy, error) {
+	rec, err := repo.NewPolicies(q).Get(ctx, tenantID)
 	if errors.Is(err, repo.ErrNotFound) {
 		return nil, nil
 	}
@@ -994,16 +1114,24 @@ func (h *HTTPServer) apiPeerApprove(w http.ResponseWriter, r *http.Request, auth
 		http.NotFound(w, r)
 		return
 	}
-	current, err := h.peers.GetByID(r.Context(), id)
-	if errors.Is(err, repo.ErrNotFound) {
-		http.NotFound(w, r)
+	var current *repo.Peer
+	var notFound bool
+	if txErr := db.WithTenant(r.Context(), h.pool, tenant.ID, func(q db.Querier) error {
+		got, ok, gerr := getPeerInTenant(r.Context(), q, tenant.ID, id)
+		if gerr != nil {
+			return gerr
+		}
+		if !ok {
+			notFound = true
+			return nil
+		}
+		current = got
+		return nil
+	}); txErr != nil {
+		writeError(w, http.StatusInternalServerError, txErr)
 		return
 	}
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-	if current.TenantID != tenant.ID {
+	if notFound {
 		http.NotFound(w, r)
 		return
 	}
@@ -1015,16 +1143,28 @@ func (h *HTTPServer) apiPeerApprove(w http.ResponseWriter, r *http.Request, auth
 		writeError(w, http.StatusConflict, errors.New("peer is rejected; delete + re-register instead of un-rejecting"))
 		return
 	}
-	updated, changed, err := h.coord.ApprovePeer(r.Context(), id, adminUserIDFromAuth(authn))
+	// ApprovePeer writes peers on the coordinator's pool repo — not
+	// moved here (that file isn't in this slice). The audit row is
+	// still tenant-scoped.
+	updated, changed, err := h.coord.ApprovePeer(handlers.WithKnownTenantID(r.Context(), tenant.ID), id, adminUserIDFromAuth(authn))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Errorf("approve peer: %w", err))
 		return
 	}
 	if changed {
-		writePeerAudit(r.Context(), h.audits, authn, tenant.ID, id, "peer.approve", map[string]any{
-			"hostname":        updated.Hostname,
-			"approval_status": map[string]any{"from": "pending", "to": "approved"},
-		})
+		var auditEv *repo.AuditEvent
+		var auditOK bool
+		if txErr := db.WithTenant(r.Context(), h.pool, tenant.ID, func(q db.Querier) error {
+			auditEv, auditOK = writePeerAuditTx(r.Context(), q, authn, tenant.ID, id, "peer.approve", map[string]any{
+				"hostname":        updated.Hostname,
+				"approval_status": map[string]any{"from": "pending", "to": "approved"},
+			})
+			return nil
+		}); txErr != nil {
+			slog.Warn("peer.approve audit tx failed", "peer_id", id, "err", txErr)
+		} else {
+			h.emitAuditHook(r.Context(), auditEv, auditOK)
+		}
 	}
 	writeJSON(w, http.StatusOK, peerToJSON(updated))
 }
@@ -1044,16 +1184,24 @@ func (h *HTTPServer) apiPeerReject(w http.ResponseWriter, r *http.Request, authn
 		http.NotFound(w, r)
 		return
 	}
-	current, err := h.peers.GetByID(r.Context(), id)
-	if errors.Is(err, repo.ErrNotFound) {
-		http.NotFound(w, r)
+	var current *repo.Peer
+	var notFound bool
+	if txErr := db.WithTenant(r.Context(), h.pool, tenant.ID, func(q db.Querier) error {
+		got, ok, gerr := getPeerInTenant(r.Context(), q, tenant.ID, id)
+		if gerr != nil {
+			return gerr
+		}
+		if !ok {
+			notFound = true
+			return nil
+		}
+		current = got
+		return nil
+	}); txErr != nil {
+		writeError(w, http.StatusInternalServerError, txErr)
 		return
 	}
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-	if current.TenantID != tenant.ID {
+	if notFound {
 		http.NotFound(w, r)
 		return
 	}
@@ -1061,16 +1209,26 @@ func (h *HTTPServer) apiPeerReject(w http.ResponseWriter, r *http.Request, authn
 		writeError(w, http.StatusConflict, errors.New("peer is already approved; use DELETE to remove it"))
 		return
 	}
-	updated, changed, err := h.coord.RejectPeer(r.Context(), id, adminUserIDFromAuth(authn))
+	// RejectPeer writes peers on the coordinator's pool repo.
+	updated, changed, err := h.coord.RejectPeer(handlers.WithKnownTenantID(r.Context(), tenant.ID), id, adminUserIDFromAuth(authn))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Errorf("reject peer: %w", err))
 		return
 	}
 	if changed {
-		writePeerAudit(r.Context(), h.audits, authn, tenant.ID, id, "peer.reject", map[string]any{
-			"hostname":        updated.Hostname,
-			"approval_status": map[string]any{"from": "pending", "to": "rejected"},
-		})
+		var auditEv *repo.AuditEvent
+		var auditOK bool
+		if txErr := db.WithTenant(r.Context(), h.pool, tenant.ID, func(q db.Querier) error {
+			auditEv, auditOK = writePeerAuditTx(r.Context(), q, authn, tenant.ID, id, "peer.reject", map[string]any{
+				"hostname":        updated.Hostname,
+				"approval_status": map[string]any{"from": "pending", "to": "rejected"},
+			})
+			return nil
+		}); txErr != nil {
+			slog.Warn("peer.reject audit tx failed", "peer_id", id, "err", txErr)
+		} else {
+			h.emitAuditHook(r.Context(), auditEv, auditOK)
+		}
 	}
 	writeJSON(w, http.StatusOK, peerToJSON(updated))
 }
@@ -1113,64 +1271,80 @@ func (h *HTTPServer) apiPeerSetApprovedRoutes(w http.ResponseWriter, r *http.Req
 		http.NotFound(w, r)
 		return
 	}
-	current, err := h.peers.GetByID(r.Context(), id)
-	if errors.Is(err, repo.ErrNotFound) {
-		http.NotFound(w, r)
-		return
-	}
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-	if current.TenantID != tenant.ID {
-		http.NotFound(w, r)
-		return
-	}
 	var req apiPeerSetApprovedRoutesReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, fmt.Errorf("decode body: %w", err))
 		return
-	}
-	// Validate CIDR shapes + the subset-of-advertised constraint.
-	advertised := make(map[string]struct{}, len(current.AdvertisedRoutes))
-	for _, c := range current.AdvertisedRoutes {
-		advertised[c] = struct{}{}
 	}
 	for _, cidr := range req.Routes {
 		if _, perr := netip.ParsePrefix(cidr); perr != nil {
 			writeError(w, http.StatusBadRequest, fmt.Errorf("invalid CIDR %q: %w", cidr, perr))
 			return
 		}
-		if _, ok := advertised[cidr]; !ok {
-			writeError(w, http.StatusBadRequest, fmt.Errorf("route %q is not advertised by peer", cidr))
-			return
-		}
 	}
-	if err := h.peers.SetApprovedRoutes(r.Context(), id, req.Routes); err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Errorf("set approved_routes: %w", err))
+	var (
+		updated  *repo.Peer
+		notFound bool
+		badCIDR  string
+		auditEv  *repo.AuditEvent
+		auditOK  bool
+	)
+	if txErr := db.WithTenant(r.Context(), h.pool, tenant.ID, func(q db.Querier) error {
+		peers := repo.NewPeers(q)
+		current, ok, gerr := getPeerInTenant(r.Context(), q, tenant.ID, id)
+		if gerr != nil {
+			return gerr
+		}
+		if !ok {
+			notFound = true
+			return nil
+		}
+		advertised := make(map[string]struct{}, len(current.AdvertisedRoutes))
+		for _, c := range current.AdvertisedRoutes {
+			advertised[c] = struct{}{}
+		}
+		for _, cidr := range req.Routes {
+			if _, ok := advertised[cidr]; !ok {
+				badCIDR = cidr
+				return nil
+			}
+		}
+		if err := peers.SetApprovedRoutes(r.Context(), id, req.Routes); err != nil {
+			return fmt.Errorf("set approved_routes: %w", err)
+		}
+		// Audit in this tx, before BumpPolicyRevision (coordinator,
+		// outside). A later bump 500 leaves exactly one audit row.
+		auditEv, auditOK = writePeerAuditTx(r.Context(), q, authn, tenant.ID, id, "peer.routes.approve", map[string]any{
+			"hostname": current.Hostname,
+			"approved_routes": map[string]any{
+				"from": current.ApprovedRoutes,
+				"to":   req.Routes,
+			},
+		})
+		got, err := peers.GetByID(r.Context(), id)
+		if err != nil {
+			return err
+		}
+		updated = got
+		return nil
+	}); txErr != nil {
+		writeError(w, http.StatusInternalServerError, txErr)
 		return
 	}
-	// Write the audit row BEFORE the policy-revision bump so a bump
-	// failure doesn't lose the trail of what just persisted. The
-	// approved_routes write already committed — an operator retrying
-	// after a 5xx from the bump leg should see exactly one audit row,
-	// not zero (silent partial write) and not two (one per retry).
-	writePeerAudit(r.Context(), h.audits, authn, tenant.ID, id, "peer.routes.approve", map[string]any{
-		"hostname": current.Hostname,
-		"approved_routes": map[string]any{
-			"from": current.ApprovedRoutes,
-			"to":   req.Routes,
-		},
-	})
+	if notFound {
+		http.NotFound(w, r)
+		return
+	}
+	if badCIDR != "" {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("route %q is not advertised by peer", badCIDR))
+		return
+	}
+	h.emitAuditHook(r.Context(), auditEv, auditOK)
 	// #170: bump policy_revision + publish PolicyChanged so peers
-	// re-pull allowed_ips without a manual reconnect.
+	// re-pull allowed_ips without a manual reconnect. Stays on the
+	// coordinator's pool repo; the route write above has committed.
 	if _, err := h.coord.BumpPolicyRevision(r.Context(), tenant.ID); err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Errorf("bump policy revision: %w", err))
-		return
-	}
-	updated, err := h.peers.GetByID(r.Context(), id)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, peerToJSON(updated))
@@ -1196,51 +1370,66 @@ func (h *HTTPServer) apiPeerSetExitNodeApproved(w http.ResponseWriter, r *http.R
 		http.NotFound(w, r)
 		return
 	}
-	current, err := h.peers.GetByID(r.Context(), id)
-	if errors.Is(err, repo.ErrNotFound) {
-		http.NotFound(w, r)
-		return
-	}
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-	if current.TenantID != tenant.ID {
-		http.NotFound(w, r)
-		return
-	}
 	var req apiPeerSetExitNodeApprovedReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, fmt.Errorf("decode body: %w", err))
 		return
 	}
-	if req.Approved && !current.ExitNodeCapable {
+	var (
+		updated  *repo.Peer
+		notFound bool
+		badCap   bool
+		auditEv  *repo.AuditEvent
+		auditOK  bool
+	)
+	if txErr := db.WithTenant(r.Context(), h.pool, tenant.ID, func(q db.Querier) error {
+		peers := repo.NewPeers(q)
+		current, ok, gerr := getPeerInTenant(r.Context(), q, tenant.ID, id)
+		if gerr != nil {
+			return gerr
+		}
+		if !ok {
+			notFound = true
+			return nil
+		}
+		if req.Approved && !current.ExitNodeCapable {
+			badCap = true
+			return nil
+		}
+		if err := peers.SetExitNodeApproved(r.Context(), id, req.Approved); err != nil {
+			return fmt.Errorf("set exit_node_approved: %w", err)
+		}
+		// Audit before the coordinator bump (outside this tx).
+		auditEv, auditOK = writePeerAuditTx(r.Context(), q, authn, tenant.ID, id, "peer.exit-node.approve", map[string]any{
+			"hostname": current.Hostname,
+			"exit_node_approved": map[string]any{
+				"from": current.ExitNodeApproved,
+				"to":   req.Approved,
+			},
+		})
+		got, err := peers.GetByID(r.Context(), id)
+		if err != nil {
+			return err
+		}
+		updated = got
+		return nil
+	}); txErr != nil {
+		writeError(w, http.StatusInternalServerError, txErr)
+		return
+	}
+	if notFound {
+		http.NotFound(w, r)
+		return
+	}
+	if badCap {
 		writeError(w, http.StatusBadRequest, errors.New("peer is not exit-node-capable; client must register with --advertise-exit-node first"))
 		return
 	}
-	if err := h.peers.SetExitNodeApproved(r.Context(), id, req.Approved); err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Errorf("set exit_node_approved: %w", err))
-		return
-	}
-	// Audit BEFORE bump — see comment in apiPeerSetApprovedRoutes
-	// for the rationale (preserve audit trail across partial-failure
-	// retries).
-	writePeerAudit(r.Context(), h.audits, authn, tenant.ID, id, "peer.exit-node.approve", map[string]any{
-		"hostname": current.Hostname,
-		"exit_node_approved": map[string]any{
-			"from": current.ExitNodeApproved,
-			"to":   req.Approved,
-		},
-	})
+	h.emitAuditHook(r.Context(), auditEv, auditOK)
 	// #170: bump policy_revision + publish PolicyChanged so peers
 	// re-pull allowed_ips without a manual reconnect.
 	if _, err := h.coord.BumpPolicyRevision(r.Context(), tenant.ID); err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Errorf("bump policy revision: %w", err))
-		return
-	}
-	updated, err := h.peers.GetByID(r.Context(), id)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, peerToJSON(updated))
@@ -1274,29 +1463,15 @@ func (h *HTTPServer) apiPeerUseExitNode(w http.ResponseWriter, r *http.Request, 
 		http.NotFound(w, r)
 		return
 	}
-	current, err := h.peers.GetByID(r.Context(), id)
-	if errors.Is(err, repo.ErrNotFound) {
-		http.NotFound(w, r)
-		return
-	}
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-	if current.TenantID != tenant.ID {
-		http.NotFound(w, r)
-		return
-	}
 	var req apiPeerUseExitNodeReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, fmt.Errorf("decode body: %w", err))
 		return
 	}
-
-	// Resolve + validate the target. Empty ⇒ clear the selection.
-	var target *uuid.UUID
-	if strings.TrimSpace(req.ExitNodePeerID) != "" {
-		targetID, err := uuid.Parse(strings.TrimSpace(req.ExitNodePeerID))
+	rawTarget := strings.TrimSpace(req.ExitNodePeerID)
+	var targetID uuid.UUID
+	if rawTarget != "" {
+		targetID, err = uuid.Parse(rawTarget)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, fmt.Errorf("invalid exitNodePeerId: %w", err))
 			return
@@ -1305,57 +1480,86 @@ func (h *HTTPServer) apiPeerUseExitNode(w http.ResponseWriter, r *http.Request, 
 			writeError(w, http.StatusBadRequest, errors.New("a peer cannot use itself as an exit node"))
 			return
 		}
-		exitPeer, err := h.peers.GetByID(r.Context(), targetID)
-		if errors.Is(err, repo.ErrNotFound) || (err == nil && exitPeer.TenantID != tenant.ID) {
-			// Cross-tenant / missing target collapses to the same 400 so
-			// callers can't probe peer IDs in other tenants.
-			writeError(w, http.StatusBadRequest, errors.New("exit node not found in this tenant"))
-			return
-		}
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, err)
-			return
-		}
-		if !exitPeer.ExitNodeApproved {
-			writeError(w, http.StatusBadRequest, errors.New("target peer is not an approved exit node"))
-			return
-		}
-		target = &targetID
 	}
 
-	if err := h.peers.SetUsingExitNode(r.Context(), id, target); err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Errorf("set using_exit_node: %w", err))
+	var (
+		updated   *repo.Peer
+		notFound  bool
+		badTarget string
+		auditEv   *repo.AuditEvent
+		auditOK   bool
+	)
+	if txErr := db.WithTenant(r.Context(), h.pool, tenant.ID, func(q db.Querier) error {
+		peers := repo.NewPeers(q)
+		current, ok, gerr := getPeerInTenant(r.Context(), q, tenant.ID, id)
+		if gerr != nil {
+			return gerr
+		}
+		if !ok {
+			notFound = true
+			return nil
+		}
+		var target *uuid.UUID
+		if rawTarget != "" {
+			exitPeer, gerr := peers.GetByID(r.Context(), targetID)
+			if errors.Is(gerr, repo.ErrNotFound) || (gerr == nil && exitPeer.TenantID != tenant.ID) {
+				// Cross-tenant / missing target collapses to the same 400 so
+				// callers can't probe peer IDs in other tenants.
+				badTarget = "exit node not found in this tenant"
+				return nil
+			}
+			if gerr != nil {
+				return gerr
+			}
+			if !exitPeer.ExitNodeApproved {
+				badTarget = "target peer is not an approved exit node"
+				return nil
+			}
+			target = &targetID
+		}
+		if err := peers.SetUsingExitNode(r.Context(), id, target); err != nil {
+			return fmt.Errorf("set using_exit_node: %w", err)
+		}
+		from := ""
+		if current.UsingExitNodePeerID != nil {
+			from = current.UsingExitNodePeerID.String()
+		}
+		to := ""
+		if target != nil {
+			to = target.String()
+		}
+		// Audit before the coordinator bump (outside this tx).
+		auditEv, auditOK = writePeerAuditTx(r.Context(), q, authn, tenant.ID, id, "peer.exit-node.use", map[string]any{
+			"hostname": current.Hostname,
+			"using_exit_node_peer_id": map[string]any{
+				"from": from,
+				"to":   to,
+			},
+		})
+		got, err := peers.GetByID(r.Context(), id)
+		if err != nil {
+			return err
+		}
+		updated = got
+		return nil
+	}); txErr != nil {
+		writeError(w, http.StatusInternalServerError, txErr)
 		return
 	}
-
-	// Audit BEFORE the bump (preserve the trail across partial-failure
-	// retries — same idiom as apiPeerSetExitNodeApproved).
-	from := ""
-	if current.UsingExitNodePeerID != nil {
-		from = current.UsingExitNodePeerID.String()
+	if notFound {
+		http.NotFound(w, r)
+		return
 	}
-	to := ""
-	if target != nil {
-		to = target.String()
+	if badTarget != "" {
+		writeError(w, http.StatusBadRequest, errors.New(badTarget))
+		return
 	}
-	writePeerAudit(r.Context(), h.audits, authn, tenant.ID, id, "peer.exit-node.use", map[string]any{
-		"hostname": current.Hostname,
-		"using_exit_node_peer_id": map[string]any{
-			"from": from,
-			"to":   to,
-		},
-	})
-
+	h.emitAuditHook(r.Context(), auditEv, auditOK)
 	// Bump policy_revision + publish PolicyChanged so this peer re-pulls
 	// allowed_ips (now including / excluding the 0.0.0.0/0 default route)
 	// without a manual reconnect (#170).
 	if _, err := h.coord.BumpPolicyRevision(r.Context(), tenant.ID); err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Errorf("bump policy revision: %w", err))
-		return
-	}
-	updated, err := h.peers.GetByID(r.Context(), id)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, peerToJSON(updated))
@@ -1380,51 +1584,65 @@ func (h *HTTPServer) apiPeerSetNAT64EgressApproved(w http.ResponseWriter, r *htt
 		http.NotFound(w, r)
 		return
 	}
-	current, err := h.peers.GetByID(r.Context(), id)
-	if errors.Is(err, repo.ErrNotFound) {
-		http.NotFound(w, r)
-		return
-	}
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-	if current.TenantID != tenant.ID {
-		http.NotFound(w, r)
-		return
-	}
 	var req apiPeerSetNAT64EgressApprovedReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, fmt.Errorf("decode body: %w", err))
 		return
 	}
-	if req.Approved && !current.NAT64EgressCapable {
+	var (
+		updated  *repo.Peer
+		notFound bool
+		badCap   bool
+		auditEv  *repo.AuditEvent
+		auditOK  bool
+	)
+	if txErr := db.WithTenant(r.Context(), h.pool, tenant.ID, func(q db.Querier) error {
+		peers := repo.NewPeers(q)
+		current, ok, gerr := getPeerInTenant(r.Context(), q, tenant.ID, id)
+		if gerr != nil {
+			return gerr
+		}
+		if !ok {
+			notFound = true
+			return nil
+		}
+		if req.Approved && !current.NAT64EgressCapable {
+			badCap = true
+			return nil
+		}
+		if err := peers.SetNAT64EgressApproved(r.Context(), id, req.Approved); err != nil {
+			return fmt.Errorf("set nat64_egress_approved: %w", err)
+		}
+		auditEv, auditOK = writePeerAuditTx(r.Context(), q, authn, tenant.ID, id, "peer.nat64-egress.approve", map[string]any{
+			"hostname": current.Hostname,
+			"nat64_egress_approved": map[string]any{
+				"from": current.NAT64EgressApproved,
+				"to":   req.Approved,
+			},
+		})
+		got, err := peers.GetByID(r.Context(), id)
+		if err != nil {
+			return err
+		}
+		updated = got
+		return nil
+	}); txErr != nil {
+		writeError(w, http.StatusInternalServerError, txErr)
+		return
+	}
+	if notFound {
+		http.NotFound(w, r)
+		return
+	}
+	if badCap {
 		writeError(w, http.StatusBadRequest, errors.New("peer is not nat64-egress-capable; client must register with --advertise-nat64-egress first"))
 		return
 	}
-	if err := h.peers.SetNAT64EgressApproved(r.Context(), id, req.Approved); err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Errorf("set nat64_egress_approved: %w", err))
-		return
-	}
-	// Audit BEFORE bump — see comment in apiPeerSetApprovedRoutes
-	// for the rationale (preserve audit trail across partial-failure
-	// retries).
-	writePeerAudit(r.Context(), h.audits, authn, tenant.ID, id, "peer.nat64-egress.approve", map[string]any{
-		"hostname": current.Hostname,
-		"nat64_egress_approved": map[string]any{
-			"from": current.NAT64EgressApproved,
-			"to":   req.Approved,
-		},
-	})
+	h.emitAuditHook(r.Context(), auditEv, auditOK)
 	// #170: bump policy_revision + publish PolicyChanged so peers
 	// re-pull allowed_ips without a manual reconnect.
 	if _, err := h.coord.BumpPolicyRevision(r.Context(), tenant.ID); err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Errorf("bump policy revision: %w", err))
-		return
-	}
-	updated, err := h.peers.GetByID(r.Context(), id)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, peerToJSON(updated))
@@ -1439,30 +1657,40 @@ func (h *HTTPServer) apiPeerDelete(w http.ResponseWriter, r *http.Request, authn
 		http.NotFound(w, r)
 		return
 	}
-	current, err := h.peers.GetByID(r.Context(), id)
-	if errors.Is(err, repo.ErrNotFound) {
+	var (
+		notFound bool
+		auditEv  *repo.AuditEvent
+		auditOK  bool
+	)
+	if txErr := db.WithTenant(r.Context(), h.pool, tenant.ID, func(q db.Querier) error {
+		peers := repo.NewPeers(q)
+		current, ok, gerr := getPeerInTenant(r.Context(), q, tenant.ID, id)
+		if gerr != nil {
+			return gerr
+		}
+		if !ok {
+			notFound = true
+			return nil
+		}
+		if _, err := peers.Delete(r.Context(), id); err != nil {
+			return fmt.Errorf("delete peer: %w", err)
+		}
+		auditEv, auditOK = writePeerAuditTx(r.Context(), q, authn, tenant.ID, id, "peer.delete", map[string]any{
+			"hostname":           current.Hostname,
+			"ip":                 current.IP,
+			"wireguardPublicKey": current.WireGuardPublicKey,
+			"tags":               current.Tags,
+		})
+		return nil
+	}); txErr != nil {
+		writeError(w, http.StatusInternalServerError, txErr)
+		return
+	}
+	if notFound {
 		http.NotFound(w, r)
 		return
 	}
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-	if current.TenantID != tenant.ID {
-		http.NotFound(w, r)
-		return
-	}
-
-	if _, err := h.peers.Delete(r.Context(), id); err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Errorf("delete peer: %w", err))
-		return
-	}
-	writePeerAudit(r.Context(), h.audits, authn, tenant.ID, id, "peer.delete", map[string]any{
-		"hostname":           current.Hostname,
-		"ip":                 current.IP,
-		"wireguardPublicKey": current.WireGuardPublicKey,
-		"tags":               current.Tags,
-	})
+	h.emitAuditHook(r.Context(), auditEv, auditOK)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -1524,33 +1752,37 @@ func (h *HTTPServer) apiPeerEvents(w http.ResponseWriter, r *http.Request, tenan
 		http.NotFound(w, r)
 		return
 	}
-	// Verify the peer exists in this tenant first. Skipping this
-	// check would let a caller fish for events targeting a peer
-	// they shouldn't see — the audit row carries tenant_id, but
-	// the ResourceID alone (a uuid) isn't tenant-scoped on its own.
-	p, err := h.peers.GetByID(r.Context(), id)
-	if errors.Is(err, repo.ErrNotFound) {
-		http.NotFound(w, r)
-		return
-	}
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-	if p.TenantID != tenant.ID {
-		http.NotFound(w, r)
-		return
-	}
-
 	limit := 50
 	if v := r.URL.Query().Get("limit"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			limit = n
 		}
 	}
-	events, err := h.audits.ListByResource(r.Context(), tenant.ID, "peer", id, limit)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
+	// Peer existence and the audit read share one tenant tx so a
+	// foreign peer 404s before any audit rows are returned.
+	var events []*repo.AuditEvent
+	var notFound bool
+	if txErr := db.WithTenant(r.Context(), h.pool, tenant.ID, func(q db.Querier) error {
+		_, ok, gerr := getPeerInTenant(r.Context(), q, tenant.ID, id)
+		if gerr != nil {
+			return gerr
+		}
+		if !ok {
+			notFound = true
+			return nil
+		}
+		evs, err := repo.NewAuditLogs(q).ListByResource(r.Context(), tenant.ID, "peer", id, limit)
+		if err != nil {
+			return err
+		}
+		events = evs
+		return nil
+	}); txErr != nil {
+		writeError(w, http.StatusInternalServerError, txErr)
+		return
+	}
+	if notFound {
+		http.NotFound(w, r)
 		return
 	}
 
@@ -1594,16 +1826,21 @@ func (h *HTTPServer) apiPeerConnectionEvents(w http.ResponseWriter, r *http.Requ
 		http.NotFound(w, r)
 		return
 	}
-	p, err := h.peers.GetByID(r.Context(), id)
-	if errors.Is(err, repo.ErrNotFound) {
-		http.NotFound(w, r)
+	var notFound bool
+	if txErr := db.WithTenant(r.Context(), h.pool, tenant.ID, func(q db.Querier) error {
+		_, ok, gerr := getPeerInTenant(r.Context(), q, tenant.ID, id)
+		if gerr != nil {
+			return gerr
+		}
+		if !ok {
+			notFound = true
+		}
+		return nil
+	}); txErr != nil {
+		writeError(w, http.StatusInternalServerError, txErr)
 		return
 	}
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-	if p.TenantID != tenant.ID {
+	if notFound {
 		http.NotFound(w, r)
 		return
 	}
@@ -1665,16 +1902,21 @@ func (h *HTTPServer) apiPeerBandwidth(w http.ResponseWriter, r *http.Request, te
 		http.NotFound(w, r)
 		return
 	}
-	p, err := h.peers.GetByID(r.Context(), id)
-	if errors.Is(err, repo.ErrNotFound) {
-		http.NotFound(w, r)
+	var notFound bool
+	if txErr := db.WithTenant(r.Context(), h.pool, tenant.ID, func(q db.Querier) error {
+		_, ok, gerr := getPeerInTenant(r.Context(), q, tenant.ID, id)
+		if gerr != nil {
+			return gerr
+		}
+		if !ok {
+			notFound = true
+		}
+		return nil
+	}); txErr != nil {
+		writeError(w, http.StatusInternalServerError, txErr)
 		return
 	}
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-	if p.TenantID != tenant.ID {
+	if notFound {
 		http.NotFound(w, r)
 		return
 	}
@@ -1748,22 +1990,30 @@ func (h *HTTPServer) apiPeerRouteConflicts(w http.ResponseWriter, r *http.Reques
 		http.NotFound(w, r)
 		return
 	}
-	self, err := h.peers.GetByID(r.Context(), id)
-	if errors.Is(err, repo.ErrNotFound) {
+	var tenantPeers []*repo.Peer
+	var notFound bool
+	if txErr := db.WithTenant(r.Context(), h.pool, tenant.ID, func(q db.Querier) error {
+		peers := repo.NewPeers(q)
+		_, ok, gerr := getPeerInTenant(r.Context(), q, tenant.ID, id)
+		if gerr != nil {
+			return gerr
+		}
+		if !ok {
+			notFound = true
+			return nil
+		}
+		list, err := peers.ListByTenant(r.Context(), tenant.ID)
+		if err != nil {
+			return err
+		}
+		tenantPeers = list
+		return nil
+	}); txErr != nil {
+		writeError(w, http.StatusInternalServerError, txErr)
+		return
+	}
+	if notFound {
 		http.NotFound(w, r)
-		return
-	}
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-	if self.TenantID != tenant.ID {
-		http.NotFound(w, r)
-		return
-	}
-	tenantPeers, err := h.peers.ListByTenant(r.Context(), tenant.ID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
 	owners := make([]routes.Owner, 0, len(tenantPeers)*2)
@@ -1887,9 +2137,16 @@ func (h *HTTPServer) apiActivity(w http.ResponseWriter, r *http.Request, tenant 
 			limit = n
 		}
 	}
-	events, err := h.audits.ListByTenant(r.Context(), tenant.ID, limit)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
+	var events []*repo.AuditEvent
+	if txErr := db.WithTenant(r.Context(), h.pool, tenant.ID, func(q db.Querier) error {
+		evs, err := repo.NewAuditLogs(q).ListByTenant(r.Context(), tenant.ID, limit)
+		if err != nil {
+			return err
+		}
+		events = evs
+		return nil
+	}); txErr != nil {
+		writeError(w, http.StatusInternalServerError, txErr)
 		return
 	}
 	out := make([]apiAuditEventJSON, 0, len(events))
@@ -1952,45 +2209,51 @@ func (h *HTTPServer) apiCreatePreAuthKey(w http.ResponseWriter, r *http.Request,
 		return
 	}
 
-	created, err := h.keys.Create(r.Context(), &repo.PreAuthKey{
-		ID:          id,
-		TenantID:    tenant.ID,
-		Description: req.Description,
-		SecretHash:  hash,
-		Reusable:    req.Reusable,
-		Ephemeral:   req.Ephemeral,
-		AutoApprove: req.AutoApprove,
-	})
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Errorf("insert key: %w", err))
+	var created *repo.PreAuthKey
+	var auditEv *repo.AuditEvent
+	var auditOK bool
+	if txErr := db.WithTenant(r.Context(), h.pool, tenant.ID, func(q db.Querier) error {
+		c, err := repo.NewPreAuthKeys(q).Create(r.Context(), &repo.PreAuthKey{
+			ID:          id,
+			TenantID:    tenant.ID,
+			Description: req.Description,
+			SecretHash:  hash,
+			Reusable:    req.Reusable,
+			Ephemeral:   req.Ephemeral,
+			AutoApprove: req.AutoApprove,
+		})
+		if err != nil {
+			return fmt.Errorf("insert key: %w", err)
+		}
+		created = c
+		// Same shape as the gRPC handler so the activity feed is uniform.
+		ev := &repo.AuditEvent{
+			TenantID:     &tenant.ID,
+			Action:       "preauthkey.create",
+			ResourceType: "pre_auth_key",
+			ResourceID:   &c.ID,
+			Diff: marshalDiff(map[string]any{
+				"description":  c.Description,
+				"reusable":     c.Reusable,
+				"ephemeral":    c.Ephemeral,
+				"auto_approve": c.AutoApprove,
+			}),
+		}
+		if authn != nil && authn.claims != nil {
+			ev.ActorType = "user"
+			uid := authn.claims.UserID
+			ev.ActorID = &uid
+		} else {
+			ev.ActorType = "system"
+		}
+		auditEv = ev
+		auditOK = insertAuditTx(r.Context(), q, ev)
+		return nil
+	}); txErr != nil {
+		writeError(w, http.StatusInternalServerError, txErr)
 		return
 	}
-
-	// Audit row uses the same shape as the gRPC handler so the
-	// dashboard activity feed sees a uniform preauthkey.create
-	// regardless of which surface minted the key.
-	auditEv := &repo.AuditEvent{
-		TenantID:     &tenant.ID,
-		Action:       "preauthkey.create",
-		ResourceType: "pre_auth_key",
-		ResourceID:   &created.ID,
-		Diff: marshalDiff(map[string]any{
-			"description":  created.Description,
-			"reusable":     created.Reusable,
-			"ephemeral":    created.Ephemeral,
-			"auto_approve": created.AutoApprove,
-		}),
-	}
-	if authn != nil && authn.claims != nil {
-		auditEv.ActorType = "user"
-		uid := authn.claims.UserID
-		auditEv.ActorID = &uid
-	} else {
-		auditEv.ActorType = "system"
-	}
-	if err := h.audits.Insert(r.Context(), auditEv); err != nil {
-		slog.Warn("preauthkey audit insert failed", "key_id", created.ID, "err", err)
-	}
+	h.emitAuditHook(r.Context(), auditEv, auditOK)
 
 	writeJSON(w, http.StatusOK, apiPreAuthKeyJSON{
 		ID:          created.ID.String(),
@@ -2029,7 +2292,15 @@ func (h *HTTPServer) requireAdmin(w http.ResponseWriter, r *http.Request, authn 
 		return true
 	}
 	if authn != nil && authn.claims != nil {
-		user, err := h.users.GetByID(r.Context(), authn.claims.UserID)
+		var user *repo.User
+		err := db.WithTenant(r.Context(), h.pool, tenant.ID, func(q db.Querier) error {
+			u, gerr := repo.NewUsers(q).GetByID(r.Context(), authn.claims.UserID)
+			if gerr != nil {
+				return gerr
+			}
+			user = u
+			return nil
+		})
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, fmt.Errorf("resolve user: %w", err))
 			return false
@@ -2094,9 +2365,16 @@ func (h *HTTPServer) apiListPreAuthKeys(w http.ResponseWriter, r *http.Request, 
 	if !h.requireAdmin(w, r, authn, tenant, "preauthkey.list") {
 		return
 	}
-	keys, err := h.keys.ListByTenant(r.Context(), tenant.ID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
+	var keys []*repo.PreAuthKey
+	if txErr := db.WithTenant(r.Context(), h.pool, tenant.ID, func(q db.Querier) error {
+		ks, err := repo.NewPreAuthKeys(q).ListByTenant(r.Context(), tenant.ID)
+		if err != nil {
+			return err
+		}
+		keys = ks
+		return nil
+	}); txErr != nil {
+		writeError(w, http.StatusInternalServerError, txErr)
 		return
 	}
 	out := make([]apiPreAuthKeyListJSON, 0, len(keys))
@@ -2120,63 +2398,84 @@ func (h *HTTPServer) apiRevokePreAuthKey(w http.ResponseWriter, r *http.Request,
 		http.NotFound(w, r)
 		return
 	}
-	key, err := h.keys.GetByID(r.Context(), id)
-	if errors.Is(err, repo.ErrNotFound) {
+	var notFound bool
+	var auditEv *repo.AuditEvent
+	var auditOK bool
+	if txErr := db.WithTenant(r.Context(), h.pool, tenant.ID, func(q db.Querier) error {
+		keys := repo.NewPreAuthKeys(q)
+		key, err := keys.GetByID(r.Context(), id)
+		if errors.Is(err, repo.ErrNotFound) || (err == nil && key.TenantID != tenant.ID) {
+			notFound = true
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if err := keys.Revoke(r.Context(), id); err != nil {
+			return fmt.Errorf("revoke key: %w", err)
+		}
+		ev := &repo.AuditEvent{
+			TenantID:     &tenant.ID,
+			Action:       "preauthkey.revoke",
+			ResourceType: "pre_auth_key",
+			ResourceID:   &id,
+			Diff: marshalDiff(map[string]any{
+				"description": key.Description,
+				"reusable":    key.Reusable,
+				"useCount":    key.UseCount,
+			}),
+		}
+		if authn != nil && authn.claims != nil {
+			ev.ActorType = "user"
+			uid := authn.claims.UserID
+			ev.ActorID = &uid
+		} else {
+			ev.ActorType = "system"
+		}
+		auditEv = ev
+		auditOK = insertAuditTx(r.Context(), q, ev)
+		return nil
+	}); txErr != nil {
+		writeError(w, http.StatusInternalServerError, txErr)
+		return
+	}
+	if notFound {
 		http.NotFound(w, r)
 		return
 	}
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-	if key.TenantID != tenant.ID {
-		http.NotFound(w, r)
-		return
-	}
-	if err := h.keys.Revoke(r.Context(), id); err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Errorf("revoke key: %w", err))
-		return
-	}
-
-	auditEv := &repo.AuditEvent{
-		TenantID:     &tenant.ID,
-		Action:       "preauthkey.revoke",
-		ResourceType: "pre_auth_key",
-		ResourceID:   &id,
-		Diff: marshalDiff(map[string]any{
-			"description": key.Description,
-			"reusable":    key.Reusable,
-			"useCount":    key.UseCount,
-		}),
-	}
-	if authn != nil && authn.claims != nil {
-		auditEv.ActorType = "user"
-		uid := authn.claims.UserID
-		auditEv.ActorID = &uid
-	} else {
-		auditEv.ActorType = "system"
-	}
-	if err := h.audits.Insert(r.Context(), auditEv); err != nil {
-		slog.Warn("preauthkey.revoke audit insert failed", "key_id", id, "err", err)
-	}
+	h.emitAuditHook(r.Context(), auditEv, auditOK)
 
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// writePeerAudit centralizes the actor + tenant + resource binding
-// for peer mutation audit rows. authn==nil or authn.claims==nil
-// happens in dev-fallback mode (no JWT); we record actor_type=system
-// in that case rather than refusing the write — the alternative
-// would block all admin actions outside a logged-in browser.
-func writePeerAudit(ctx context.Context, audits *repo.AuditLogs, authn *authnContext, tenantID, peerID uuid.UUID, action string, diffMap map[string]any) {
-	if audits == nil {
-		return
+// getPeerInTenant loads a peer inside an open tenant transaction.
+// ok is false when the row is missing or belongs to another tenant;
+// callers collapse both to 404.
+func getPeerInTenant(ctx context.Context, q db.Querier, tenantID, id uuid.UUID) (*repo.Peer, bool, error) {
+	p, err := repo.NewPeers(q).GetByID(ctx, id)
+	if errors.Is(err, repo.ErrNotFound) {
+		return nil, false, nil
 	}
+	if err != nil {
+		return nil, false, err
+	}
+	if p.TenantID != tenantID {
+		return nil, false, nil
+	}
+	return p, true, nil
+}
+
+// writePeerAuditTx records a peer mutation inside the caller's tenant
+// transaction (savepoint — see insertAuditTx). The returned event is
+// safe to hand to the webhook hook after the outer tx commits.
+func writePeerAuditTx(ctx context.Context, q db.Querier, authn *authnContext, tenantID, peerID uuid.UUID, action string, diffMap map[string]any) (*repo.AuditEvent, bool) {
+	tid := tenantID
+	pid := peerID
 	ev := &repo.AuditEvent{
-		TenantID:     &tenantID,
+		TenantID:     &tid,
 		Action:       action,
 		ResourceType: "peer",
-		ResourceID:   &peerID,
+		ResourceID:   &pid,
 		Diff:         marshalDiff(diffMap),
 	}
 	if authn != nil && authn.claims != nil {
@@ -2186,9 +2485,7 @@ func writePeerAudit(ctx context.Context, audits *repo.AuditLogs, authn *authnCon
 	} else {
 		ev.ActorType = "system"
 	}
-	if err := audits.Insert(ctx, ev); err != nil {
-		slog.Warn("peer audit insert failed", "action", action, "peer_id", peerID, "err", err)
-	}
+	return ev, insertAuditTx(ctx, q, ev)
 }
 
 func marshalDiff(v any) json.RawMessage {
@@ -2228,17 +2525,29 @@ type apiPolicyJSON struct {
 }
 
 func (h *HTTPServer) apiPolicy(w http.ResponseWriter, r *http.Request, tenant *repo.Tenant) {
-	rec, err := h.policies.Get(r.Context(), tenant.ID)
-	if errors.Is(err, repo.ErrNotFound) {
+	var rec *repo.PolicyRecord
+	var notFound bool
+	if txErr := db.WithTenant(r.Context(), h.pool, tenant.ID, func(q db.Querier) error {
+		got, err := repo.NewPolicies(q).Get(r.Context(), tenant.ID)
+		if errors.Is(err, repo.ErrNotFound) {
+			notFound = true
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		rec = got
+		return nil
+	}); txErr != nil {
+		writeError(w, http.StatusInternalServerError, txErr)
+		return
+	}
+	if notFound {
 		writeJSON(w, http.StatusOK, apiPolicyJSON{
 			TenantID: tenant.ID.String(),
 			Revision: 0,
 			Rules:    []apiACLRuleJSON{},
 		})
-		return
-	}
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
 	parsed, _ := policy.Parse("policy.hcl", rec.HCLSource)
@@ -2303,32 +2612,46 @@ func (h *HTTPServer) apiPutPolicy(w http.ResponseWriter, r *http.Request, authn 
 		updatedBy = &uid
 	}
 
-	rec, err := h.policies.Put(r.Context(), tenant.ID, req.HCLSource, updatedBy, req.ExpectedRevision)
-	if errors.Is(err, repo.ErrRevisionMismatch) {
-		// 409 means "someone else saved while you were editing".
-		// The Web UI should refetch and ask the operator to merge.
-		writeError(w, http.StatusConflict, fmt.Errorf("expected_revision does not match current"))
-		return
-	}
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-
-	if h.audits != nil {
-		_ = h.audits.Insert(r.Context(), &repo.AuditEvent{
+	var rec *repo.PolicyRecord
+	var mismatch bool
+	var auditEv *repo.AuditEvent
+	var auditOK bool
+	if txErr := db.WithTenant(r.Context(), h.pool, tenant.ID, func(q db.Querier) error {
+		got, err := repo.NewPolicies(q).Put(r.Context(), tenant.ID, req.HCLSource, updatedBy, req.ExpectedRevision)
+		if errors.Is(err, repo.ErrRevisionMismatch) {
+			mismatch = true
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		rec = got
+		ev := &repo.AuditEvent{
 			TenantID:     &tenant.ID,
 			ActorType:    "user",
 			ActorID:      pointerIfNonZero(claimsUserID(authn)),
 			Action:       "policy.update",
 			ResourceType: "policy",
 			Diff: marshalDiffJSON(map[string]any{
-				"revision":  rec.Revision,
+				"revision":  got.Revision,
 				"rules":     len(parsed.Rules),
-				"hcl_bytes": len(rec.HCLSource),
+				"hcl_bytes": len(got.HCLSource),
 			}),
-		})
+		}
+		auditEv = ev
+		auditOK = insertAuditTx(r.Context(), q, ev)
+		return nil
+	}); txErr != nil {
+		writeError(w, http.StatusInternalServerError, txErr)
+		return
 	}
+	if mismatch {
+		// 409 means "someone else saved while you were editing".
+		// The Web UI should refetch and ask the operator to merge.
+		writeError(w, http.StatusConflict, fmt.Errorf("expected_revision does not match current"))
+		return
+	}
+	h.emitAuditHook(r.Context(), auditEv, auditOK)
 
 	rules := []apiACLRuleJSON{}
 	for _, ru := range parsed.Rules {
@@ -2435,9 +2758,16 @@ func (h *HTTPServer) apiSimulatePolicy(w http.ResponseWriter, r *http.Request, a
 		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid policy: %v", parseErr))
 		return
 	}
-	peers, err := h.peers.ListByTenant(r.Context(), tenant.ID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Errorf("list peers: %w", err))
+	var peers []*repo.Peer
+	if txErr := db.WithTenant(r.Context(), h.pool, tenant.ID, func(q db.Querier) error {
+		ps, err := repo.NewPeers(q).ListByTenant(r.Context(), tenant.ID)
+		if err != nil {
+			return fmt.Errorf("list peers: %w", err)
+		}
+		peers = ps
+		return nil
+	}); txErr != nil {
+		writeError(w, http.StatusInternalServerError, txErr)
 		return
 	}
 	// Only approved peers participate in the mesh (issue #133), so
@@ -2482,8 +2812,8 @@ func (h *HTTPServer) apiSimulatePolicy(w http.ResponseWriter, r *http.Request, a
 // handlers package; this one is admin-tooling and would create an
 // awkward import cycle if reused across.
 func simulateAllow(p *policy.Policy, src, dst *repo.Peer) bool {
-	srcView := policy.PeerView{Tags: src.Tags}
-	dstView := policy.PeerView{Tags: dst.Tags}
+	srcView := policy.PeerView{Tags: src.Tags, User: src.OwnerEmail, Groups: policy.GroupsFor(p, src.OwnerEmail)}
+	dstView := policy.PeerView{Tags: dst.Tags, User: dst.OwnerEmail, Groups: policy.GroupsFor(p, dst.OwnerEmail)}
 	if addr, err := netip.ParseAddr(src.IP); err == nil {
 		srcView.IP = addr
 	}
@@ -2534,9 +2864,16 @@ func (h *HTTPServer) apiPolicyRevisions(w http.ResponseWriter, r *http.Request, 
 	if !h.requireAdmin(w, r, authn, tenant, "policy.revisions") {
 		return
 	}
-	rows, err := h.policies.ListHistory(r.Context(), tenant.ID, 20)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
+	var rows []*repo.HistoryRecord
+	if txErr := db.WithTenant(r.Context(), h.pool, tenant.ID, func(q db.Querier) error {
+		got, err := repo.NewPolicies(q).ListHistory(r.Context(), tenant.ID, 20)
+		if err != nil {
+			return err
+		}
+		rows = got
+		return nil
+	}); txErr != nil {
+		writeError(w, http.StatusInternalServerError, txErr)
 		return
 	}
 	out := make([]apiHistoryRecordJSON, 0, len(rows))
@@ -2581,22 +2918,6 @@ func (h *HTTPServer) apiPolicyRollback(w http.ResponseWriter, r *http.Request, a
 		writeError(w, http.StatusBadRequest, errors.New("revision must be positive"))
 		return
 	}
-	rows, err := h.policies.ListHistory(r.Context(), tenant.ID, 100)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-	var target *repo.HistoryRecord
-	for _, h := range rows {
-		if h.Revision == req.Revision {
-			target = h
-			break
-		}
-	}
-	if target == nil {
-		writeError(w, http.StatusNotFound, fmt.Errorf("revision %d not found in history", req.Revision))
-		return
-	}
 	var updatedBy *uuid.UUID
 	if authn != nil && authn.claims != nil {
 		uid := authn.claims.UserID
@@ -2605,13 +2926,35 @@ func (h *HTTPServer) apiPolicyRollback(w http.ResponseWriter, r *http.Request, a
 	// expectedRevision=0 because the operator's intent is "make this
 	// the current, regardless of what got written since they opened
 	// the Versions tab". The audit row makes the override visible.
-	rec, err := h.policies.Put(r.Context(), tenant.ID, target.HCLSource, updatedBy, 0)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Errorf("rollback put: %w", err))
-		return
-	}
-	if h.audits != nil {
-		_ = h.audits.Insert(r.Context(), &repo.AuditEvent{
+	var rec *repo.PolicyRecord
+	var appliedFrom int64
+	var missing bool
+	var auditEv *repo.AuditEvent
+	var auditOK bool
+	if txErr := db.WithTenant(r.Context(), h.pool, tenant.ID, func(q db.Querier) error {
+		policies := repo.NewPolicies(q)
+		hist, err := policies.ListHistory(r.Context(), tenant.ID, 100)
+		if err != nil {
+			return err
+		}
+		var target *repo.HistoryRecord
+		for _, row := range hist {
+			if row.Revision == req.Revision {
+				target = row
+				break
+			}
+		}
+		if target == nil {
+			missing = true
+			return nil
+		}
+		appliedFrom = target.Revision
+		got, err := policies.Put(r.Context(), tenant.ID, target.HCLSource, updatedBy, 0)
+		if err != nil {
+			return fmt.Errorf("rollback put: %w", err)
+		}
+		rec = got
+		ev := &repo.AuditEvent{
 			TenantID:     &tenant.ID,
 			ActorType:    "user",
 			ActorID:      pointerIfNonZero(claimsUserID(authn)),
@@ -2619,13 +2962,24 @@ func (h *HTTPServer) apiPolicyRollback(w http.ResponseWriter, r *http.Request, a
 			ResourceType: "policy",
 			Diff: marshalDiffJSON(map[string]any{
 				"rolled_back_to": target.Revision,
-				"new_revision":   rec.Revision,
+				"new_revision":   got.Revision,
 			}),
-		})
+		}
+		auditEv = ev
+		auditOK = insertAuditTx(r.Context(), q, ev)
+		return nil
+	}); txErr != nil {
+		writeError(w, http.StatusInternalServerError, txErr)
+		return
 	}
+	if missing {
+		writeError(w, http.StatusNotFound, fmt.Errorf("revision %d not found in history", req.Revision))
+		return
+	}
+	h.emitAuditHook(r.Context(), auditEv, auditOK)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"revision":    rec.Revision,
-		"appliedFrom": target.Revision,
+		"appliedFrom": appliedFrom,
 		"appliedAt":   rec.UpdatedAt,
 	})
 }
@@ -2651,15 +3005,30 @@ type apiRecommendationJSON struct {
 }
 
 func (h *HTTPServer) apiRecommendations(w http.ResponseWriter, r *http.Request, tenant *repo.Tenant) {
-	rec, err := h.policies.Get(r.Context(), tenant.ID)
-	var parsed *policy.Policy
-	switch {
-	case errors.Is(err, repo.ErrNotFound):
-		parsed = &policy.Policy{}
-	case err != nil:
-		writeError(w, http.StatusInternalServerError, err)
+	// acl_policies is tenant-scoped. The rest of this handler reads
+	// ClickHouse, which is not behind the Postgres RLS GUC.
+	var rec *repo.PolicyRecord
+	var notFound bool
+	if txErr := db.WithTenant(r.Context(), h.pool, tenant.ID, func(q db.Querier) error {
+		got, err := repo.NewPolicies(q).Get(r.Context(), tenant.ID)
+		if errors.Is(err, repo.ErrNotFound) {
+			notFound = true
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		rec = got
+		return nil
+	}); txErr != nil {
+		writeError(w, http.StatusInternalServerError, txErr)
 		return
-	default:
+	}
+	var parsed *policy.Policy
+	if notFound {
+		parsed = &policy.Policy{}
+	} else {
+		var err error
 		parsed, err = policy.Parse("policy.hcl", rec.HCLSource)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err)
@@ -2773,9 +3142,16 @@ func (h *HTTPServer) apiDNS(w http.ResponseWriter, r *http.Request, authn *authn
 		writeError(w, http.StatusMethodNotAllowed, fmt.Errorf("method not allowed"))
 		return
 	}
-	cfg, err := h.dns.Get(r.Context(), tenant.ID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
+	var cfg *repo.TenantDNSConfig
+	if txErr := db.WithTenant(r.Context(), h.pool, tenant.ID, func(q db.Querier) error {
+		got, err := repo.NewTenantDNS(q).Get(r.Context(), tenant.ID)
+		if err != nil {
+			return err
+		}
+		cfg = got
+		return nil
+	}); txErr != nil {
+		writeError(w, http.StatusInternalServerError, txErr)
 		return
 	}
 	updatedBy := ""
@@ -2828,14 +3204,21 @@ func (h *HTTPServer) apiDNSPatch(w http.ResponseWriter, r *http.Request, authn *
 	if req.DNS64Enabled != nil {
 		enabled = *req.DNS64Enabled
 	}
-	updated, err := h.tenants.SetNAT64Config(r.Context(), tenant.ID, prefix, enabled)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-
-	if h.audits != nil {
-		_ = h.audits.Insert(r.Context(), &repo.AuditEvent{
+	var (
+		updated *repo.Tenant
+		cfg     *repo.TenantDNSConfig
+		auditEv *repo.AuditEvent
+		auditOK bool
+	)
+	if txErr := db.WithTenant(r.Context(), h.pool, tenant.ID, func(q db.Querier) error {
+		// tenants itself is not RLS-scoped; the write still shares
+		// the tx with audit_log and the tenant_dns_config re-read.
+		got, err := repo.NewTenants(q).SetNAT64Config(r.Context(), tenant.ID, prefix, enabled)
+		if err != nil {
+			return err
+		}
+		updated = got
+		ev := &repo.AuditEvent{
 			TenantID:     &tenant.ID,
 			ActorType:    "user",
 			ActorID:      pointerIfNonZero(claimsUserID(authn)),
@@ -2843,28 +3226,34 @@ func (h *HTTPServer) apiDNSPatch(w http.ResponseWriter, r *http.Request, authn *
 			ResourceType: "tenant",
 			ResourceID:   &tenant.ID,
 			Diff: marshalDiffJSON(map[string]any{
-				"nat64_prefix":  nat64.ResolvePrefix(updated.NAT64Prefix),
-				"dns64_enabled": updated.DNS64Enabled,
+				"nat64_prefix":  nat64.ResolvePrefix(got.NAT64Prefix),
+				"dns64_enabled": got.DNS64Enabled,
 			}),
-		})
+		}
+		auditEv = ev
+		auditOK = insertAuditTx(r.Context(), q, ev)
+		// Re-fetch the DNS-config row so the PATCH response is a full,
+		// consistent apiDNSJSON snapshot (same shape as GET).
+		c, err := repo.NewTenantDNS(q).Get(r.Context(), tenant.ID)
+		if err != nil {
+			return err
+		}
+		cfg = c
+		return nil
+	}); txErr != nil {
+		writeError(w, http.StatusInternalServerError, txErr)
+		return
 	}
+	h.emitAuditHook(r.Context(), auditEv, auditOK)
 
 	// dns64_enabled is the tenant-level NAT64 master switch and feeds
 	// RegisterResponse.nat64_egress_active (NAT64 Phase C2). Bump the
 	// policy revision + publish PolicyChanged so an approved egress peer
 	// re-registers and converges its translator promptly — symmetric
 	// with the nat64-egress approval handler, which already bumps.
+	// Coordinator repo, after this tx commits.
 	if _, err := h.coord.BumpPolicyRevision(r.Context(), tenant.ID); err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Errorf("bump policy revision: %w", err))
-		return
-	}
-
-	// Re-fetch the DNS-config row so the PATCH response is a full,
-	// consistent apiDNSJSON snapshot (same shape as GET) rather than a
-	// partial object that would zero out MagicDNS / nameserver fields.
-	cfg, err := h.dns.Get(r.Context(), tenant.ID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
 	updatedBy := ""
@@ -2914,9 +3303,16 @@ func (h *HTTPServer) apiUsers(w http.ResponseWriter, r *http.Request, authn *aut
 	if !h.requireAdmin(w, r, authn, tenant, "user.list") {
 		return
 	}
-	users, err := h.users.ListByTenant(r.Context(), tenant.ID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
+	var users []*repo.User
+	if txErr := db.WithTenant(r.Context(), h.pool, tenant.ID, func(q db.Querier) error {
+		us, err := repo.NewUsers(q).ListByTenant(r.Context(), tenant.ID)
+		if err != nil {
+			return err
+		}
+		users = us
+		return nil
+	}); txErr != nil {
+		writeError(w, http.StatusInternalServerError, txErr)
 		return
 	}
 	out := make([]apiUserListJSON, 0, len(users))
@@ -3013,12 +3409,32 @@ func (h *HTTPServer) apiCreateInvitation(w http.ResponseWriter, r *http.Request,
 	// Pre-assign the ID so it matches the token's embedded id; Create
 	// will return the persisted row (id columns will match).
 	inv.ID = id
-	created, err := h.invitations.Create(r.Context(), inv)
-	if err != nil {
-		// Duplicate active invitation surfaces as a unique-index
-		// violation. Surface as 409 so the UI can render "already
-		// invited" without polling.
-		writeError(w, http.StatusConflict, fmt.Errorf("create invitation: %w", err))
+	var created *repo.UserInvitation
+	var inviterEmail string
+	var createErr error
+	if txErr := db.WithTenant(r.Context(), h.pool, tenant.ID, func(q db.Querier) error {
+		c, err := repo.NewUserInvitations(q).Create(r.Context(), inv)
+		if err != nil {
+			// Duplicate active invitation surfaces as a unique-index
+			// violation. Surface as 409 so the UI can render "already
+			// invited" without polling. Any Create error keeps that
+			// status, matching the previous handler.
+			createErr = err
+			return nil
+		}
+		created = c
+		if invitedBy != nil {
+			if u, ferr := repo.NewUsers(q).GetByID(r.Context(), *invitedBy); ferr == nil {
+				inviterEmail = u.Email
+			}
+		}
+		return nil
+	}); txErr != nil {
+		writeError(w, http.StatusInternalServerError, txErr)
+		return
+	}
+	if createErr != nil {
+		writeError(w, http.StatusConflict, fmt.Errorf("create invitation: %w", createErr))
 		return
 	}
 	out := invitationToJSON(created)
@@ -3028,14 +3444,9 @@ func (h *HTTPServer) apiCreateInvitation(w http.ResponseWriter, r *http.Request,
 	// the admin always has the plaintext token in `out.Token` to copy
 	// + share manually. EmailSent on the wire lets the UI render the
 	// right copy ("we sent them an email" vs "copy this token").
+	// SMTP stays outside the tenant tx.
 	if h.mailer != nil && h.mailer.Enabled() {
 		inviteURL := h.inviteLinkFor(plaintext)
-		inviterEmail := ""
-		if invitedBy != nil {
-			if u, ferr := h.users.GetByID(r.Context(), *invitedBy); ferr == nil {
-				inviterEmail = u.Email
-			}
-		}
 		sent, err := h.mailer.SendInvitation(created.Email, inviteURL, tenant.Slug, inviterEmail)
 		if err != nil {
 			slog.Warn("send invitation email", "err", err, "invitation_id", created.ID, "to", created.Email)
@@ -3066,9 +3477,16 @@ func (h *HTTPServer) apiListInvitations(w http.ResponseWriter, r *http.Request, 
 	if !h.requireAdmin(w, r, authn, tenant, "user.invite.list") {
 		return
 	}
-	invs, err := h.invitations.ListByTenant(r.Context(), tenant.ID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
+	var invs []*repo.UserInvitation
+	if txErr := db.WithTenant(r.Context(), h.pool, tenant.ID, func(q db.Querier) error {
+		got, err := repo.NewUserInvitations(q).ListByTenant(r.Context(), tenant.ID)
+		if err != nil {
+			return err
+		}
+		invs = got
+		return nil
+	}); txErr != nil {
+		writeError(w, http.StatusInternalServerError, txErr)
 		return
 	}
 	out := make([]apiInvitationJSON, 0, len(invs))
@@ -3094,24 +3512,6 @@ func (h *HTTPServer) apiRevokeInvitation(w http.ResponseWriter, r *http.Request,
 		http.NotFound(w, r)
 		return
 	}
-	// Cross-tenant guard: re-fetch the row and reject when it belongs
-	// to a different tenant. Without this, an admin in tenant A could
-	// revoke an invite in tenant B by guessing its id (low probability
-	// since uuids, but defense-in-depth).
-	inv, err := h.invitations.GetByID(r.Context(), id)
-	if err != nil {
-		if errors.Is(err, repo.ErrNotFound) {
-			http.NotFound(w, r)
-			return
-		}
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-	if inv.TenantID != tenant.ID {
-		http.NotFound(w, r)
-		return
-	}
-
 	// MarkRevoked's WHERE only flips pending rows. Already-accepted or
 	// already-revoked rows return ErrNotFound — we surface 404 so the
 	// caller refetches and sees the current state.
@@ -3119,18 +3519,30 @@ func (h *HTTPServer) apiRevokeInvitation(w http.ResponseWriter, r *http.Request,
 	if authn != nil && authn.claims != nil {
 		actorID = authn.claims.UserID
 	}
-	if err := h.invitations.MarkRevoked(r.Context(), id, actorID); err != nil {
-		if errors.Is(err, repo.ErrNotFound) {
-			http.NotFound(w, r)
-			return
+	var notFound bool
+	var auditEv *repo.AuditEvent
+	var auditOK bool
+	if txErr := db.WithTenant(r.Context(), h.pool, tenant.ID, func(q db.Querier) error {
+		invs := repo.NewUserInvitations(q)
+		// Cross-tenant guard: re-fetch the row and reject when it belongs
+		// to a different tenant. Without this, an admin in tenant A could
+		// revoke an invite in tenant B by guessing its id.
+		inv, err := invs.GetByID(r.Context(), id)
+		if errors.Is(err, repo.ErrNotFound) || (err == nil && inv.TenantID != tenant.ID) {
+			notFound = true
+			return nil
 		}
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-
-	// Audit row mirrors user.invite.accept; activity feed groups them.
-	if h.audits != nil {
-		_ = h.audits.Insert(r.Context(), &repo.AuditEvent{
+		if err != nil {
+			return err
+		}
+		if err := invs.MarkRevoked(r.Context(), id, actorID); err != nil {
+			if errors.Is(err, repo.ErrNotFound) {
+				notFound = true
+				return nil
+			}
+			return err
+		}
+		ev := &repo.AuditEvent{
 			TenantID:     &tenant.ID,
 			ActorType:    "user",
 			ActorID:      pointerIfNonZero(actorID),
@@ -3138,8 +3550,19 @@ func (h *HTTPServer) apiRevokeInvitation(w http.ResponseWriter, r *http.Request,
 			ResourceType: "user_invitation",
 			ResourceID:   &id,
 			Diff:         marshalDiffJSON(map[string]any{"email": inv.Email}),
-		})
+		}
+		auditEv = ev
+		auditOK = insertAuditTx(r.Context(), q, ev)
+		return nil
+	}); txErr != nil {
+		writeError(w, http.StatusInternalServerError, txErr)
+		return
 	}
+	if notFound {
+		http.NotFound(w, r)
+		return
+	}
+	h.emitAuditHook(r.Context(), auditEv, auditOK)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -3180,9 +3603,29 @@ func invitationToJSON(inv *repo.UserInvitation) apiInvitationJSON {
 }
 
 func (h *HTTPServer) apiOverview(w http.ResponseWriter, r *http.Request, tenant *repo.Tenant) {
-	peers, err := h.peers.ListByTenant(r.Context(), tenant.ID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
+	var peers []*repo.Peer
+	revision := int64(0)
+	var hcl string
+	var hasPolicy bool
+	if txErr := db.WithTenant(r.Context(), h.pool, tenant.ID, func(q db.Querier) error {
+		ps, err := repo.NewPeers(q).ListByTenant(r.Context(), tenant.ID)
+		if err != nil {
+			return err
+		}
+		peers = ps
+		rec, err := repo.NewPolicies(q).Get(r.Context(), tenant.ID)
+		if errors.Is(err, repo.ErrNotFound) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		revision = rec.Revision
+		hcl = rec.HCLSource
+		hasPolicy = true
+		return nil
+	}); txErr != nil {
+		writeError(w, http.StatusInternalServerError, txErr)
 		return
 	}
 	online := 0
@@ -3192,13 +3635,12 @@ func (h *HTTPServer) apiOverview(w http.ResponseWriter, r *http.Request, tenant 
 		}
 	}
 
-	revision := int64(0)
-	rec, err := h.policies.Get(r.Context(), tenant.ID)
-	if err == nil {
-		revision = rec.Revision
+	recommendCount := 0
+	if hasPolicy {
+		if parsed, err := policy.Parse("policy.hcl", hcl); err == nil {
+			recommendCount = countRecommendations(r.Context(), h, tenant, parsed)
+		}
 	}
-
-	recommendCount := countRecommendations(r.Context(), h, tenant)
 
 	writeJSON(w, http.StatusOK, apiOverviewJSON{
 		TenantID:       tenant.ID.String(),
@@ -3210,13 +3652,8 @@ func (h *HTTPServer) apiOverview(w http.ResponseWriter, r *http.Request, tenant 
 	})
 }
 
-func countRecommendations(ctx context.Context, h *HTTPServer, tenant *repo.Tenant) int {
-	rec, err := h.policies.Get(ctx, tenant.ID)
-	if err != nil {
-		return 0
-	}
-	parsed, err := policy.Parse("policy.hcl", rec.HCLSource)
-	if err != nil {
+func countRecommendations(ctx context.Context, h *HTTPServer, tenant *repo.Tenant, parsed *policy.Policy) int {
+	if parsed == nil {
 		return 0
 	}
 	since := time.Now().Add(-30 * 24 * time.Hour)
@@ -3410,6 +3847,8 @@ func (h *HTTPServer) apiMintAPIToken(w http.ResponseWriter, r *http.Request, aut
 		return
 	}
 	var created *repo.APIToken
+	var auditEv *repo.AuditEvent
+	var auditOK bool
 	if txErr := db.WithTenant(r.Context(), h.pool, tenant.ID, func(q db.Querier) error {
 		c, err := repo.NewAPITokens(q).Insert(r.Context(), &repo.APIToken{
 			ID:          id,
@@ -3425,20 +3864,23 @@ func (h *HTTPServer) apiMintAPIToken(w http.ResponseWriter, r *http.Request, aut
 			return fmt.Errorf("persist token: %w", err)
 		}
 		created = c
+		ev := &repo.AuditEvent{
+			TenantID:     &tenant.ID,
+			ActorType:    authnActorType(authn),
+			ActorID:      authnActorID(authn),
+			Action:       "api_token.create",
+			ResourceType: "api_token",
+			ResourceID:   &c.ID,
+			Diff:         marshalDiff(map[string]any{"name": c.Name}),
+		}
+		auditEv = ev
+		auditOK = insertAuditTx(r.Context(), q, ev)
 		return nil
 	}); txErr != nil {
 		writeError(w, http.StatusInternalServerError, txErr)
 		return
 	}
-	insertAudit(r.Context(), h.audits, &repo.AuditEvent{
-		TenantID:     &tenant.ID,
-		ActorType:    authnActorType(authn),
-		ActorID:      authnActorID(authn),
-		Action:       "api_token.create",
-		ResourceType: "api_token",
-		ResourceID:   &created.ID,
-		Diff:         marshalDiff(map[string]any{"name": created.Name}),
-	})
+	h.emitAuditHook(r.Context(), auditEv, auditOK)
 	writeJSON(w, http.StatusCreated, apiAPITokenMintResponse{
 		apiAPITokenListJSON: apiTokenToListJSON(created),
 		Token:               plaintext,
@@ -3484,7 +3926,8 @@ func (h *HTTPServer) apiRevokeAPIToken(w http.ResponseWriter, r *http.Request, a
 		return
 	}
 	var notFound bool
-	var revokedName string
+	var auditEv *repo.AuditEvent
+	var auditOK bool
 	if txErr := db.WithTenant(r.Context(), h.pool, tenant.ID, func(q db.Querier) error {
 		at := repo.NewAPITokens(q)
 		current, err := at.GetByID(r.Context(), id)
@@ -3498,7 +3941,17 @@ func (h *HTTPServer) apiRevokeAPIToken(w http.ResponseWriter, r *http.Request, a
 		if err := at.Revoke(r.Context(), id); err != nil && !errors.Is(err, repo.ErrNotFound) {
 			return err
 		}
-		revokedName = current.Name
+		ev := &repo.AuditEvent{
+			TenantID:     &tenant.ID,
+			ActorType:    authnActorType(authn),
+			ActorID:      authnActorID(authn),
+			Action:       "api_token.revoke",
+			ResourceType: "api_token",
+			ResourceID:   &id,
+			Diff:         marshalDiff(map[string]any{"name": current.Name}),
+		}
+		auditEv = ev
+		auditOK = insertAuditTx(r.Context(), q, ev)
 		return nil
 	}); txErr != nil {
 		writeError(w, http.StatusInternalServerError, txErr)
@@ -3508,15 +3961,7 @@ func (h *HTTPServer) apiRevokeAPIToken(w http.ResponseWriter, r *http.Request, a
 		http.NotFound(w, r)
 		return
 	}
-	insertAudit(r.Context(), h.audits, &repo.AuditEvent{
-		TenantID:     &tenant.ID,
-		ActorType:    authnActorType(authn),
-		ActorID:      authnActorID(authn),
-		Action:       "api_token.revoke",
-		ResourceType: "api_token",
-		ResourceID:   &id,
-		Diff:         marshalDiff(map[string]any{"name": revokedName}),
-	})
+	h.emitAuditHook(r.Context(), auditEv, auditOK)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -3602,6 +4047,8 @@ func (h *HTTPServer) apiCreateWebhook(w http.ResponseWriter, r *http.Request, au
 		createdBy = &uid
 	}
 	var created *repo.WebhookSubscription
+	var auditEv *repo.AuditEvent
+	var auditOK bool
 	if txErr := db.WithTenant(r.Context(), h.pool, tenant.ID, func(q db.Querier) error {
 		c, err := repo.NewWebhooks(q).Create(r.Context(), &repo.WebhookSubscription{
 			TenantID:    tenant.ID,
@@ -3616,25 +4063,28 @@ func (h *HTTPServer) apiCreateWebhook(w http.ResponseWriter, r *http.Request, au
 			return fmt.Errorf("create webhook: %w", err)
 		}
 		created = c
+		ev := &repo.AuditEvent{
+			TenantID:     &tenant.ID,
+			ActorType:    authnActorType(authn),
+			ActorID:      authnActorID(authn),
+			Action:       "webhook.create",
+			ResourceType: "webhook",
+			ResourceID:   &c.ID,
+			Diff: marshalDiff(map[string]any{
+				"url":         c.URL,
+				"event_types": c.EventTypes,
+			}),
+		}
+		auditEv = ev
+		auditOK = insertAuditTx(r.Context(), q, ev)
 		return nil
 	}); txErr != nil {
 		writeError(w, http.StatusInternalServerError, txErr)
 		return
 	}
-	// Audit on the hook-bearing repo (fires webhook delivery), post-commit.
-	// audit_log gets its own WithTenant slice later.
-	insertAudit(r.Context(), h.audits, &repo.AuditEvent{
-		TenantID:     &tenant.ID,
-		ActorType:    authnActorType(authn),
-		ActorID:      authnActorID(authn),
-		Action:       "webhook.create",
-		ResourceType: "webhook",
-		ResourceID:   &created.ID,
-		Diff: marshalDiff(map[string]any{
-			"url":         created.URL,
-			"event_types": created.EventTypes,
-		}),
-	})
+	// Hook runs after commit so the publisher's pool read of
+	// webhook_subscriptions can see this row.
+	h.emitAuditHook(r.Context(), auditEv, auditOK)
 	writeJSON(w, http.StatusCreated, apiWebhookCreateResponse{
 		apiWebhookJSON: webhookToJSON(created),
 		Secret:         secret,
@@ -3704,6 +4154,8 @@ func (h *HTTPServer) apiPatchWebhook(w http.ResponseWriter, r *http.Request, aut
 	}
 	var updated *repo.WebhookSubscription
 	var notFound bool
+	var auditEv *repo.AuditEvent
+	var auditOK bool
 	if txErr := db.WithTenant(r.Context(), h.pool, tenant.ID, func(q db.Querier) error {
 		wh := repo.NewWebhooks(q)
 		current, err := wh.GetByID(r.Context(), id)
@@ -3728,6 +4180,21 @@ func (h *HTTPServer) apiPatchWebhook(w http.ResponseWriter, r *http.Request, aut
 			return err
 		}
 		updated = u
+		ev := &repo.AuditEvent{
+			TenantID:     &tenant.ID,
+			ActorType:    authnActorType(authn),
+			ActorID:      authnActorID(authn),
+			Action:       "webhook.update",
+			ResourceType: "webhook",
+			ResourceID:   &id,
+			Diff: marshalDiff(map[string]any{
+				"url":         u.URL,
+				"event_types": u.EventTypes,
+				"active":      u.Active,
+			}),
+		}
+		auditEv = ev
+		auditOK = insertAuditTx(r.Context(), q, ev)
 		return nil
 	}); txErr != nil {
 		writeError(w, http.StatusInternalServerError, txErr)
@@ -3737,19 +4204,7 @@ func (h *HTTPServer) apiPatchWebhook(w http.ResponseWriter, r *http.Request, aut
 		http.NotFound(w, r)
 		return
 	}
-	insertAudit(r.Context(), h.audits, &repo.AuditEvent{
-		TenantID:     &tenant.ID,
-		ActorType:    authnActorType(authn),
-		ActorID:      authnActorID(authn),
-		Action:       "webhook.update",
-		ResourceType: "webhook",
-		ResourceID:   &id,
-		Diff: marshalDiff(map[string]any{
-			"url":         updated.URL,
-			"event_types": updated.EventTypes,
-			"active":      updated.Active,
-		}),
-	})
+	h.emitAuditHook(r.Context(), auditEv, auditOK)
 	writeJSON(w, http.StatusOK, webhookToJSON(updated))
 }
 
@@ -3764,8 +4219,9 @@ func (h *HTTPServer) apiDeleteWebhook(w http.ResponseWriter, r *http.Request, au
 		http.NotFound(w, r)
 		return
 	}
-	var notFound, deleted bool
-	var deletedURL string
+	var notFound bool
+	var auditEv *repo.AuditEvent
+	var auditOK bool
 	if txErr := db.WithTenant(r.Context(), h.pool, tenant.ID, func(q db.Querier) error {
 		wh := repo.NewWebhooks(q)
 		current, err := wh.GetByID(r.Context(), id)
@@ -3782,8 +4238,17 @@ func (h *HTTPServer) apiDeleteWebhook(w http.ResponseWriter, r *http.Request, au
 		if err := wh.Delete(r.Context(), id); err != nil {
 			return err
 		}
-		deleted = true
-		deletedURL = current.URL
+		ev := &repo.AuditEvent{
+			TenantID:     &tenant.ID,
+			ActorType:    authnActorType(authn),
+			ActorID:      authnActorID(authn),
+			Action:       "webhook.delete",
+			ResourceType: "webhook",
+			ResourceID:   &id,
+			Diff:         marshalDiff(map[string]any{"url": current.URL}),
+		}
+		auditEv = ev
+		auditOK = insertAuditTx(r.Context(), q, ev)
 		return nil
 	}); txErr != nil {
 		writeError(w, http.StatusInternalServerError, txErr)
@@ -3793,17 +4258,7 @@ func (h *HTTPServer) apiDeleteWebhook(w http.ResponseWriter, r *http.Request, au
 		http.NotFound(w, r)
 		return
 	}
-	if deleted {
-		insertAudit(r.Context(), h.audits, &repo.AuditEvent{
-			TenantID:     &tenant.ID,
-			ActorType:    authnActorType(authn),
-			ActorID:      authnActorID(authn),
-			Action:       "webhook.delete",
-			ResourceType: "webhook",
-			ResourceID:   &id,
-			Diff:         marshalDiff(map[string]any{"url": deletedURL}),
-		})
-	}
+	h.emitAuditHook(r.Context(), auditEv, auditOK)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -3949,17 +4404,44 @@ func (h *HTTPServer) apiTestWebhook(w http.ResponseWriter, r *http.Request, auth
 	writeJSON(w, http.StatusOK, resp)
 }
 
-// insertAudit is the fire-and-forget audit write used by handlers
-// in this file. Mirrors the handlers/audit.go helper but stays in
-// the server package so we don't reach across import boundaries
-// for a one-liner. Errors are logged via slog and swallowed —
-// audit-write failure must NOT fail the user-facing operation
-// (Phase 1 priority).
-func insertAudit(ctx context.Context, audits *repo.AuditLogs, ev *repo.AuditEvent) {
-	if audits == nil {
+// insertAuditTx writes an audit row inside an open WithTenant
+// transaction. The insert runs in a savepoint: Postgres aborts the
+// whole transaction if a statement fails, even when the caller
+// ignores the error, and a failed audit must not roll back the
+// user-facing write. Returns true when the row was inserted.
+//
+// The webhook hook is NOT fired here. Insert's hook would run before
+// the outer tx commits, so the publisher could miss a row that isn't
+// visible yet (webhook.create). Callers invoke emitAuditHook after
+// WithTenant returns nil.
+func insertAuditTx(ctx context.Context, q db.Querier, ev *repo.AuditEvent) bool {
+	if q == nil || ev == nil {
+		return false
+	}
+	sp, err := q.Begin(ctx)
+	if err != nil {
+		slog.Warn("audit savepoint begin failed", "action", ev.Action, "err", err)
+		return false
+	}
+	if err := repo.NewAuditLogs(sp).Insert(ctx, ev); err != nil {
+		_ = sp.Rollback(ctx)
+		slog.Warn("audit insert failed", "action", ev.Action, "err", err)
+		return false
+	}
+	if err := sp.Commit(ctx); err != nil {
+		_ = sp.Rollback(ctx)
+		slog.Warn("audit savepoint commit failed", "action", ev.Action, "err", err)
+		return false
+	}
+	return true
+}
+
+// emitAuditHook fans an audit event out to webhook subscriptions.
+// Call only after the enclosing WithTenant has committed — the
+// publisher reads webhook_subscriptions on the pool, not on q.
+func (h *HTTPServer) emitAuditHook(ctx context.Context, ev *repo.AuditEvent, inserted bool) {
+	if !inserted || ev == nil || h == nil || h.publisher == nil {
 		return
 	}
-	if err := audits.Insert(ctx, ev); err != nil {
-		slog.Warn("audit insert failed", "action", ev.Action, "err", err)
-	}
+	h.publisher.Hook(ctx, ev)
 }

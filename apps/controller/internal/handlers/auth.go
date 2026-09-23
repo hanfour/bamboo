@@ -29,7 +29,10 @@ type AuthHandler struct {
 	users   *repo.Users
 	keys    *repo.PreAuthKeys
 	audits  *repo.AuditLogs
-	pool    *db.Pool
+	// pool opens per-request WithTenant transactions for tenant-scoped
+	// tables (users, pre_auth_keys, audit_log) so the RLS backstop
+	// (ADR-0014) sees app.tenant_id. tenants is not RLS-scoped.
+	pool *db.Pool
 
 	// OIDC + session config (set by NewAuthHandlerWithOIDC; nil for tests
 	// that exercise only pre-auth-key paths).
@@ -129,33 +132,40 @@ func (h *AuthHandler) CreatePreAuthKey(ctx context.Context, req *bamboov1.Create
 		expiresAt = &t
 	}
 
-	created, err := h.keys.Create(ctx, &repo.PreAuthKey{
-		ID:          id,
-		TenantID:    tenant.ID,
-		Description: req.GetDescription(),
-		SecretHash:  hash,
-		Tags:        req.GetTags(),
-		Reusable:    req.GetReusable(),
-		Ephemeral:   req.GetEphemeral(),
-		ExpiresAt:   expiresAt,
+	var created *repo.PreAuthKey
+	err = db.WithTenant(ctx, h.pool, tenant.ID, func(q db.Querier) error {
+		c, cerr := repo.NewPreAuthKeys(q).Create(ctx, &repo.PreAuthKey{
+			ID:          id,
+			TenantID:    tenant.ID,
+			Description: req.GetDescription(),
+			SecretHash:  hash,
+			Tags:        req.GetTags(),
+			Reusable:    req.GetReusable(),
+			Ephemeral:   req.GetEphemeral(),
+			ExpiresAt:   expiresAt,
+		})
+		if cerr != nil {
+			return status.Errorf(codes.Internal, "insert key: %v", cerr)
+		}
+		created = c
+		auditOnSavepoint(ctx, h.audits, q, &repo.AuditEvent{
+			TenantID:     &tenant.ID,
+			ActorType:    "system",
+			Action:       "preauthkey.create",
+			ResourceType: "pre_auth_key",
+			ResourceID:   &created.ID,
+			Diff: marshalDiff(map[string]any{
+				"description": created.Description,
+				"tags":        created.Tags,
+				"reusable":    created.Reusable,
+				"ephemeral":   created.Ephemeral,
+			}),
+		})
+		return nil
 	})
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "insert key: %v", err)
+		return nil, err
 	}
-
-	auditLog(ctx, h.audits, &repo.AuditEvent{
-		TenantID:     &tenant.ID,
-		ActorType:    "system",
-		Action:       "preauthkey.create",
-		ResourceType: "pre_auth_key",
-		ResourceID:   &created.ID,
-		Diff: marshalDiff(map[string]any{
-			"description": created.Description,
-			"tags":        created.Tags,
-			"reusable":    created.Reusable,
-			"ephemeral":   created.Ephemeral,
-		}),
-	})
 
 	return &bamboov1.CreatePreAuthKeyResponse{
 		Key:    toProtoPreAuthKey(created),
@@ -212,9 +222,17 @@ func (h *AuthHandler) ListPreAuthKeys(ctx context.Context, _ *bamboov1.ListPreAu
 		return nil, status.Errorf(codes.NotFound, "tenant %q: %v", slug, err)
 	}
 
-	keys, err := h.keys.ListByTenant(ctx, tenant.ID)
+	var keys []*repo.PreAuthKey
+	err = db.WithTenant(ctx, h.pool, tenant.ID, func(q db.Querier) error {
+		listed, lerr := repo.NewPreAuthKeys(q).ListByTenant(ctx, tenant.ID)
+		if lerr != nil {
+			return status.Errorf(codes.Internal, "list keys: %v", lerr)
+		}
+		keys = listed
+		return nil
+	})
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "list keys: %v", err)
+		return nil, err
 	}
 
 	resp := &bamboov1.ListPreAuthKeysResponse{
@@ -245,27 +263,33 @@ func (h *AuthHandler) RevokePreAuthKey(ctx context.Context, req *bamboov1.Revoke
 	if err != nil {
 		return nil, status.Errorf(codes.NotFound, "tenant %q: %v", slug, err)
 	}
-	key, err := h.keys.GetByID(ctx, id)
-	if err != nil {
-		if errors.Is(err, repo.ErrNotFound) {
-			return nil, status.Error(codes.NotFound, "pre-auth key not found")
+	err = db.WithTenant(ctx, h.pool, tenant.ID, func(q db.Querier) error {
+		keys := repo.NewPreAuthKeys(q)
+		key, gerr := keys.GetByID(ctx, id)
+		if gerr != nil {
+			if errors.Is(gerr, repo.ErrNotFound) {
+				return status.Error(codes.NotFound, "pre-auth key not found")
+			}
+			return status.Errorf(codes.Internal, "lookup key: %v", gerr)
 		}
-		return nil, status.Errorf(codes.Internal, "lookup key: %v", err)
-	}
-	if key.TenantID != tenant.ID {
-		return nil, status.Error(codes.NotFound, "pre-auth key not found")
-	}
-	if err := h.keys.Revoke(ctx, id); err != nil {
-		return nil, status.Errorf(codes.Internal, "revoke: %v", err)
-	}
-
-	auditLog(ctx, h.audits, &repo.AuditEvent{
-		TenantID:     &tenant.ID,
-		ActorType:    "system",
-		Action:       "preauthkey.revoke",
-		ResourceType: "pre_auth_key",
-		ResourceID:   &id,
+		if key.TenantID != tenant.ID {
+			return status.Error(codes.NotFound, "pre-auth key not found")
+		}
+		if rerr := keys.Revoke(ctx, id); rerr != nil {
+			return status.Errorf(codes.Internal, "revoke: %v", rerr)
+		}
+		auditOnSavepoint(ctx, h.audits, q, &repo.AuditEvent{
+			TenantID:     &tenant.ID,
+			ActorType:    "system",
+			Action:       "preauthkey.revoke",
+			ResourceType: "pre_auth_key",
+			ResourceID:   &id,
+		})
+		return nil
 	})
+	if err != nil {
+		return nil, err
+	}
 	return &bamboov1.RevokePreAuthKeyResponse{}, nil
 }
 
@@ -277,7 +301,17 @@ func (h *AuthHandler) redeemAndReturnKey(ctx context.Context, presentedSecret st
 		return nil, status.Error(codes.Unauthenticated, "invalid pre-auth key format")
 	}
 
-	key, err := h.keys.GetByID(ctx, id)
+	// Bootstrap: the key row is how we learn the tenant. BYPASSRLS for
+	// this one read; MarkRedeemed below runs inside WithTenant.
+	var key *repo.PreAuthKey
+	err = db.WithBypass(ctx, h.pool, func(q db.Querier) error {
+		k, gerr := repo.NewPreAuthKeys(q).GetByID(ctx, id)
+		if gerr != nil {
+			return gerr
+		}
+		key = k
+		return nil
+	})
 	if err != nil {
 		if errors.Is(err, repo.ErrNotFound) {
 			return nil, status.Error(codes.Unauthenticated, "pre-auth key not found")
@@ -305,21 +339,26 @@ func (h *AuthHandler) redeemAndReturnKey(ctx context.Context, presentedSecret st
 	// single-use key can both pass the check above, but only one gets
 	// consumed==true here; the loser is rejected instead of onboarding a
 	// second device.
-	consumed, err := h.keys.MarkRedeemed(ctx, key.ID)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "mark redeemed: %v", err)
-	}
-	if !consumed {
-		return nil, status.Error(codes.PermissionDenied, "pre-auth key already used")
-	}
-
-	auditLog(ctx, h.audits, &repo.AuditEvent{
-		TenantID:     &key.TenantID,
-		ActorType:    "system",
-		Action:       "preauthkey.redeem",
-		ResourceType: "pre_auth_key",
-		ResourceID:   &key.ID,
+	err = db.WithTenant(ctx, h.pool, key.TenantID, func(q db.Querier) error {
+		ok, merr := repo.NewPreAuthKeys(q).MarkRedeemed(ctx, key.ID)
+		if merr != nil {
+			return status.Errorf(codes.Internal, "mark redeemed: %v", merr)
+		}
+		if !ok {
+			return status.Error(codes.PermissionDenied, "pre-auth key already used")
+		}
+		auditOnSavepoint(ctx, h.audits, q, &repo.AuditEvent{
+			TenantID:     &key.TenantID,
+			ActorType:    "system",
+			Action:       "preauthkey.redeem",
+			ResourceType: "pre_auth_key",
+			ResourceID:   &key.ID,
+		})
+		return nil
 	})
+	if err != nil {
+		return nil, err
+	}
 	return key, nil
 }
 
@@ -352,7 +391,15 @@ func (h *AuthHandler) RequireAdmin(ctx context.Context, action string) error {
 	if err != nil {
 		return status.Error(codes.Unauthenticated, "invalid bearer token")
 	}
-	user, err := h.users.GetByID(ctx, claims.UserID)
+	var user *repo.User
+	err = db.WithTenant(ctx, h.pool, claims.TenantID, func(q db.Querier) error {
+		u, gerr := repo.NewUsers(q).GetByID(ctx, claims.UserID)
+		if gerr != nil {
+			return gerr
+		}
+		user = u
+		return nil
+	})
 	if err != nil {
 		if errors.Is(err, repo.ErrNotFound) {
 			return status.Error(codes.Unauthenticated, "user not found")
@@ -381,6 +428,50 @@ func bearerFromMetadata(ctx context.Context) string {
 		}
 	}
 	return ""
+}
+
+type knownTenantIDKey struct{}
+
+// WithKnownTenantID marks ctx with a tenant the server already resolved
+// from a verified credential. HTTP adapters set it when they call
+// coordinator methods with a plain request context, which carries no
+// gRPC metadata. The value is never taken from client input.
+func WithKnownTenantID(ctx context.Context, id uuid.UUID) context.Context {
+	if id == uuid.Nil {
+		return ctx
+	}
+	return context.WithValue(ctx, knownTenantIDKey{}, id)
+}
+
+func knownTenantID(ctx context.Context) (uuid.UUID, bool) {
+	id, ok := ctx.Value(knownTenantIDKey{}).(uuid.UUID)
+	if !ok || id == uuid.Nil {
+		return uuid.Nil, false
+	}
+	return id, true
+}
+
+// resolvedTenantID prefers a server-stamped tenant, then a verified
+// bearer. ok is false when neither is present (dev / require_auth off).
+func resolvedTenantID(ctx context.Context, authH *AuthHandler) (uuid.UUID, bool) {
+	if id, ok := knownTenantID(ctx); ok {
+		return id, true
+	}
+	return bearerTenantID(ctx, authH)
+}
+
+// bearerTenantID returns the tenant_id carried by a verified peer- or
+// user-session bearer on ctx. ok is false when auth is unconfigured, no
+// bearer is present, or the token verifies as neither.
+func bearerTenantID(ctx context.Context, authH *AuthHandler) (uuid.UUID, bool) {
+	if authH == nil || len(authH.sessionSec) == 0 {
+		return uuid.Nil, false
+	}
+	token := bearerFromMetadata(ctx)
+	if token == "" {
+		return uuid.Nil, false
+	}
+	return tenantFromBearer(authH.sessionSec, token)
 }
 
 // tenantFromBearer returns the tenant_id carried by a verified peer- or
@@ -455,6 +546,35 @@ func oidcProviderName(p bamboov1.OIDCProvider) string {
 		return "github"
 	default:
 		return ""
+	}
+}
+
+// auditOnSavepoint writes audit_log on a savepoint so a failed insert does not abort the surrounding WithTenant tx.
+func auditOnSavepoint(ctx context.Context, audits *repo.AuditLogs, q db.Querier, e *repo.AuditEvent) {
+	if audits == nil {
+		return
+	}
+	sp, err := q.Begin(ctx)
+	if err != nil {
+		slog.Warn("audit insert failed",
+			"action", e.Action,
+			"resource_type", e.ResourceType,
+			"err", err)
+		return
+	}
+	defer func() { _ = sp.Rollback(ctx) }()
+	if err := repo.NewAuditLogs(sp).Insert(ctx, e); err != nil {
+		slog.Warn("audit insert failed",
+			"action", e.Action,
+			"resource_type", e.ResourceType,
+			"err", err)
+		return
+	}
+	if err := sp.Commit(ctx); err != nil {
+		slog.Warn("audit insert failed",
+			"action", e.Action,
+			"resource_type", e.ResourceType,
+			"err", err)
 	}
 }
 

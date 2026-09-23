@@ -60,7 +60,7 @@ func TestPolicyValidate_RejectsBadHCL(t *testing.T) {
 		t.Errorf("status=%d, want 400; body=%s", resp.status, resp.body)
 	}
 	// No new policy row should have been written.
-	policies := repo.NewPolicies(f.pool)
+	policies := repo.NewPolicies(f.admin)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	// The tenant doesn't have a row yet (no Put has run), so Get
@@ -246,7 +246,7 @@ func TestPolicyRollback_RestoresOlderHCL(t *testing.T) {
 	// count would pick up rollback rows from other test runs.
 	tenant := mustGetTenant(t, f)
 	var count int
-	if err := f.pool.QueryRow(ctx,
+	if err := f.admin.QueryRow(ctx,
 		`SELECT count(*) FROM audit_log WHERE action='policy.rollback' AND tenant_id = $1`,
 		tenant.ID).Scan(&count); err != nil {
 		t.Fatalf("audit query: %v", err)
@@ -274,7 +274,7 @@ func TestPolicyRollback_UnknownRevision(t *testing.T) {
 // validate-no-write test to assert the policy table stays empty.
 func mustGetTenant(t *testing.T, f *fixture) *repo.Tenant {
 	t.Helper()
-	tenants := repo.NewTenants(f.pool)
+	tenants := repo.NewTenants(f.admin)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	tenant, err := tenants.GetOrCreate(ctx, f.tenantSlug, "Default Tenant", "100.64.0.0/24")

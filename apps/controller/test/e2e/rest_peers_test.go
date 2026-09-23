@@ -483,7 +483,7 @@ func TestRESTGetPeer_ReflectsWGSyncState(t *testing.T) {
 	}
 	_ = json.Unmarshal(reg.body, &regOut)
 
-	peers := repo.NewPeers(f.pool)
+	peers := repo.NewPeers(f.admin)
 	handshake := time.Now().UTC().Truncate(time.Second)
 	if _, err := peers.SyncWGState(context.Background(), repo.WGSyncState{
 		PubKey:        pub,
@@ -598,7 +598,7 @@ func TestRESTPatchPeer_HappyPath(t *testing.T) {
 
 	// One audit row recorded.
 	var count int
-	if err := f.pool.QueryRow(context.Background(),
+	if err := f.admin.QueryRow(context.Background(),
 		`SELECT count(*) FROM audit_log WHERE action='peer.update' AND resource_id = $1`,
 		regOut.Self.ID).Scan(&count); err != nil {
 		t.Fatalf("audit query: %v", err)
@@ -1126,7 +1126,7 @@ func TestRESTPatchPeer_CrossTenantIsolation(t *testing.T) {
 	_ = json.Unmarshal(reg.body, &regOut)
 
 	otherSlug := "e2e-other-" + regOut.Self.ID[:8]
-	t.Cleanup(func() { cleanupTenant(f.pool, otherSlug) })
+	t.Cleanup(func() { cleanupTenant(f.admin, otherSlug) })
 	resp := sendJSONWithTenant(t, http.MethodPatch, f.httpURL+"/api/v1/peers/"+regOut.Self.ID, otherSlug, map[string]any{
 		"hostname": "hijack-attempt",
 	})
@@ -1160,7 +1160,7 @@ func TestRESTDeletePeer_HappyPath(t *testing.T) {
 	}
 
 	var count int
-	_ = f.pool.QueryRow(context.Background(),
+	_ = f.admin.QueryRow(context.Background(),
 		`SELECT count(*) FROM audit_log WHERE action='peer.delete' AND resource_id = $1`,
 		regOut.Self.ID).Scan(&count)
 	if count != 1 {
@@ -1183,7 +1183,7 @@ func TestRESTDeletePeer_CrossTenantIsolation(t *testing.T) {
 	_ = json.Unmarshal(reg.body, &regOut)
 
 	otherSlug := "e2e-other-" + regOut.Self.ID[:8]
-	t.Cleanup(func() { cleanupTenant(f.pool, otherSlug) })
+	t.Cleanup(func() { cleanupTenant(f.admin, otherSlug) })
 	resp := sendJSONWithTenant(t, http.MethodDelete, f.httpURL+"/api/v1/peers/"+regOut.Self.ID, otherSlug, nil)
 	if resp.status != http.StatusNotFound {
 		t.Errorf("cross-tenant delete should 404; got status=%d body=%s", resp.status, resp.body)
@@ -1289,7 +1289,7 @@ func TestRESTGetPeerEvents_CrossTenantIsolation(t *testing.T) {
 	_ = json.Unmarshal(reg.body, &regOut)
 
 	otherSlug := "e2e-other-" + regOut.Self.ID[:8]
-	t.Cleanup(func() { cleanupTenant(f.pool, otherSlug) })
+	t.Cleanup(func() { cleanupTenant(f.admin, otherSlug) })
 	got := getJSON(t, f.httpURL+"/api/v1/peers/"+regOut.Self.ID+"/events", otherSlug)
 	if got.status != http.StatusNotFound {
 		t.Errorf("cross-tenant events should 404; got status=%d body=%s", got.status, got.body)
@@ -1331,7 +1331,7 @@ func TestRESTRegister_SurfacesNAT64Config(t *testing.T) {
 	}
 
 	// Enable DNS64 + set a prefix on the now-existing tenant.
-	tenants := repo.NewTenants(f.pool)
+	tenants := repo.NewTenants(f.admin)
 	tn, err := tenants.GetBySlug(ctx, f.tenantSlug)
 	if err != nil {
 		t.Fatalf("get tenant: %v", err)
@@ -1380,7 +1380,7 @@ func TestRESTGetPeer_CrossTenantIsolation(t *testing.T) {
 	_ = json.Unmarshal(reg.body, &regOut)
 
 	otherSlug := "e2e-other-" + regOut.Self.ID[:8]
-	t.Cleanup(func() { cleanupTenant(f.pool, otherSlug) })
+	t.Cleanup(func() { cleanupTenant(f.admin, otherSlug) })
 
 	got := getJSON(t, f.httpURL+"/api/v1/peers/"+regOut.Self.ID, otherSlug)
 	if got.status != http.StatusNotFound {

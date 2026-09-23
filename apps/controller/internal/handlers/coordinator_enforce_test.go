@@ -61,6 +61,32 @@ rule "dev-to-db" {
 	}
 }
 
+func TestAllowedIPsFor_UserAndGroupSources(t *testing.T) {
+	p := mustParsePolicy(t, `
+groups = {
+  "group:engineering" = ["Alice@Example.com"]
+}
+rule "eng-to-db" {
+  action       = "allow"
+  sources      = ["group:engineering", "user:bob@example.com"]
+  destinations = ["tag:db:*"]
+}
+`)
+	db := &repo.Peer{IP: "100.64.0.5", Tags: []string{"db"}}
+	alice := &repo.Peer{IP: "100.64.0.1", OwnerEmail: "alice@example.com"}
+	bob := &repo.Peer{IP: "100.64.0.2", OwnerEmail: "bob@example.com"}
+	carol := &repo.Peer{IP: "100.64.0.3", OwnerEmail: "carol@example.com"}
+	if got := allowedIPsFor(p, alice, db, nat64EgressRoute{}); len(got) == 0 {
+		t.Error("alice is in group:engineering; AllowedIPs should include the db tunnel")
+	}
+	if got := allowedIPsFor(p, bob, db, nat64EgressRoute{}); len(got) == 0 {
+		t.Error("bob matches user:bob@example.com; AllowedIPs should include the db tunnel")
+	}
+	if got := allowedIPsFor(p, carol, db, nat64EgressRoute{}); got != nil {
+		t.Errorf("carol matches neither matcher; got %v, want nil", got)
+	}
+}
+
 func TestAllowedIPsFor_IPv6Destination(t *testing.T) {
 	src := &repo.Peer{IP: "fd00::1", Tags: []string{"dev"}}
 	dst := &repo.Peer{IP: "fd00::2", Tags: []string{"prod"}}
@@ -72,7 +98,7 @@ func TestAllowedIPsFor_IPv6Destination(t *testing.T) {
 
 func TestPeerView_PopulatesAddrAndTags(t *testing.T) {
 	p := &repo.Peer{IP: "100.64.0.42", Tags: []string{"web", "prod"}}
-	view := peerView(p)
+	view := peerView(p, nil)
 	if view.IP.String() != "100.64.0.42" {
 		t.Errorf("IP = %q, want 100.64.0.42", view.IP.String())
 	}
@@ -83,7 +109,7 @@ func TestPeerView_PopulatesAddrAndTags(t *testing.T) {
 
 func TestPeerView_InvalidIPLeavesZeroAddr(t *testing.T) {
 	p := &repo.Peer{IP: "not-an-ip", Tags: nil}
-	view := peerView(p)
+	view := peerView(p, nil)
 	if view.IP.IsValid() {
 		t.Errorf("expected zero netip.Addr for invalid input, got %v", view.IP)
 	}

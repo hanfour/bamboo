@@ -500,14 +500,20 @@ func (r *Peers) MarkOfflineExcept(ctx context.Context, keepPubKeys []string) err
 	if len(keepPubKeys) == 0 {
 		return nil
 	}
-	_, err := r.pool.Exec(ctx, `
+	run := func(q db.Querier) error {
+		_, err := q.Exec(ctx, `
 		UPDATE peers
 		   SET status     = 'offline',
 		       updated_at = now()
 		 WHERE wireguard_public_key <> ALL($1::text[])
 		   AND status NOT IN ('offline', 'disabled')
 	`, keepPubKeys)
-	return err
+		return err
+	}
+	if pool, ok := r.pool.(*db.Pool); ok {
+		return db.WithBypass(ctx, pool, run)
+	}
+	return run(r.pool)
 }
 
 // UpdateHostname renames a peer in place. Returns true when the new
@@ -731,26 +737,41 @@ func (r *Peers) SetNAT64EgressHealth(ctx context.Context, id uuid.UUID, reported
 // route regardless of egress health, so a selection change there is a
 // no-op; skipping them keeps the sweep cheap.
 func (r *Peers) ListNAT64EgressActiveTenants(ctx context.Context) ([]uuid.UUID, error) {
-	rows, err := r.pool.Query(ctx, `
+	const sql = `
 		SELECT DISTINCT p.tenant_id
 		  FROM peers p
 		  JOIN tenants t ON t.id = p.tenant_id AND t.deleted_at IS NULL
 		 WHERE p.nat64_egress_approved = true
-		   AND t.dns64_enabled = true
-	`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var ids []uuid.UUID
-	for rows.Next() {
-		var id uuid.UUID
-		if err := rows.Scan(&id); err != nil {
+		   AND t.dns64_enabled = true`
+	scan := func(q db.Querier) ([]uuid.UUID, error) {
+		rows, err := q.Query(ctx, sql)
+		if err != nil {
 			return nil, err
 		}
-		ids = append(ids, id)
+		defer rows.Close()
+		var ids []uuid.UUID
+		for rows.Next() {
+			var id uuid.UUID
+			if err := rows.Scan(&id); err != nil {
+				return nil, err
+			}
+			ids = append(ids, id)
+		}
+		return ids, rows.Err()
 	}
-	return ids, rows.Err()
+	if pool, ok := r.pool.(*db.Pool); ok {
+		var ids []uuid.UUID
+		err := db.WithBypass(ctx, pool, func(q db.Querier) error {
+			scanned, serr := scan(q)
+			if serr != nil {
+				return serr
+			}
+			ids = scanned
+			return nil
+		})
+		return ids, err
+	}
+	return scan(r.pool)
 }
 
 // SetUsingExitNode records that this peer is routing default

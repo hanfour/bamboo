@@ -237,7 +237,7 @@ func mintPreAuthKey(t *testing.T, f *fixture) string {
 	if err != nil {
 		t.Fatalf("generate secret: %v", err)
 	}
-	_, err = f.pool.Exec(ctx, `
+	_, err = f.admin.Exec(ctx, `
 		INSERT INTO pre_auth_keys (id, tenant_id, secret_hash, description, reusable, ephemeral)
 		VALUES ($1, $2, $3, 'e2e-test', false, false)
 	`, id, tenant.ID, hash)
@@ -249,7 +249,7 @@ func mintPreAuthKey(t *testing.T, f *fixture) string {
 
 func mintTenant(ctx context.Context, f *fixture) (*tenantRow, error) {
 	row := &tenantRow{}
-	err := f.pool.QueryRow(ctx, `
+	err := f.admin.QueryRow(ctx, `
 		INSERT INTO tenants (id, slug, name, ip_pool)
 		VALUES ($1, $2, 'e2e', '100.64.0.0/24')
 		ON CONFLICT (slug) DO UPDATE SET slug=EXCLUDED.slug

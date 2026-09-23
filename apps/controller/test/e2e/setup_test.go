@@ -48,6 +48,7 @@ type fixture struct {
 	httpSrv    *httptest.Server
 	httpAPI    *server.HTTPServer           // for per-test config knobs (e.g. SetRequireAuth)
 	coordSrv   *handlers.CoordinatorHandler // server-side handler, for SetRequireAuth in tests
+	admin      *db.Pool                     // BYPASSRLS; test setup and assertions
 }
 
 // startFixture brings up an in-process controller against a real Postgres
@@ -67,13 +68,14 @@ func startFixture(t *testing.T) *fixture {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	pool, err := db.Open(ctx, dsn)
+	pool, admin, err := openPools(t, ctx, dsn)
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
 
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
+		admin.Close()
 		pool.Close()
 		t.Fatalf("listen: %v", err)
 	}
@@ -90,6 +92,7 @@ func startFixture(t *testing.T) *fixture {
 	)
 	if err != nil {
 		grpcSrv.Stop()
+		admin.Close()
 		pool.Close()
 		t.Fatalf("dial: %v", err)
 	}
@@ -110,6 +113,7 @@ func startFixture(t *testing.T) *fixture {
 		httpSrv:    httpSrv,
 		httpAPI:    httpAPI,
 		coordSrv:   coord,
+		admin:      admin,
 	}
 
 	t.Cleanup(func() {
@@ -117,7 +121,8 @@ func startFixture(t *testing.T) *fixture {
 		httpSrv.Close()
 		grpcSrv.GracefulStop()
 		// Best-effort cleanup of rows this test created.
-		cleanupTenant(pool, f.tenantSlug)
+		cleanupTenant(admin, f.tenantSlug)
+		admin.Close()
 		pool.Close()
 	})
 
@@ -194,12 +199,12 @@ func (f *fixture) mintJWT(t *testing.T, isAdmin bool) string {
 func (f *fixture) mintJWTWithUser(t *testing.T, isAdmin bool) (string, uuid.UUID) {
 	t.Helper()
 	ctx := context.Background()
-	tenants := repo.NewTenants(f.pool)
+	tenants := repo.NewTenants(f.admin)
 	tenant, err := tenants.GetOrCreate(ctx, f.tenantSlug, "Default Tenant", "100.64.0.0/24")
 	if err != nil {
 		t.Fatalf("get tenant: %v", err)
 	}
-	users := repo.NewUsers(f.pool)
+	users := repo.NewUsers(f.admin)
 	user, err := users.UpsertOIDC(ctx, &repo.User{
 		TenantID:     tenant.ID,
 		Email:        fmt.Sprintf("test-%s@example.com", uuid.NewString()[:8]),
@@ -211,7 +216,7 @@ func (f *fixture) mintJWTWithUser(t *testing.T, isAdmin bool) (string, uuid.UUID
 		t.Fatalf("UpsertOIDC: %v", err)
 	}
 	if isAdmin {
-		if _, err := f.pool.Exec(ctx, `UPDATE users SET is_admin=true WHERE id=$1`, user.ID); err != nil {
+		if _, err := f.admin.Exec(ctx, `UPDATE users SET is_admin=true WHERE id=$1`, user.ID); err != nil {
 			t.Fatalf("set is_admin: %v", err)
 		}
 	}
@@ -243,6 +248,22 @@ func randomPubKey(t *testing.T) string {
 		t.Fatalf("random: %v", err)
 	}
 	return base64.StdEncoding.EncodeToString(b)
+}
+
+// openPools returns the controller pool (RLS applies) and a maintenance
+// pool for test setup, direct SQL, and cleanup.
+func openPools(t *testing.T, ctx context.Context, dsn string) (app, admin *db.Pool, err error) {
+	t.Helper()
+	app, err = db.Open(ctx, dsn)
+	if err != nil {
+		return nil, nil, err
+	}
+	admin, err = db.OpenMaintenance(ctx, dsn)
+	if err != nil {
+		app.Close()
+		return nil, nil, err
+	}
+	return app, admin, nil
 }
 
 // cleanupTenant removes every row created by a given test tenant. Errors

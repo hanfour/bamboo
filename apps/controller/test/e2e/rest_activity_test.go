@@ -94,7 +94,7 @@ func TestRESTActivity_CrossTenantIsolation(t *testing.T) {
 	// Tenant B: tenant auto-created on first request via the X-Tenant-Slug
 	// dev fallback. Cleanup to avoid leaking between tests.
 	otherSlug := "e2e-other-activity-" + f.tenantSlug[len("e2e-"):]
-	t.Cleanup(func() { cleanupTenant(f.pool, otherSlug) })
+	t.Cleanup(func() { cleanupTenant(f.admin, otherSlug) })
 
 	got := getJSON(t, f.httpURL+"/api/v1/activity", otherSlug)
 	if got.status != http.StatusOK {

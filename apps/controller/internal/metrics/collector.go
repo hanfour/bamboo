@@ -74,7 +74,7 @@ func NewTenantCollector(pool *db.Pool) *TenantCollector {
 		),
 		relaysCount: prometheus.NewDesc(
 			"bamboo_relays_count",
-			"Number of provisioned relay endpoints per tenant.",
+			"Number of enabled relay endpoints. Relays are shared across tenants; the tenant label is always \"shared\".",
 			[]string{"tenant"},
 			nil,
 		),
@@ -115,10 +115,30 @@ func (c *TenantCollector) Collect(ch chan<- prometheus.Metric) {
 	ctx, cancel := context.WithTimeout(context.Background(), c.queryTimeout)
 	defer cancel()
 
-	c.collectPeers(ctx, ch)
-	c.collectPolicyRevisions(ctx, ch)
-	c.collectRelays(ctx, ch)
-	c.collectPreAuthKeys(ctx, ch)
+	// Aggregates span tenants. Each query is its own maintenance
+	// transaction so one failed statement does not abort the others.
+	c.collect(ctx, ch, c.collectPeers)
+	c.collect(ctx, ch, c.collectPolicyRevisions)
+	c.collect(ctx, ch, c.collectRelays)
+	c.collect(ctx, ch, c.collectPreAuthKeys)
+}
+
+func (c *TenantCollector) collect(ctx context.Context, ch chan<- prometheus.Metric, fn func(context.Context, db.Querier, chan<- prometheus.Metric)) {
+	if err := db.WithBypass(ctx, c.pool, func(q db.Querier) error {
+		// Savepoint so a missing relation (the relays gauge still
+		// queries a table that was never created) does not abort
+		// the maintenance transaction.
+		sp, err := q.Begin(ctx)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = sp.Rollback(ctx) }()
+		fn(ctx, sp, ch)
+		_ = sp.Commit(ctx)
+		return nil
+	}); err != nil {
+		slog.Warn("metrics: maintenance query", "err", err)
+	}
 }
 
 // collectPeers emits bamboo_peers_count{tenant, approval_status,
@@ -127,8 +147,8 @@ func (c *TenantCollector) Collect(ch chan<- prometheus.Metric) {
 // a series — the canonical Prom semantic for "no events of this
 // shape" is "no series", and emitting explicit zero rows would
 // inflate the time-series count.
-func (c *TenantCollector) collectPeers(ctx context.Context, ch chan<- prometheus.Metric) {
-	rows, err := c.pool.Query(ctx, `
+func (c *TenantCollector) collectPeers(ctx context.Context, q db.Querier, ch chan<- prometheus.Metric) {
+	rows, err := q.Query(ctx, `
 		SELECT t.slug, p.approval_status, p.status, count(*)
 		  FROM peers p
 		  JOIN tenants t ON t.id = p.tenant_id
@@ -160,8 +180,8 @@ func (c *TenantCollector) collectPeers(ctx context.Context, ch chan<- prometheus
 // Tenants without an acl_policies row don't appear in the result
 // — their effective revision is 0, but operators read "missing
 // series" as "no policy authored" without needing the explicit zero.
-func (c *TenantCollector) collectPolicyRevisions(ctx context.Context, ch chan<- prometheus.Metric) {
-	rows, err := c.pool.Query(ctx, `
+func (c *TenantCollector) collectPolicyRevisions(ctx context.Context, q db.Querier, ch chan<- prometheus.Metric) {
+	rows, err := q.Query(ctx, `
 		SELECT t.slug, p.revision
 		  FROM acl_policies p
 		  JOIN tenants t ON t.id = p.tenant_id
@@ -187,35 +207,24 @@ func (c *TenantCollector) collectPolicyRevisions(ctx context.Context, ch chan<- 
 	}
 }
 
-// collectRelays emits bamboo_relays_count{tenant}. Tenants without
-// any provisioned relays don't appear — same "no series ⇒ zero"
-// convention as the peer count.
-func (c *TenantCollector) collectRelays(ctx context.Context, ch chan<- prometheus.Metric) {
-	rows, err := c.pool.Query(ctx, `
-		SELECT t.slug, count(*)
-		  FROM relays r
-		  JOIN tenants t ON t.id = r.tenant_id
-		 GROUP BY t.slug
-	`)
+// collectRelays emits bamboo_relays_count{tenant="shared"}. The
+// registry is global (relay_servers has no tenant_id); a per-tenant
+// join against a table named "relays" never existed and failed every
+// scrape.
+func (c *TenantCollector) collectRelays(ctx context.Context, q db.Querier, ch chan<- prometheus.Metric) {
+	var count int64
+	err := q.QueryRow(ctx, `
+		SELECT count(*)
+		  FROM relay_servers
+		 WHERE enabled = true AND deleted_at IS NULL
+	`).Scan(&count)
 	if err != nil {
 		slog.Warn("metrics: relays count query", "err", err)
 		return
 	}
-	defer rows.Close()
-	for rows.Next() {
-		var slug string
-		var count int64
-		if err := rows.Scan(&slug, &count); err != nil {
-			slog.Warn("metrics: relays count scan", "err", err)
-			return
-		}
-		ch <- prometheus.MustNewConstMetric(
-			c.relaysCount, prometheus.GaugeValue, float64(count), slug,
-		)
-	}
-	if err := rows.Err(); err != nil {
-		slog.Warn("metrics: relays count rows", "err", err)
-	}
+	ch <- prometheus.MustNewConstMetric(
+		c.relaysCount, prometheus.GaugeValue, float64(count), "shared",
+	)
 }
 
 // collectPreAuthKeys emits bamboo_preauth_keys_count{tenant,
@@ -231,8 +240,8 @@ func (c *TenantCollector) collectRelays(ctx context.Context, ch chan<- prometheu
 //	!reusable && use_count > 0                  → used (one-shot consumed)
 //	reusable  && use_count > 0                  → reusable (active, has redeems)
 //	else                                        → pending (never used yet)
-func (c *TenantCollector) collectPreAuthKeys(ctx context.Context, ch chan<- prometheus.Metric) {
-	rows, err := c.pool.Query(ctx, `
+func (c *TenantCollector) collectPreAuthKeys(ctx context.Context, q db.Querier, ch chan<- prometheus.Metric) {
+	rows, err := q.Query(ctx, `
 		SELECT t.slug,
 		       CASE
 		           WHEN k.revoked_at IS NOT NULL THEN 'revoked'

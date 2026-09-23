@@ -30,7 +30,7 @@ func requireDB(t *testing.T) *db.Pool {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	pool, err := db.Open(ctx, dsn)
+	pool, err := db.OpenMaintenance(ctx, dsn)
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}

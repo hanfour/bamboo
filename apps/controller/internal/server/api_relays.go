@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/hanfour/bamboo/apps/controller/internal/db"
 	"github.com/hanfour/bamboo/apps/controller/internal/db/repo"
 )
 
@@ -84,7 +85,15 @@ func (h *HTTPServer) routeAdminRelays(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, errors.New("admin auth required"))
 		return
 	}
-	user, err := h.users.GetByID(r.Context(), authn.claims.UserID)
+	var user *repo.User
+	err = db.WithTenant(r.Context(), h.pool, authn.claims.TenantID, func(q db.Querier) error {
+		u, gerr := repo.NewUsers(q).GetByID(r.Context(), authn.claims.UserID)
+		if gerr != nil {
+			return gerr
+		}
+		user = u
+		return nil
+	})
 	if err != nil || user == nil || !user.IsAdmin {
 		writeError(w, http.StatusForbidden, errors.New("admin only"))
 		return

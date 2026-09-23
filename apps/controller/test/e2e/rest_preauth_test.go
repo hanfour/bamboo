@@ -60,7 +60,7 @@ func TestRESTCreatePreAuthKey_HappyPath(t *testing.T) {
 
 	// audit_log row recorded.
 	var count int
-	if err := f.pool.QueryRow(context.Background(),
+	if err := f.admin.QueryRow(context.Background(),
 		`SELECT count(*) FROM audit_log WHERE action='preauthkey.create' AND resource_id = $1`,
 		key.ID).Scan(&count); err != nil {
 		t.Fatalf("audit query: %v", err)
@@ -95,14 +95,14 @@ func TestRESTCreatePreAuthKey_RejectsNonAdmin(t *testing.T) {
 
 	// Resolve the tenant the way the dev-fallback would, so the
 	// user's TenantID matches what apiCreatePreAuthKey will see.
-	tenants := repo.NewTenants(f.pool)
+	tenants := repo.NewTenants(f.admin)
 	tenant, err := tenants.GetOrCreate(ctx, f.tenantSlug, "Default Tenant", "100.64.0.0/24")
 	if err != nil {
 		t.Fatalf("get tenant: %v", err)
 	}
 
 	// Create a non-admin user (IsAdmin defaults to false).
-	users := repo.NewUsers(f.pool)
+	users := repo.NewUsers(f.admin)
 	user, err := users.UpsertOIDC(ctx, &repo.User{
 		TenantID:     tenant.ID,
 		Email:        "non-admin@example.com",
@@ -240,7 +240,7 @@ func TestRESTRevokePreAuthKey_HappyPath(t *testing.T) {
 
 	// audit row recorded.
 	var count int
-	_ = f.pool.QueryRow(context.Background(),
+	_ = f.admin.QueryRow(context.Background(),
 		`SELECT count(*) FROM audit_log WHERE action='preauthkey.revoke' AND resource_id = $1`,
 		minted.ID).Scan(&count)
 	if count < 1 {
@@ -263,7 +263,7 @@ func TestRESTRevokePreAuthKey_CrossTenantIsolation(t *testing.T) {
 	_ = json.Unmarshal(mint.body, &minted)
 
 	otherSlug := "e2e-other-revoke-" + f.tenantSlug[len("e2e-"):]
-	t.Cleanup(func() { cleanupTenant(f.pool, otherSlug) })
+	t.Cleanup(func() { cleanupTenant(f.admin, otherSlug) })
 
 	resp := sendJSONWithTenant(t, http.MethodPost,
 		f.httpURL+"/api/v1/preauth-keys/"+minted.ID+"/revoke", otherSlug, nil)

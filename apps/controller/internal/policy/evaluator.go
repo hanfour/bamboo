@@ -4,6 +4,7 @@ package policy
 
 import (
 	"net/netip"
+	"strings"
 )
 
 // EvalRequest is the inbound query: "can src reach dst on port p?".
@@ -52,7 +53,7 @@ func matchSource(m Matcher, req EvalRequest) bool {
 	case MatcherGroup:
 		return contains(req.SrcGroups, m.Name)
 	case MatcherUser:
-		return req.SrcUser != "" && req.SrcUser == m.Name
+		return req.SrcUser != "" && strings.EqualFold(req.SrcUser, m.Name)
 	case MatcherCIDR:
 		return req.SrcIP.IsValid() && m.CIDR.Contains(req.SrcIP)
 	default:
