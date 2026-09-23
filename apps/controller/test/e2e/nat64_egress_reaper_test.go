@@ -19,8 +19,8 @@ func TestReconcileNAT64Egress_StaleActiveFailsOver(t *testing.T) {
 	f := startFixture(t)
 	ctx := f.outgoingCtx(context.Background())
 	bg := context.Background()
-	peers := repo.NewPeers(f.pool)
-	tenants := repo.NewTenants(f.pool)
+	peers := repo.NewPeers(f.admin)
+	tenants := repo.NewTenants(f.admin)
 
 	regA, err := f.coord.Register(ctx, &bamboov1.RegisterRequest{Hostname: "egA", WireguardPublicKey: randomPubKey(t), Os: "linux"})
 	if err != nil {
@@ -61,14 +61,14 @@ func TestReconcileNAT64Egress_StaleActiveFailsOver(t *testing.T) {
 	// Make selection deterministic regardless of devmode register's
 	// approval behavior: both must be mesh-approved + online for
 	// selectEgress to consider them. Harmless if register already set these.
-	if _, err := f.pool.Exec(bg, `UPDATE peers SET approval_status='approved', status='online' WHERE id = ANY($1)`, []uuid.UUID{lo, hi}); err != nil {
+	if _, err := f.admin.Exec(bg, `UPDATE peers SET approval_status='approved', status='online' WHERE id = ANY($1)`, []uuid.UUID{lo, hi}); err != nil {
 		t.Fatal(err)
 	}
 	// Both fresh, then backdate the active (lo) past the staleness window.
-	if _, err := f.pool.Exec(bg, `UPDATE peers SET last_seen_at = now() WHERE id = ANY($1)`, []uuid.UUID{lo, hi}); err != nil {
+	if _, err := f.admin.Exec(bg, `UPDATE peers SET last_seen_at = now() WHERE id = ANY($1)`, []uuid.UUID{lo, hi}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.pool.Exec(bg, `UPDATE peers SET last_seen_at = now() - interval '5 minutes' WHERE id = $1`, lo); err != nil {
+	if _, err := f.admin.Exec(bg, `UPDATE peers SET last_seen_at = now() - interval '5 minutes' WHERE id = $1`, lo); err != nil {
 		t.Fatal(err)
 	}
 

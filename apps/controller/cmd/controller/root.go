@@ -21,4 +21,5 @@ func init() {
 	rootCmd.AddCommand(versionCmd)
 	rootCmd.AddCommand(migrateCmd)
 	rootCmd.AddCommand(relaykeyCmd)
+	rootCmd.AddCommand(healthCmd)
 }

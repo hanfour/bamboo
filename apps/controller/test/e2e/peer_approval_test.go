@@ -160,7 +160,7 @@ func TestPeerApproval_ApproveFlow(t *testing.T) {
 
 	// audit row written.
 	var auditCount int
-	if err := f.pool.QueryRow(context.Background(),
+	if err := f.admin.QueryRow(context.Background(),
 		`SELECT count(*) FROM audit_log WHERE action='peer.approve' AND resource_id = $1`,
 		second).Scan(&auditCount); err != nil {
 		t.Fatalf("audit query: %v", err)
@@ -373,7 +373,7 @@ func getPeerJSON(t *testing.T, f *fixture, peerID string) peerJSONShape {
 func getPeerPubKey(t *testing.T, f *fixture, peerID string) string {
 	t.Helper()
 	var pubKey string
-	if err := f.pool.QueryRow(context.Background(),
+	if err := f.admin.QueryRow(context.Background(),
 		`SELECT wireguard_public_key FROM peers WHERE id = $1`,
 		peerID).Scan(&pubKey); err != nil {
 		t.Fatalf("query pubkey for %s: %v", peerID, err)

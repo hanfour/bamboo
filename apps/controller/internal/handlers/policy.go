@@ -351,12 +351,23 @@ func recommendKindToProto(k recommend.Kind) bamboov1.Recommendation_Kind {
 // loadParsedPolicy fetches and parses the current policy. Returns an
 // empty Policy (default-deny everything) when no record exists.
 func (h *PolicyHandler) loadParsedPolicy(ctx context.Context, tenantID uuid.UUID) (*policy.Policy, error) {
-	rec, err := h.policies.Get(ctx, tenantID)
-	if errors.Is(err, repo.ErrNotFound) {
-		return &policy.Policy{}, nil
-	}
+	var rec *repo.PolicyRecord
+	err := db.WithTenant(ctx, h.pool, tenantID, func(q db.Querier) error {
+		r, gerr := repo.NewPolicies(q).Get(ctx, tenantID)
+		if errors.Is(gerr, repo.ErrNotFound) {
+			return nil
+		}
+		if gerr != nil {
+			return gerr
+		}
+		rec = r
+		return nil
+	})
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "load policy: %v", err)
+	}
+	if rec == nil {
+		return &policy.Policy{}, nil
 	}
 	parsed, err := policy.Parse("policy.hcl", rec.HCLSource)
 	if err != nil {

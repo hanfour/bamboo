@@ -156,7 +156,7 @@ func NewHTTPServer(
 	// wiring (events queue up in memory; if the test never reads,
 	// they age out when the channel fills + are dropped via the
 	// "queue full" warning path).
-	h.publisher = webhooks.New(h.webhooks, nil)
+	h.publisher = webhooks.New(h.pool, nil)
 	h.audits.SetHook(h.publisher)
 
 	// Per-tenant gauges run on each /metrics scrape via the
@@ -520,9 +520,15 @@ func (h *HTTPServer) reapExpiredInvitesOnce(ctx context.Context) {
 		// reference the user_invitations row (which still exists
 		// — revoked, not deleted).
 		ev.Diff = marshalDiffJSON(map[string]any{"email": e.Email})
-		if err := h.audits.Insert(ctx, ev); err != nil {
+		var inserted bool
+		if err := db.WithTenant(ctx, h.pool, tenantID, func(q db.Querier) error {
+			inserted = insertAuditTx(ctx, q, ev)
+			return nil
+		}); err != nil {
 			slog.Warn("invite reaper: audit insert", "invitation_id", e.ID, "err", err)
+			continue
 		}
+		h.emitAuditHook(ctx, ev, inserted)
 	}
 }
 
@@ -745,7 +751,7 @@ func (h *HTTPServer) handleSignOut(w http.ResponseWriter, r *http.Request) {
 	// can't add to the revocation denylist without a jti.
 	if cookie, cerr := r.Cookie(SessionCookieName); cerr == nil && cookie.Value != "" {
 		if claims, verr := auth.VerifySessionToken(h.secret, cookie.Value); verr == nil {
-			auditSessionSignout(r.Context(), h.audits, claims.TenantID, claims.UserID, requestIPString(r), r.UserAgent())
+			h.auditSessionSignout(r.Context(), claims.TenantID, claims.UserID, requestIPString(r), r.UserAgent())
 			// jti is empty for legacy tokens minted before slice 3a;
 			// skip the insert there since there's nothing to key
 			// off. The natural TTL still drops the token at exp.
@@ -925,7 +931,15 @@ func (h *HTTPServer) handleCallback(w http.ResponseWriter, r *http.Request, prov
 			http.Error(w, "invalid invite id in state", http.StatusBadRequest)
 			return
 		}
-		inv, gerr := h.invitations.GetByID(r.Context(), invID)
+		var inv *repo.UserInvitation
+		gerr := db.WithBypass(r.Context(), h.pool, func(q db.Querier) error {
+			row, err := repo.NewUserInvitations(q).GetByID(r.Context(), invID)
+			if err != nil {
+				return err
+			}
+			inv = row
+			return nil
+		})
 		if gerr != nil {
 			http.Error(w, "invite: "+gerr.Error(), http.StatusBadRequest)
 			return
@@ -950,37 +964,39 @@ func (h *HTTPServer) handleCallback(w http.ResponseWriter, r *http.Request, prov
 		invitationID = &inv.ID
 	}
 
-	user, err := h.users.UpsertOIDC(r.Context(), &repo.User{
-		TenantID:     tenant.ID,
-		Email:        identity.Email,
-		DisplayName:  identity.DisplayName,
-		OIDCProvider: identity.Provider,
-		OIDCSubject:  identity.Subject,
-		IsAdmin:      isAdminFromInvite,
+	var user *repo.User
+	err = db.WithTenant(r.Context(), h.pool, tenant.ID, func(q db.Querier) error {
+		u, uerr := repo.NewUsers(q).UpsertOIDC(r.Context(), &repo.User{
+			TenantID:     tenant.ID,
+			Email:        identity.Email,
+			DisplayName:  identity.DisplayName,
+			OIDCProvider: identity.Provider,
+			OIDCSubject:  identity.Subject,
+			IsAdmin:      isAdminFromInvite,
+		})
+		if uerr != nil {
+			return uerr
+		}
+		user = u
+		if invitationID == nil {
+			return nil
+		}
+		return repo.NewUserInvitations(q).MarkAccepted(r.Context(), *invitationID, user.ID)
 	})
 	if err != nil {
+		if invitationID != nil && errors.Is(err, repo.ErrNotFound) {
+			http.Error(w, "invitation was just accepted by another sign-in", http.StatusConflict)
+			return
+		}
 		http.Error(w, "upsert user: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	// Atomically mark the invitation accepted by this user. The
-	// repo's WHERE guards against the (very unlikely) race where two
-	// concurrent callbacks try to redeem the same invite — second
-	// one gets ErrNotFound and we surface a clear error so the
-	// loser-of-the-race understands.
 	if invitationID != nil {
-		if mErr := h.invitations.MarkAccepted(r.Context(), *invitationID, user.ID); mErr != nil {
-			if errors.Is(mErr, repo.ErrNotFound) {
-				http.Error(w, "invitation was just accepted by another sign-in", http.StatusConflict)
-				return
-			}
-			http.Error(w, "mark invitation accepted: "+mErr.Error(), http.StatusInternalServerError)
-			return
-		}
 		// Audit row records who redeemed which invitation. tenantID
 		// pointer + resource id match the other admin actions in
 		// audit_log so the activity feed can group them.
-		auditInviteAccepted(r.Context(), h.audits, tenant.ID, user.ID, *invitationID, identity.Email)
+		h.auditInviteAccepted(r.Context(), tenant.ID, user.ID, *invitationID, identity.Email)
 	}
 
 	token, err := auth.IssueSessionToken(h.secret, auth.SessionClaims{
@@ -992,7 +1008,7 @@ func (h *HTTPServer) handleCallback(w http.ResponseWriter, r *http.Request, prov
 		http.Error(w, "issue token: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	auditSessionStart(r.Context(), h.audits, tenant.ID, user.ID, identity.Provider, requestIPString(r), r.UserAgent(), h.ttl)
+	h.auditSessionStart(r.Context(), tenant.ID, user.ID, identity.Provider, requestIPString(r), r.UserAgent(), h.ttl)
 
 	// Set the session cookie so the Web UI (or any same-origin browser
 	// caller) sees the token without needing to copy/paste. The CLI
@@ -1110,7 +1126,15 @@ func (h *HTTPServer) resolveInvite(ctx context.Context, token string) (*repo.Use
 	if err != nil {
 		return nil, "", errors.New("invite token is malformed")
 	}
-	inv, err := h.invitations.GetByID(ctx, invID)
+	var inv *repo.UserInvitation
+	err = db.WithBypass(ctx, h.pool, func(q db.Querier) error {
+		row, gerr := repo.NewUserInvitations(q).GetByID(ctx, invID)
+		if gerr != nil {
+			return gerr
+		}
+		inv = row
+		return nil
+	})
 	if err != nil {
 		if errors.Is(err, repo.ErrNotFound) {
 			return nil, "", errors.New("invitation not found")
@@ -1170,10 +1194,7 @@ func requestIPString(r *http.Request) string {
 // looking at the row sees both *how* the session was opened and *how
 // long* it is good for (matters when BAMBOO_SESSION_TTL_HOURS varies
 // across deploys).
-func auditSessionStart(ctx context.Context, audits *repo.AuditLogs, tenantID, userID uuid.UUID, provider, ip, userAgent string, ttl time.Duration) {
-	if audits == nil {
-		return
-	}
+func (h *HTTPServer) auditSessionStart(ctx context.Context, tenantID, userID uuid.UUID, provider, ip, userAgent string, ttl time.Duration) {
 	diff, _ := json.Marshal(map[string]any{
 		"provider":  provider,
 		"ttlHours":  int(ttl / time.Hour),
@@ -1194,19 +1215,14 @@ func auditSessionStart(ctx context.Context, audits *repo.AuditLogs, tenantID, us
 	if userAgent != "" {
 		ev.UserAgent = &userAgent
 	}
-	if err := audits.Insert(ctx, ev); err != nil {
-		slog.Warn("audit session.start", "err", err, "user_id", userID)
-	}
+	h.auditInTenant(ctx, tenantID, ev)
 }
 
 // auditSessionSignout writes the audit row for an interactive sign-out.
 // Only emitted when the request carried a verifiable session cookie
 // (see handleSignOut); unauthenticated sign-out hits are not logged
 // because we can't attribute them to a real actor.
-func auditSessionSignout(ctx context.Context, audits *repo.AuditLogs, tenantID, userID uuid.UUID, ip, userAgent string) {
-	if audits == nil {
-		return
-	}
+func (h *HTTPServer) auditSessionSignout(ctx context.Context, tenantID, userID uuid.UUID, ip, userAgent string) {
 	ev := &repo.AuditEvent{
 		TenantID:     &tenantID,
 		ActorType:    "user",
@@ -1221,9 +1237,7 @@ func auditSessionSignout(ctx context.Context, audits *repo.AuditLogs, tenantID, 
 	if userAgent != "" {
 		ev.UserAgent = &userAgent
 	}
-	if err := audits.Insert(ctx, ev); err != nil {
-		slog.Warn("audit session.signout", "err", err, "user_id", userID)
-	}
+	h.auditInTenant(ctx, tenantID, ev)
 }
 
 // auditInviteAccepted writes the audit row for a successful
@@ -1231,12 +1245,9 @@ func auditSessionSignout(ctx context.Context, audits *repo.AuditLogs, tenantID, 
 // preauthkey.* — actor = the user who accepted, action label scoped
 // to the user.invite namespace so the activity feed can group it
 // with other admin actions.
-func auditInviteAccepted(ctx context.Context, audits *repo.AuditLogs, tenantID, userID, invitationID uuid.UUID, email string) {
-	if audits == nil {
-		return
-	}
+func (h *HTTPServer) auditInviteAccepted(ctx context.Context, tenantID, userID, invitationID uuid.UUID, email string) {
 	diff, _ := json.Marshal(map[string]any{"email": email})
-	err := audits.Insert(ctx, &repo.AuditEvent{
+	h.auditInTenant(ctx, tenantID, &repo.AuditEvent{
 		TenantID:     &tenantID,
 		ActorType:    "user",
 		ActorID:      &userID,
@@ -1245,7 +1256,22 @@ func auditInviteAccepted(ctx context.Context, audits *repo.AuditLogs, tenantID, 
 		ResourceID:   &invitationID,
 		Diff:         diff,
 	})
-	if err != nil {
-		slog.Warn("audit user.invite.accept", "err", err, "invitation_id", invitationID)
+}
+
+// auditInTenant writes one audit row inside the caller's tenant
+// transaction so RLS WITH CHECK accepts it, then fans the webhook
+// hook out only after commit.
+func (h *HTTPServer) auditInTenant(ctx context.Context, tenantID uuid.UUID, ev *repo.AuditEvent) {
+	if h == nil || h.pool == nil || ev == nil {
+		return
 	}
+	var inserted bool
+	if err := db.WithTenant(ctx, h.pool, tenantID, func(q db.Querier) error {
+		inserted = insertAuditTx(ctx, q, ev)
+		return nil
+	}); err != nil {
+		slog.Warn("audit insert", "action", ev.Action, "err", err)
+		return
+	}
+	h.emitAuditHook(ctx, ev, inserted)
 }

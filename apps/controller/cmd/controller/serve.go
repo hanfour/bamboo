@@ -4,9 +4,12 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -35,6 +38,22 @@ func init() {
 	serveCmd.Flags().BoolVar(&serveLogJSON, "log-json", false, "emit JSON-formatted logs (default: text)")
 }
 
+// autoMigrate reports whether serve should apply pending migrations.
+// The default is on: an image update that only restarts the container
+// still reaches the schema that binary was built with.
+func autoMigrate() bool {
+	v := strings.TrimSpace(os.Getenv("BAMBOO_AUTO_MIGRATE"))
+	if v == "" {
+		return true
+	}
+	on, err := strconv.ParseBool(v)
+	if err != nil {
+		slog.Warn("BAMBOO_AUTO_MIGRATE is not a bool; migrating anyway", "value", v)
+		return true
+	}
+	return on
+}
+
 func runServe(_ *cobra.Command, _ []string) error {
 	configureLogger(serveLogJSON)
 
@@ -45,6 +64,17 @@ func runServe(_ *cobra.Command, _ []string) error {
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
+
+	// Apply embedded migrations before opening the pool. The pool
+	// assumes bamboo_app, which migration 00022 creates; opening
+	// first would keep already-checked-out connections on the login
+	// role. Set BAMBOO_AUTO_MIGRATE=false to run migrate yourself.
+	if autoMigrate() {
+		slog.Info("applying database migrations")
+		if err := db.MigrateUp(ctx, cfg.Database.URL); err != nil {
+			return fmt.Errorf("migrate: %w", err)
+		}
+	}
 
 	pool, err := db.Open(ctx, cfg.Database.URL)
 	if err != nil {

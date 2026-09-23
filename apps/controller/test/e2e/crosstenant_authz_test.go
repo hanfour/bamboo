@@ -38,7 +38,7 @@ import (
 func registerVictimPeerInSeparateTenant(t *testing.T, f *fixture, endpoints []string) (peerID, slug string) {
 	t.Helper()
 	slug = "e2e-victim-" + uuid.NewString()[:8]
-	t.Cleanup(func() { cleanupTenant(f.pool, slug) })
+	t.Cleanup(func() { cleanupTenant(f.admin, slug) })
 	payload := map[string]any{
 		"hostname":           "victim-peer",
 		"wireguardPublicKey": randomPubKey(t),
@@ -157,7 +157,7 @@ func TestCrossTenant_HeartbeatRejectsForeignPeerEndpoints(t *testing.T) {
 	// Data proof: the victim's endpoints must be untouched. Best-effort —
 	// if the array scan isn't supported we still have the status assertion.
 	var eps []string
-	if err := f.pool.QueryRow(context.Background(),
+	if err := f.admin.QueryRow(context.Background(),
 		`SELECT endpoints FROM peers WHERE id = $1`, victimPeerID).Scan(&eps); err == nil {
 		for _, e := range eps {
 			if e == poisonEndpoint {

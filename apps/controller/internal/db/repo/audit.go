@@ -249,6 +249,12 @@ func (r *AuditLogs) DeleteOlderThan(ctx context.Context, cutoff time.Time) (int6
 	// function form — clearer than the SET LOCAL statement form
 	// when the value is constant and the audit reader is
 	// looking for "what bypasses the trigger".
+	// Maintenance role sees every tenant's rows. The trigger bypass
+	// below is still required: BYPASSRLS does not disable the
+	// append-only trigger.
+	if _, err := tx.Exec(ctx, `SET LOCAL ROLE bamboo_maintenance`); err != nil {
+		return 0, err
+	}
 	if _, err := tx.Exec(ctx, `SELECT set_config('bamboo.allow_audit_delete', 'true', true)`); err != nil {
 		return 0, err
 	}

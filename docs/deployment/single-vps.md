@@ -107,9 +107,12 @@ docker compose up -d
 docker compose logs -f
 ```
 
+The controller applies pending database migrations before it serves.
 First boot takes ~60 seconds for Caddy to obtain Let's Encrypt
 certificates. Watch for `certificate obtained successfully` for both
-domains. Once that's done, ctrl-C the log stream.
+domains. Once that's done, ctrl-C the log stream. Set
+`BAMBOO_AUTO_MIGRATE=false` only when you want `deploy.sh` to be the
+sole migration step.
 
 ### 6. Bootstrap (run once)
 

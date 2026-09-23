@@ -28,7 +28,7 @@ func TestTagOwners_AdminWithoutOwnershipIsForbidden(t *testing.T) {
 	bobTok, _ := f.mintJWTWithUser(t, true)
 
 	// Set alice's email so the policy's tagOwners list matches.
-	if _, err := f.pool.Exec(context.Background(),
+	if _, err := f.admin.Exec(context.Background(),
 		`UPDATE users SET email='alice@example.com' WHERE id=$1`, aliceID); err != nil {
 		t.Fatalf("set alice email: %v", err)
 	}
@@ -76,7 +76,7 @@ func TestTagOwners_UnlistedTagFreelyAssignable(t *testing.T) {
 	f.enableRequireAuth()
 
 	aliceTok, aliceID := f.mintJWTWithUser(t, true)
-	if _, err := f.pool.Exec(context.Background(),
+	if _, err := f.admin.Exec(context.Background(),
 		`UPDATE users SET email='alice@example.com' WHERE id=$1`, aliceID); err != nil {
 		t.Fatalf("set alice email: %v", err)
 	}
@@ -116,7 +116,7 @@ func TestTagOwners_RemovalAlsoGated(t *testing.T) {
 	f.enableRequireAuth()
 
 	aliceTok, aliceID := f.mintJWTWithUser(t, true)
-	if _, err := f.pool.Exec(context.Background(),
+	if _, err := f.admin.Exec(context.Background(),
 		`UPDATE users SET email='alice@example.com' WHERE id=$1`, aliceID); err != nil {
 		t.Fatalf("set alice email: %v", err)
 	}

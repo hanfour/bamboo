@@ -97,6 +97,13 @@ services:
       # controller never sees a half-written dump.
       - /var/lib/bamboo:/var/lib/bamboo:ro
     command: ["serve", "--log-json"]
+    healthcheck:
+      # Distroless has no shell or wget. The binary probes its own /healthz.
+      test: ["CMD", "/controller", "health"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 25s
 
   web:
     image: ghcr.io/hanfour/bamboo-web:${BAMBOO_IMAGE_TAG:-latest}
@@ -140,9 +147,12 @@ services:
       DOMAIN: "${DOMAIN}"
       RELAY_DOMAIN: "${RELAY_DOMAIN}"
     depends_on:
-      - controller
-      - web
-      - relay
+      controller:
+        condition: service_healthy
+      web:
+        condition: service_started
+      relay:
+        condition: service_started
 
 volumes:
   postgres-data:

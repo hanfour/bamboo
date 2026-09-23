@@ -15,6 +15,9 @@ import (
 	"github.com/google/uuid"
 	"github.com/hanfour/bamboo/apps/controller/internal/auth"
 	"github.com/hanfour/bamboo/apps/controller/internal/clickhouse"
+	"github.com/hanfour/bamboo/apps/controller/internal/db"
+	"github.com/hanfour/bamboo/apps/controller/internal/db/repo"
+	"github.com/hanfour/bamboo/apps/controller/internal/handlers"
 	bamboov1 "github.com/hanfour/bamboo/proto/gen/go/bamboo/v1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -252,17 +255,29 @@ func (h *HTTPServer) apiPeersRegister(w http.ResponseWriter, r *http.Request) {
 	// REST shape lets clients self-advertise without a proto bump,
 	// at the cost of needing the peer.id from resp.Self.
 	if selfID := resp.GetSelf().GetId(); selfID != "" {
-		if peerUUID, perr := uuid.Parse(selfID); perr == nil {
+		peerUUID, perr := uuid.Parse(selfID)
+		tenantID, terr := uuid.Parse(resp.GetSelf().GetTenantId())
+		if perr == nil && terr == nil {
+			ctx := r.Context()
 			if body.AdvertisedRoutes != nil {
-				if err := h.peers.SetAdvertisedRoutes(r.Context(), peerUUID, body.AdvertisedRoutes); err != nil {
-					slog.Warn("set advertised_routes", "peer_id", selfID, "err", err)
+				routes := body.AdvertisedRoutes
+				if txErr := db.WithTenant(ctx, h.pool, tenantID, func(q db.Querier) error {
+					return repo.NewPeers(q).SetAdvertisedRoutes(ctx, peerUUID, routes)
+				}); txErr != nil {
+					slog.Warn("set advertised_routes", "peer_id", selfID, "err", txErr)
 				}
 			}
-			if err := h.peers.SetExitNodeCapable(r.Context(), peerUUID, body.AdvertiseExitNode); err != nil {
-				slog.Warn("set exit_node_capable", "peer_id", selfID, "err", err)
+			capable := body.AdvertiseExitNode
+			if txErr := db.WithTenant(ctx, h.pool, tenantID, func(q db.Querier) error {
+				return repo.NewPeers(q).SetExitNodeCapable(ctx, peerUUID, capable)
+			}); txErr != nil {
+				slog.Warn("set exit_node_capable", "peer_id", selfID, "err", txErr)
 			}
-			if err := h.peers.SetNAT64EgressCapable(r.Context(), peerUUID, body.AdvertiseNat64Egress); err != nil {
-				slog.Warn("set nat64_egress_capable", "peer_id", selfID, "err", err)
+			nat64 := body.AdvertiseNat64Egress
+			if txErr := db.WithTenant(ctx, h.pool, tenantID, func(q db.Querier) error {
+				return repo.NewPeers(q).SetNAT64EgressCapable(ctx, peerUUID, nat64)
+			}); txErr != nil {
+				slog.Warn("set nat64_egress_capable", "peer_id", selfID, "err", txErr)
 			}
 		}
 	}
@@ -324,10 +339,8 @@ func (h *HTTPServer) apiPeersRegister(w http.ResponseWriter, r *http.Request) {
 //
 // Failures are logged but do not propagate to the heartbeat
 // response — admin-visibility data must not knock real clients
-// offline. The tenant_id lookup goes through peers.GetByID rather
-// than re-using the heartbeat request, since the request body
-// doesn't carry it; clients are not required to know their tenant
-// UUID at heartbeat time.
+// offline. tenantID is resolved by the caller; the heartbeat body
+// does not carry it.
 //
 // Idempotency: the caller already filtered out latency-only updates
 // at the repo layer (SetConnectionPath returns pathChanged=false
@@ -336,13 +349,8 @@ func (h *HTTPServer) apiPeersRegister(w http.ResponseWriter, r *http.Request) {
 // latencyMs is clamped to >=0 before the unsigned cast: a buggy
 // client reporting a negative RTT must not wrap into ~4 billion ms
 // in CH and pollute the timeline.
-func (h *HTTPServer) logPathTransition(ctx context.Context, peerID uuid.UUID, prevPath, newPath string, latencyMs int32) {
+func (h *HTTPServer) logPathTransition(ctx context.Context, tenantID, peerID uuid.UUID, prevPath, newPath string, latencyMs int32) {
 	if h.connEvents == nil {
-		return
-	}
-	peer, err := h.peers.GetByID(ctx, peerID)
-	if err != nil {
-		slog.Warn("path transition: peer lookup failed", "peer_id", peerID, "err", err)
 		return
 	}
 	rtt := uint32(0)
@@ -350,7 +358,7 @@ func (h *HTTPServer) logPathTransition(ctx context.Context, peerID uuid.UUID, pr
 		rtt = uint32(latencyMs) //nolint:gosec // positive int32 always fits in uint32
 	}
 	if err := h.connEvents.Insert(ctx, &clickhouse.ConnectionEvent{
-		TenantID:          peer.TenantID,
+		TenantID:          tenantID,
 		SourcePeerID:      peerID,
 		DestinationPeerID: uuid.Nil,
 		EventType:         "path_change",
@@ -394,17 +402,12 @@ func (h *HTTPServer) logPathTransition(ctx context.Context, peerID uuid.UUID, pr
 // Failures are logged but never propagated to the heartbeat
 // response — admin-visibility data must not knock real clients
 // offline.
-func (h *HTTPServer) logBandwidthSample(ctx context.Context, peerID uuid.UUID, path string, bytesSent, bytesReceived uint64) {
+func (h *HTTPServer) logBandwidthSample(ctx context.Context, tenantID, peerID uuid.UUID, path string, bytesSent, bytesReceived uint64) {
 	if h.connEvents == nil {
 		return
 	}
-	peer, err := h.peers.GetByID(ctx, peerID)
-	if err != nil {
-		slog.Warn("bandwidth sample: peer lookup failed", "peer_id", peerID, "err", err)
-		return
-	}
 	if err := h.connEvents.Insert(ctx, &clickhouse.ConnectionEvent{
-		TenantID:          peer.TenantID,
+		TenantID:          tenantID,
 		SourcePeerID:      peerID,
 		DestinationPeerID: uuid.Nil,
 		EventType:         "bandwidth_sample",
@@ -511,7 +514,7 @@ func (h *HTTPServer) apiPeersHeartbeat(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	resp, err := h.coord.Heartbeat(r.Context(), &bamboov1.HeartbeatRequest{
+	resp, err := h.coord.Heartbeat(h.contextWithKnownTenant(r), &bamboov1.HeartbeatRequest{
 		PeerId:              body.PeerID,
 		KnownPolicyRevision: body.KnownPolicyRevision,
 		Endpoints:           body.Endpoints,
@@ -526,56 +529,124 @@ func (h *HTTPServer) apiPeersHeartbeat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	outcome = "success"
-	// Connection-path side-channel (issue #138). We persist on the
-	// peer row outside the coord.Heartbeat call because the path is
+	// Connection-path, bandwidth, and NAT64-health side-channels are
 	// admin-visibility data, not part of the mesh-state contract.
-	// Validation happens in the repo's CHECK constraint; an invalid
-	// value would surface as a 500 here, so guard at the API edge.
-	if body.ConnectionPath != "" {
-		switch body.ConnectionPath {
-		case "direct", "relay", "unknown":
-			peerID, perr := uuid.Parse(body.PeerID)
-			if perr == nil {
-				prevPath, pathChanged, _ := h.peers.SetConnectionPath(
-					r.Context(), peerID, body.ConnectionPath, body.LatencyMs,
-				)
-				// Log a path_change row to connection_events ONLY on
-				// real path transitions (issue #138 v2 timeline).
-				// Latency-only updates are filtered out at the repo
-				// layer so the timeline doesn't get drowned out by
-				// RTT flicker.
-				if pathChanged {
-					h.logPathTransition(r.Context(), peerID, prevPath, body.ConnectionPath, body.LatencyMs)
-				}
-			}
-		}
-	}
-	// Bandwidth-sample side-channel (§4 P2). Skip when both
-	// counters are zero — a peer that hasn't transferred anything
-	// yet would otherwise drown the time series in noise. Skip
-	// when PeerID doesn't parse (malformed body — the request
-	// already returned via the path above; this is belt-and-braces).
-	if body.BytesSent > 0 || body.BytesReceived > 0 {
-		if peerID, perr := uuid.Parse(body.PeerID); perr == nil {
-			h.logBandwidthSample(r.Context(), peerID, body.ConnectionPath, body.BytesSent, body.BytesReceived)
-		}
-	}
-	// NAT64 egress health side-channel (NAT64 Phase C3). Like the
-	// ConnectionPath block above, this is admin-visibility data persisted
-	// outside the coord.Heartbeat mesh-state contract. nil → skip (a
-	// non-egress / pre-C3 CLI leaves the columns untouched).
-	if body.NAT64EgressHealthy != nil {
-		if peerID, perr := uuid.Parse(body.PeerID); perr == nil {
-			if err := h.peers.SetNAT64EgressHealth(r.Context(), peerID, *body.NAT64EgressHealthy); err != nil {
-				slog.Warn("set nat64 egress health", "peer_id", body.PeerID, "err", err)
-			}
-		}
+	// Heartbeat is not audited. A failure here must not fail the response.
+	if peerID, perr := uuid.Parse(body.PeerID); perr == nil {
+		h.recordHeartbeatSideChannel(r, peerID, body)
 	}
 	writeJSON(w, http.StatusOK, peerHeartbeatResponse{
 		PeersChanged:          resp.GetPeersChanged(),
 		PolicyChanged:         resp.GetPolicyChanged(),
 		CurrentPolicyRevision: resp.GetCurrentPolicyRevision(),
 	})
+}
+
+// contextWithKnownTenant stamps a tenant the HTTP layer already
+// resolved from a verified credential, so coordinator reads do not
+// fall through to the pool just because the request has no gRPC metadata.
+func (h *HTTPServer) contextWithKnownTenant(r *http.Request) context.Context {
+	if tid, ok := h.peerRequestTenantID(r); ok {
+		return handlers.WithKnownTenantID(r.Context(), tid)
+	}
+	return r.Context()
+}
+
+// peerRequestTenantID is the tenant a peer-session bearer, user-session
+// JWT, or API token already names. It does not read a tenant-scoped
+// table. ok is false when the request has no such credential.
+func (h *HTTPServer) peerRequestTenantID(r *http.Request) (uuid.UUID, bool) {
+	if claims := h.peerSessionFromRequest(r); claims != nil && claims.TenantID != uuid.Nil {
+		return claims.TenantID, true
+	}
+	if !h.requireAuth {
+		return uuid.Nil, false
+	}
+	authn, err := h.authenticate(r)
+	if err != nil || authn == nil {
+		return uuid.Nil, false
+	}
+	if authn.apiToken != nil && authn.apiToken.TenantID != uuid.Nil {
+		return authn.apiToken.TenantID, true
+	}
+	if authn.claims != nil && authn.claims.TenantID != uuid.Nil {
+		return authn.claims.TenantID, true
+	}
+	return uuid.Nil, false
+}
+
+// recordHeartbeatSideChannel persists connection path, bandwidth samples,
+// and NAT64 egress health after coord.Heartbeat. Peer-table writes run
+// inside WithTenant once the tenant is known. ClickHouse inserts stay
+// outside that transaction. Heartbeat is not audited.
+func (h *HTTPServer) recordHeartbeatSideChannel(r *http.Request, peerID uuid.UUID, body peerHeartbeatRequest) {
+	doPath := false
+	// Invalid path strings are ignored at the API edge. The column's
+	// CHECK constraint would otherwise surface as a 500 (issue #138).
+	switch body.ConnectionPath {
+	case "direct", "relay", "unknown":
+		doPath = true
+	}
+	doBytes := body.BytesSent > 0 || body.BytesReceived > 0
+	doHealth := body.NAT64EgressHealthy != nil
+	if !doPath && !doBytes && !doHealth {
+		return
+	}
+
+	ctx := r.Context()
+	tenantID, ok := h.peerRequestTenantID(r)
+	if !ok {
+		var p *repo.Peer
+		err := db.WithBypass(ctx, h.pool, func(q db.Querier) error {
+			row, gerr := repo.NewPeers(q).GetByID(ctx, peerID)
+			if gerr != nil {
+				return gerr
+			}
+			p = row
+			return nil
+		})
+		if err != nil || p == nil {
+			slog.Warn("heartbeat: peer lookup failed", "peer_id", peerID, "err", err)
+			return
+		}
+		tenantID = p.TenantID
+	}
+
+	if doPath {
+		var prevPath string
+		var pathChanged bool
+		txErr := db.WithTenant(ctx, h.pool, tenantID, func(q db.Querier) error {
+			prev, changed, err := repo.NewPeers(q).SetConnectionPath(ctx, peerID, body.ConnectionPath, body.LatencyMs)
+			if err != nil {
+				return err
+			}
+			prevPath, pathChanged = prev, changed
+			return nil
+		})
+		// Log a path_change row only on a real path transition (issue
+		// #138 v2). Latency-only updates return pathChanged=false at
+		// the repo layer so RTT flicker does not flood the timeline.
+		if txErr != nil {
+			slog.Warn("set connection path", "peer_id", peerID, "err", txErr)
+		} else if pathChanged {
+			h.logPathTransition(ctx, tenantID, peerID, prevPath, body.ConnectionPath, body.LatencyMs)
+		}
+	}
+	// Skip all-zero counters — a peer that hasn't transferred anything
+	// yet would drown the bandwidth time series in noise (§4 P2).
+	if doBytes {
+		h.logBandwidthSample(ctx, tenantID, peerID, body.ConnectionPath, body.BytesSent, body.BytesReceived)
+	}
+	// nil was already filtered: a non-egress / pre-C3 CLI leaves the
+	// NAT64 health columns untouched (NAT64 Phase C3).
+	if doHealth {
+		reported := *body.NAT64EgressHealthy
+		if txErr := db.WithTenant(ctx, h.pool, tenantID, func(q db.Querier) error {
+			return repo.NewPeers(q).SetNAT64EgressHealth(ctx, peerID, reported)
+		}); txErr != nil {
+			slog.Warn("set nat64 egress health", "peer_id", peerID, "err", txErr)
+		}
+	}
 }
 
 // apiPeersWatch streams WatchPeers events as Server-Sent Events. The
@@ -612,7 +683,7 @@ func (h *HTTPServer) apiPeersWatch(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	ch, cancel, err := h.coord.SubscribePeer(r.Context(), peerID)
+	ch, cancel, err := h.coord.SubscribePeer(h.contextWithKnownTenant(r), peerID)
 	if err != nil {
 		writeGRPCError(w, err)
 		return

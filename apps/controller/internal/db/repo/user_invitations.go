@@ -174,28 +174,43 @@ type ExpiredInvite struct {
 // carries the actor distinction (actor_type = "system" for the
 // reaper).
 func (r *UserInvitations) RevokeExpired(ctx context.Context, now time.Time) ([]*ExpiredInvite, error) {
-	rows, err := r.pool.Query(ctx, `
+	const sql = `
 		UPDATE user_invitations
 		   SET revoked_at = $1,
 		       revoked_by = NULL
 		 WHERE expires_at < $1
 		   AND accepted_at IS NULL
 		   AND revoked_at IS NULL
-		RETURNING id, tenant_id, email
-	`, now)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []*ExpiredInvite
-	for rows.Next() {
-		var e ExpiredInvite
-		if err := rows.Scan(&e.ID, &e.TenantID, &e.Email); err != nil {
+		RETURNING id, tenant_id, email`
+	scan := func(q db.Querier) ([]*ExpiredInvite, error) {
+		rows, err := q.Query(ctx, sql, now)
+		if err != nil {
 			return nil, err
 		}
-		out = append(out, &e)
+		defer rows.Close()
+		var out []*ExpiredInvite
+		for rows.Next() {
+			var e ExpiredInvite
+			if err := rows.Scan(&e.ID, &e.TenantID, &e.Email); err != nil {
+				return nil, err
+			}
+			out = append(out, &e)
+		}
+		return out, rows.Err()
 	}
-	return out, rows.Err()
+	if pool, ok := r.pool.(*db.Pool); ok {
+		var out []*ExpiredInvite
+		err := db.WithBypass(ctx, pool, func(q db.Querier) error {
+			scanned, serr := scan(q)
+			if serr != nil {
+				return serr
+			}
+			out = scanned
+			return nil
+		})
+		return out, err
+	}
+	return scan(r.pool)
 }
 
 // ListByTenant returns every invitation in the tenant ordered by

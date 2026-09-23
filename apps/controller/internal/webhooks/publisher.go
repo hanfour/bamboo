@@ -54,6 +54,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/hanfour/bamboo/apps/controller/internal/db"
 	"github.com/hanfour/bamboo/apps/controller/internal/db/repo"
 )
 
@@ -98,7 +99,7 @@ const queueCapacity = 256
 // repo.AuditLogs.WithHook, and call Run in a goroutine for the
 // process lifetime.
 type Publisher struct {
-	repo   *repo.Webhooks
+	pool   *db.Pool
 	client *http.Client
 	queue  chan repo.AuditEvent
 
@@ -113,12 +114,12 @@ type Publisher struct {
 // New constructs a Publisher. httpClient may be nil; New supplies
 // a default with a 5s per-request timeout. Tests inject their own
 // httptest-backed transport.
-func New(webhooks *repo.Webhooks, httpClient *http.Client) *Publisher {
+func New(pool *db.Pool, httpClient *http.Client) *Publisher {
 	if httpClient == nil {
 		httpClient = &http.Client{Timeout: 5 * time.Second}
 	}
 	return &Publisher{
-		repo:         webhooks,
+		pool:         pool,
 		client:       httpClient,
 		queue:        make(chan repo.AuditEvent, queueCapacity),
 		droppedSince: time.Now(),
@@ -183,10 +184,18 @@ func (p *Publisher) Run(ctx context.Context) {
 // subscription. Failures on one subscription do NOT block the
 // others — each gets its own goroutine-equivalent retry budget.
 func (p *Publisher) deliver(ctx context.Context, ev repo.AuditEvent) {
-	if ev.TenantID == nil {
+	if ev.TenantID == nil || p.pool == nil {
 		return
 	}
-	subs, err := p.repo.ActiveForEvent(ctx, *ev.TenantID, ev.Action)
+	var subs []*repo.WebhookSubscription
+	err := db.WithTenant(ctx, p.pool, *ev.TenantID, func(q db.Querier) error {
+		listed, lerr := repo.NewWebhooks(q).ActiveForEvent(ctx, *ev.TenantID, ev.Action)
+		if lerr != nil {
+			return lerr
+		}
+		subs = listed
+		return nil
+	})
 	if err != nil {
 		slog.Warn("webhook: list subscriptions failed",
 			"tenant_id", ev.TenantID, "action", ev.Action, "err", err)

@@ -63,7 +63,7 @@ func startCHFixture(t *testing.T) *chFixture {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	pool, err := db.Open(ctx, dsn)
+	pool, admin, err := openPools(t, ctx, dsn)
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
@@ -110,13 +110,15 @@ func startCHFixture(t *testing.T) *chFixture {
 		httpSrv:    httpSrv,
 		httpAPI:    httpAPI,
 		coordSrv:   coord,
+		admin:      admin,
 	}
 
 	t.Cleanup(func() {
 		_ = conn.Close()
 		httpSrv.Close()
 		grpcSrv.GracefulStop()
-		cleanupTenant(pool, f.tenantSlug)
+		cleanupTenant(admin, f.tenantSlug)
+		admin.Close()
 		pool.Close()
 		_ = ch.Close()
 	})

@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/hanfour/bamboo/apps/controller/internal/auth"
+	"github.com/hanfour/bamboo/apps/controller/internal/db"
 	"github.com/hanfour/bamboo/apps/controller/internal/db/repo"
 )
 
@@ -92,13 +93,24 @@ func (h *HTTPServer) routeRelayToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Sanity check: the peer must belong to the tenant we resolved.
-	peer, err := h.peers.GetByID(r.Context(), peerID)
-	if err != nil || peer == nil || peer.TenantID != tenant.ID {
-		writeError(w, http.StatusForbidden, errors.New("peer not in this tenant"))
+	var deny error
+	if txErr := db.WithTenant(r.Context(), h.pool, tenant.ID, func(q db.Querier) error {
+		peer, err := repo.NewPeers(q).GetByID(r.Context(), peerID)
+		if err != nil || peer == nil || peer.TenantID != tenant.ID {
+			deny = errors.New("peer not in this tenant")
+			return nil
+		}
+		if peer.WireGuardPublicKey != body.WGPublicKey {
+			deny = errors.New("public key does not match peer record")
+			return nil
+		}
+		return nil
+	}); txErr != nil {
+		writeError(w, http.StatusInternalServerError, txErr)
 		return
 	}
-	if peer.WireGuardPublicKey != body.WGPublicKey {
-		writeError(w, http.StatusForbidden, errors.New("public key does not match peer record"))
+	if deny != nil {
+		writeError(w, http.StatusForbidden, deny)
 		return
 	}
 

@@ -37,7 +37,10 @@ type CoordinatorHandler struct {
 	policies *repo.Policies
 	auth     *AuthHandler
 	bus      *events.Bus
-	pool     *db.Pool
+	// pool opens per-request WithTenant transactions for tenant-scoped
+	// tables so the RLS backstop (ADR-0014) sees app.tenant_id.
+	// tenants and relay_servers are not RLS-scoped and stay on the pool.
+	pool *db.Pool
 	// requireAuth mirrors HTTPServer.requireAuth. When true, Register
 	// rejects callers that present neither a pre-auth-key credential
 	// nor a bearer-token credential — the x-tenant-slug metadata
@@ -62,11 +65,28 @@ type CoordinatorHandler struct {
 // would lag until their next Register / Heartbeat poll round-tripped
 // the change.
 func (h *CoordinatorHandler) ApprovePeer(ctx context.Context, peerID uuid.UUID, adminUserID *uuid.UUID) (peer *repo.Peer, changed bool, err error) {
-	rows, err := h.peers.Approve(ctx, peerID, adminUserID)
+	current, err := h.loadPeerForMutation(ctx, peerID)
 	if err != nil {
 		return nil, false, err
 	}
-	updated, err := h.peers.GetByID(ctx, peerID)
+	var (
+		rows    int64
+		updated *repo.Peer
+	)
+	err = db.WithTenant(ctx, h.pool, current.TenantID, func(q db.Querier) error {
+		peers := repo.NewPeers(q)
+		n, aerr := peers.Approve(ctx, peerID, adminUserID)
+		if aerr != nil {
+			return aerr
+		}
+		rows = n
+		u, gerr := peers.GetByID(ctx, peerID)
+		if gerr != nil {
+			return gerr
+		}
+		updated = u
+		return nil
+	})
 	if err != nil {
 		return nil, false, err
 	}
@@ -88,11 +108,28 @@ func (h *CoordinatorHandler) ApprovePeer(ctx context.Context, peerID uuid.UUID, 
 // reject. Returns repo.ErrNotFound if the peer doesn't exist; returns
 // (updated, changed=false) when the row was already rejected.
 func (h *CoordinatorHandler) RejectPeer(ctx context.Context, peerID uuid.UUID, adminUserID *uuid.UUID) (peer *repo.Peer, changed bool, err error) {
-	rows, err := h.peers.Reject(ctx, peerID, adminUserID)
+	current, err := h.loadPeerForMutation(ctx, peerID)
 	if err != nil {
 		return nil, false, err
 	}
-	updated, err := h.peers.GetByID(ctx, peerID)
+	var (
+		rows    int64
+		updated *repo.Peer
+	)
+	err = db.WithTenant(ctx, h.pool, current.TenantID, func(q db.Querier) error {
+		peers := repo.NewPeers(q)
+		n, rerr := peers.Reject(ctx, peerID, adminUserID)
+		if rerr != nil {
+			return rerr
+		}
+		rows = n
+		u, gerr := peers.GetByID(ctx, peerID)
+		if gerr != nil {
+			return gerr
+		}
+		updated = u
+		return nil
+	})
 	if err != nil {
 		return nil, false, err
 	}
@@ -120,17 +157,26 @@ func (h *CoordinatorHandler) RejectPeer(ctx context.Context, peerID uuid.UUID, a
 // the post-update peer row (or pre-update row when no change happened
 // so the caller can still echo a stable response shape).
 func (h *CoordinatorHandler) SetPeerStatus(ctx context.Context, peerID uuid.UUID, newStatus string) (peer *repo.Peer, changed bool, err error) {
-	current, err := h.peers.GetByID(ctx, peerID)
+	current, err := h.loadPeerForMutation(ctx, peerID)
 	if err != nil {
 		return nil, false, err
 	}
 	if current.Status == newStatus {
 		return current, false, nil
 	}
-	if _, err := h.peers.SetStatus(ctx, peerID, newStatus); err != nil {
-		return nil, false, err
-	}
-	updated, err := h.peers.GetByID(ctx, peerID)
+	var updated *repo.Peer
+	err = db.WithTenant(ctx, h.pool, current.TenantID, func(q db.Querier) error {
+		peers := repo.NewPeers(q)
+		if _, serr := peers.SetStatus(ctx, peerID, newStatus); serr != nil {
+			return serr
+		}
+		u, gerr := peers.GetByID(ctx, peerID)
+		if gerr != nil {
+			return gerr
+		}
+		updated = u
+		return nil
+	})
 	if err != nil {
 		return nil, false, err
 	}
@@ -236,7 +282,15 @@ func (h *CoordinatorHandler) PublishRelaysChanged(servers []*bamboov1.RelayServe
 // error and let the operator retry rather than silently leave peers
 // stale.
 func (h *CoordinatorHandler) BumpPolicyRevision(ctx context.Context, tenantID uuid.UUID) (int64, error) {
-	rev, err := h.policies.Bump(ctx, tenantID)
+	var rev int64
+	err := db.WithTenant(ctx, h.pool, tenantID, func(q db.Querier) error {
+		r, berr := repo.NewPolicies(q).Bump(ctx, tenantID)
+		if berr != nil {
+			return berr
+		}
+		rev = r
+		return nil
+	})
 	if err != nil {
 		return 0, err
 	}
@@ -256,25 +310,34 @@ func (h *CoordinatorHandler) BumpPolicyRevision(ctx context.Context, tenantID uu
 // selected egress, whether it bumped, and any error. On a bump error the
 // caller should NOT advance its prevSelected (so the next sweep retries).
 func (h *CoordinatorHandler) ReconcileNAT64Egress(ctx context.Context, tenantID, prevSelected uuid.UUID) (uuid.UUID, bool, error) {
-	peers, err := h.peers.ListByTenant(ctx, tenantID)
+	var peers []*repo.Peer
+	err := db.WithTenant(ctx, h.pool, tenantID, func(q db.Querier) error {
+		listed, lerr := repo.NewPeers(q).ListByTenant(ctx, tenantID)
+		if lerr != nil {
+			return lerr
+		}
+		peers = listed
+		now := time.Now()
+		// Staleness leg: persist stale → unhealthy/'stale', and mutate the
+		// in-memory peer so the recompute below sees it as ineligible without
+		// a second DB read.
+		for _, p := range peers {
+			if !shouldMarkStale(p, now) {
+				continue
+			}
+			if serr := repo.NewPeers(q).SetNAT64EgressStale(ctx, p.ID); serr != nil {
+				slog.Warn("nat64 egress reaper: mark stale", "peer_id", p.ID, "err", serr)
+				continue
+			}
+			unhealthy := "unhealthy"
+			p.NAT64EgressHealthStatus = &unhealthy
+		}
+		return nil
+	})
 	if err != nil {
 		return uuid.Nil, false, err
 	}
 	now := time.Now()
-	// Staleness leg: persist stale → unhealthy/'stale', and mutate the
-	// in-memory peer so the recompute below sees it as ineligible without
-	// a second DB read.
-	for _, p := range peers {
-		if !shouldMarkStale(p, now) {
-			continue
-		}
-		if err := h.peers.SetNAT64EgressStale(ctx, p.ID); err != nil {
-			slog.Warn("nat64 egress reaper: mark stale", "peer_id", p.ID, "err", err)
-			continue
-		}
-		unhealthy := "unhealthy"
-		p.NAT64EgressHealthStatus = &unhealthy
-	}
 	selected := selectEgress(peers, now)
 	if selected == prevSelected {
 		return selected, false, nil
@@ -328,9 +391,20 @@ func (h *CoordinatorHandler) Register(ctx context.Context, req *bamboov1.Registe
 	}
 
 	// Idempotency: same public key registers again -> return existing peer.
-	existing, err := h.peers.FindByPubKey(ctx, tenant.ID, req.GetWireguardPublicKey())
-	if err != nil && !errors.Is(err, repo.ErrNotFound) {
-		return nil, status.Errorf(codes.Internal, "peer lookup: %v", err)
+	var existing *repo.Peer
+	err = db.WithTenant(ctx, h.pool, tenant.ID, func(q db.Querier) error {
+		p, ferr := repo.NewPeers(q).FindByPubKey(ctx, tenant.ID, req.GetWireguardPublicKey())
+		if errors.Is(ferr, repo.ErrNotFound) {
+			return nil
+		}
+		if ferr != nil {
+			return status.Errorf(codes.Internal, "peer lookup: %v", ferr)
+		}
+		existing = p
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 
 	var (
@@ -345,9 +419,17 @@ func (h *CoordinatorHandler) Register(ctx context.Context, req *bamboov1.Registe
 		// boots) gets its endpoints persisted without waiting for the
 		// next heartbeat.
 		if eps := req.GetEndpoints(); len(eps) > 0 {
-			changed, err := h.peers.UpdateEndpoints(ctx, self.ID, eps)
+			var changed bool
+			err = db.WithTenant(ctx, h.pool, tenant.ID, func(q db.Querier) error {
+				c, uerr := repo.NewPeers(q).UpdateEndpoints(ctx, self.ID, eps)
+				if uerr != nil {
+					return status.Errorf(codes.Internal, "update endpoints: %v", uerr)
+				}
+				changed = c
+				return nil
+			})
 			if err != nil {
-				return nil, status.Errorf(codes.Internal, "update endpoints: %v", err)
+				return nil, err
 			}
 			if changed {
 				self.Endpoints = eps
@@ -360,12 +442,24 @@ func (h *CoordinatorHandler) Register(ctx context.Context, req *bamboov1.Registe
 		// reasoning as the new-peer insert: we'd rather degrade than
 		// fail re-registration.
 		if self.PeerDNSName == nil {
-			candidate, derr := ResolveDNSName(ctx, h.peers, tenant.ID, SlugifyHostname(self.Hostname))
-			if derr != nil {
+			var candidate string
+			rerr := db.WithTenant(ctx, h.pool, tenant.ID, func(q db.Querier) error {
+				c, derr := ResolveDNSName(ctx, repo.NewPeers(q), tenant.ID, SlugifyHostname(self.Hostname))
+				if derr != nil {
+					return derr
+				}
+				candidate = c
+				return nil
+			})
+			if rerr != nil {
 				slog.Warn("peer_dns_name backfill: resolve failed",
-					"err", derr, "peer_id", self.ID, "tenant", tenant.Slug)
+					"err", rerr, "peer_id", self.ID, "tenant", tenant.Slug)
 			} else if candidate != "" {
-				if _, uerr := h.peers.UpdateDNSName(ctx, self.ID, &candidate); uerr != nil {
+				uerr := db.WithTenant(ctx, h.pool, tenant.ID, func(q db.Querier) error {
+					_, err := repo.NewPeers(q).UpdateDNSName(ctx, self.ID, &candidate)
+					return err
+				})
+				if uerr != nil {
 					slog.Warn("peer_dns_name backfill: update failed",
 						"err", uerr, "peer_id", self.ID, "tenant", tenant.Slug)
 				} else {
@@ -376,25 +470,24 @@ func (h *CoordinatorHandler) Register(ctx context.Context, req *bamboov1.Registe
 			}
 		}
 	} else {
-		used, err := h.peers.UsedIPs(ctx, tenant.ID)
-		if err != nil {
-			return nil, status.Errorf(codes.Internal, "list used IPs: %v", err)
-		}
-		ip, ip6, err := ipalloc.NextFreeDual(tenant.IPPool, tenant.IP6Pool, used)
-		if err != nil {
-			return nil, status.Errorf(codes.ResourceExhausted, "ip allocation: %v", err)
-		}
-
 		// MagicDNS auto-slug: derive a DNS-safe label from the reported
 		// hostname and pick a non-colliding form within this tenant.
 		// Failing this is non-fatal — we'd rather a peer register without
 		// MagicDNS than reject onboarding — so on error we log and leave
 		// peer_dns_name NULL; admin can fix via PATCH and the next
 		// re-register will retry the auto-fill.
-		dnsName, derr := ResolveDNSName(ctx, h.peers, tenant.ID, SlugifyHostname(req.GetHostname()))
-		if derr != nil {
+		var dnsName string
+		rerr := db.WithTenant(ctx, h.pool, tenant.ID, func(q db.Querier) error {
+			n, derr := ResolveDNSName(ctx, repo.NewPeers(q), tenant.ID, SlugifyHostname(req.GetHostname()))
+			if derr != nil {
+				return derr
+			}
+			dnsName = n
+			return nil
+		})
+		if rerr != nil {
 			slog.Warn("peer_dns_name auto-resolve failed; inserting without",
-				"err", derr, "tenant", tenant.Slug, "hostname", req.GetHostname())
+				"err", rerr, "tenant", tenant.Slug, "hostname", req.GetHostname())
 			dnsName = ""
 		}
 		var dnsPtr *string
@@ -411,22 +504,50 @@ func (h *CoordinatorHandler) Register(ctx context.Context, req *bamboov1.Registe
 		if autoApprove {
 			initialApproval = "approved"
 		}
-		self, err = h.peers.Insert(ctx, &repo.Peer{
-			TenantID:           tenant.ID,
-			UserID:             ownerUserID,
-			Hostname:           req.GetHostname(),
-			PeerDNSName:        dnsPtr,
-			WireGuardPublicKey: req.GetWireguardPublicKey(),
-			IP:                 ip,
-			IP6:                ip6,
-			OS:                 req.GetOs(),
-			ClientVersion:      req.GetClientVersion(),
-			Status:             "online",
-			Endpoints:          req.GetEndpoints(),
-			ApprovalStatus:     initialApproval,
+		err = db.WithTenant(ctx, h.pool, tenant.ID, func(q db.Querier) error {
+			peers := repo.NewPeers(q)
+			used, uerr := peers.UsedIPs(ctx, tenant.ID)
+			if uerr != nil {
+				return status.Errorf(codes.Internal, "list used IPs: %v", uerr)
+			}
+			ip, ip6, aerr := ipalloc.NextFreeDual(tenant.IPPool, tenant.IP6Pool, used)
+			if aerr != nil {
+				return status.Errorf(codes.ResourceExhausted, "ip allocation: %v", aerr)
+			}
+			p, ierr := peers.Insert(ctx, &repo.Peer{
+				TenantID:           tenant.ID,
+				UserID:             ownerUserID,
+				Hostname:           req.GetHostname(),
+				PeerDNSName:        dnsPtr,
+				WireGuardPublicKey: req.GetWireguardPublicKey(),
+				IP:                 ip,
+				IP6:                ip6,
+				OS:                 req.GetOs(),
+				ClientVersion:      req.GetClientVersion(),
+				Status:             "online",
+				Endpoints:          req.GetEndpoints(),
+				ApprovalStatus:     initialApproval,
+			})
+			if ierr != nil {
+				return status.Errorf(codes.Internal, "peer insert: %v", ierr)
+			}
+			self = p
+			auditDiff := map[string]any{"hostname": self.Hostname, "ip": self.IP, "os": self.OS, "approval_status": self.ApprovalStatus}
+			if dnsName != "" {
+				auditDiff["peer_dns_name"] = dnsName
+			}
+			auditOnSavepoint(ctx, h.audits, q, &repo.AuditEvent{
+				TenantID:     &tenant.ID,
+				ActorType:    "system",
+				Action:       "peer.register",
+				ResourceType: "peer",
+				ResourceID:   &self.ID,
+				Diff:         marshalDiff(auditDiff),
+			})
+			return nil
 		})
 		if err != nil {
-			return nil, status.Errorf(codes.Internal, "peer insert: %v", err)
+			return nil, err
 		}
 		slog.Info("new peer registered",
 			"peer_id", self.ID,
@@ -436,24 +557,20 @@ func (h *CoordinatorHandler) Register(ctx context.Context, req *bamboov1.Registe
 			"approval_status", self.ApprovalStatus,
 		)
 		isNewPeer = true
-		auditDiff := map[string]any{"hostname": self.Hostname, "ip": self.IP, "os": self.OS, "approval_status": self.ApprovalStatus}
-		if dnsName != "" {
-			auditDiff["peer_dns_name"] = dnsName
-		}
-		auditLog(ctx, h.audits, &repo.AuditEvent{
-			TenantID:     &tenant.ID,
-			ActorType:    "system",
-			Action:       "peer.register",
-			ResourceType: "peer",
-			ResourceID:   &self.ID,
-			Diff:         marshalDiff(auditDiff),
-		})
 	}
 
 	// Compose response.
-	allPeers, err := h.peers.ListByTenant(ctx, tenant.ID)
+	var allPeers []*repo.Peer
+	err = db.WithTenant(ctx, h.pool, tenant.ID, func(q db.Querier) error {
+		ps, lerr := repo.NewPeers(q).ListByTenant(ctx, tenant.ID)
+		if lerr != nil {
+			return status.Errorf(codes.Internal, "list peers: %v", lerr)
+		}
+		allPeers = ps
+		return nil
+	})
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "list peers: %v", err)
+		return nil, err
 	}
 
 	// ListEligible (not ListEnabled) filters out relays the
@@ -560,12 +677,38 @@ func (h *CoordinatorHandler) Heartbeat(ctx context.Context, req *bamboov1.Heartb
 		return nil, status.Errorf(codes.InvalidArgument, "invalid peer_id: %v", err)
 	}
 
-	tenantID, err := h.peers.UpdateLastSeen(ctx, peerID)
-	if errors.Is(err, repo.ErrNotFound) {
-		return nil, status.Error(codes.NotFound, "peer not found")
-	}
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "update last seen: %v", err)
+	var tenantID uuid.UUID
+	if tid, ok := resolvedTenantID(ctx, h.auth); ok {
+		err = db.WithTenant(ctx, h.pool, tid, func(q db.Querier) error {
+			id, uerr := repo.NewPeers(q).UpdateLastSeen(ctx, peerID)
+			if errors.Is(uerr, repo.ErrNotFound) {
+				return status.Error(codes.NotFound, "peer not found")
+			}
+			if uerr != nil {
+				return status.Errorf(codes.Internal, "update last seen: %v", uerr)
+			}
+			tenantID = id
+			return nil
+		})
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		// Bootstrap: no verified tenant on this context (dev / require_auth off).
+		uerr := db.WithBypass(ctx, h.pool, func(q db.Querier) error {
+			id, err := repo.NewPeers(q).UpdateLastSeen(ctx, peerID)
+			if err != nil {
+				return err
+			}
+			tenantID = id
+			return nil
+		})
+		if errors.Is(uerr, repo.ErrNotFound) {
+			return nil, status.Error(codes.NotFound, "peer not found")
+		}
+		if uerr != nil {
+			return nil, status.Errorf(codes.Internal, "update last seen: %v", uerr)
+		}
 	}
 
 	// Apply endpoint updates if the client reported any. When the
@@ -574,15 +717,29 @@ func (h *CoordinatorHandler) Heartbeat(ctx context.Context, req *bamboov1.Heartb
 	// waiting for the next register.
 	endpointsChanged := false
 	if eps := req.GetEndpoints(); eps != nil {
-		changed, err := h.peers.UpdateEndpoints(ctx, peerID, eps)
+		err = db.WithTenant(ctx, h.pool, tenantID, func(q db.Querier) error {
+			changed, uerr := repo.NewPeers(q).UpdateEndpoints(ctx, peerID, eps)
+			if uerr != nil {
+				return status.Errorf(codes.Internal, "update endpoints: %v", uerr)
+			}
+			endpointsChanged = changed
+			return nil
+		})
 		if err != nil {
-			return nil, status.Errorf(codes.Internal, "update endpoints: %v", err)
+			return nil, err
 		}
-		endpointsChanged = changed
 	}
 	if endpointsChanged {
-		updated, err := h.peers.GetByID(ctx, peerID)
-		if err == nil && updated != nil {
+		var updated *repo.Peer
+		gerr := db.WithTenant(ctx, h.pool, tenantID, func(q db.Querier) error {
+			p, err := repo.NewPeers(q).GetByID(ctx, peerID)
+			if err != nil {
+				return err
+			}
+			updated = p
+			return nil
+		})
+		if gerr == nil && updated != nil {
 			// Route through PublishPeerUpdatedIfVisible so a disabled
 			// or pending peer's heartbeat-driven endpoint change
 			// doesn't leak as a PeerUpdated to subscribers — they
@@ -641,7 +798,15 @@ func (h *CoordinatorHandler) enforcePeerBinding(ctx context.Context, reqPeerID s
 		if perr != nil {
 			return status.Errorf(codes.InvalidArgument, "invalid peer_id: %v", perr)
 		}
-		peer, gerr := h.peers.GetByID(ctx, peerID)
+		var peer *repo.Peer
+		gerr := db.WithTenant(ctx, h.pool, claims.TenantID, func(q db.Querier) error {
+			p, err := repo.NewPeers(q).GetByID(ctx, peerID)
+			if err != nil {
+				return err
+			}
+			peer = p
+			return nil
+		})
 		if gerr != nil {
 			if errors.Is(gerr, repo.ErrNotFound) {
 				return status.Error(codes.NotFound, "peer not found")
@@ -700,7 +865,27 @@ func (h *CoordinatorHandler) SubscribePeer(ctx context.Context, peerIDStr string
 	if err != nil {
 		return nil, nil, status.Errorf(codes.InvalidArgument, "invalid peer_id: %v", err)
 	}
-	peer, err := h.peers.GetByID(ctx, peerID)
+	var peer *repo.Peer
+	if tid, ok := resolvedTenantID(ctx, h.auth); ok {
+		// Snapshot read only; WatchPeers must not hold this tx across the stream (ADR-0014).
+		err = db.WithTenant(ctx, h.pool, tid, func(q db.Querier) error {
+			p, gerr := repo.NewPeers(q).GetByID(ctx, peerID)
+			if gerr != nil {
+				return gerr
+			}
+			peer = p
+			return nil
+		})
+	} else {
+		err = db.WithBypass(ctx, h.pool, func(q db.Querier) error {
+			p, gerr := repo.NewPeers(q).GetByID(ctx, peerID)
+			if gerr != nil {
+				return gerr
+			}
+			peer = p
+			return nil
+		})
+	}
 	if err != nil {
 		if errors.Is(err, repo.ErrNotFound) {
 			return nil, nil, status.Error(codes.NotFound, "peer not found")
@@ -709,6 +894,39 @@ func (h *CoordinatorHandler) SubscribePeer(ctx context.Context, peerIDStr string
 	}
 	ch, cancel := h.bus.Subscribe(peer.TenantID)
 	return ch, cancel, nil
+}
+
+// loadPeerForMutation reads a peer before an id-only mutation.
+// When the caller already stamped a tenant (HTTP admin paths), the
+// read runs inside WithTenant and a foreign peer is ErrNotFound.
+// Otherwise the id-only lookup uses the maintenance role, because the
+// row is what reveals the tenant (ADR-0014).
+func (h *CoordinatorHandler) loadPeerForMutation(ctx context.Context, peerID uuid.UUID) (*repo.Peer, error) {
+	if tid, ok := knownTenantID(ctx); ok {
+		var peer *repo.Peer
+		err := db.WithTenant(ctx, h.pool, tid, func(q db.Querier) error {
+			p, gerr := repo.NewPeers(q).GetByID(ctx, peerID)
+			if gerr != nil {
+				return gerr
+			}
+			if p.TenantID != tid {
+				return repo.ErrNotFound
+			}
+			peer = p
+			return nil
+		})
+		return peer, err
+	}
+	var peer *repo.Peer
+	err := db.WithBypass(ctx, h.pool, func(q db.Querier) error {
+		p, gerr := repo.NewPeers(q).GetByID(ctx, peerID)
+		if gerr != nil {
+			return gerr
+		}
+		peer = p
+		return nil
+	})
+	return peer, err
 }
 
 // resolveCredential chooses the tenant + owning user for a Register
@@ -791,7 +1009,15 @@ func tenantSlugFromMetadata(ctx context.Context) string {
 // previously-persisted policy is logged and treated as "no policy" so
 // a malformed row cannot black-hole the whole tenant.
 func (h *CoordinatorHandler) loadPolicyAndRevision(ctx context.Context, tenantID uuid.UUID) (*policy.Policy, int64) {
-	rec, err := h.policies.Get(ctx, tenantID)
+	var rec *repo.PolicyRecord
+	err := db.WithTenant(ctx, h.pool, tenantID, func(q db.Querier) error {
+		r, gerr := repo.NewPolicies(q).Get(ctx, tenantID)
+		if gerr != nil {
+			return gerr
+		}
+		rec = r
+		return nil
+	})
 	if errors.Is(err, repo.ErrNotFound) {
 		return nil, 0
 	}
@@ -808,11 +1034,16 @@ func (h *CoordinatorHandler) loadPolicyAndRevision(ctx context.Context, tenantID
 }
 
 // peerView projects a repo.Peer onto the shape the L3 enforcer needs.
-// User/Groups are left empty: only tag- and CIDR-based rules apply at
-// the wire layer for now. user:/group: matchers require OIDC identity
-// propagation through to the coordinator, which is not wired up yet.
-func peerView(p *repo.Peer) policy.PeerView {
-	view := policy.PeerView{Tags: p.Tags}
+// User is the owning account's email (empty for a headless peer).
+// Groups are the policy `groups` block entries that list that email,
+// so a `group:` source matcher reaches AllowedIPs the same way a
+// `tag:` matcher does.
+func peerView(p *repo.Peer, pol *policy.Policy) policy.PeerView {
+	view := policy.PeerView{
+		Tags:   p.Tags,
+		User:   p.OwnerEmail,
+		Groups: policy.GroupsFor(pol, p.OwnerEmail),
+	}
 	if addr, err := netip.ParseAddr(p.IP); err == nil {
 		view.IP = addr
 	}
@@ -926,7 +1157,7 @@ func computeNAT64EgressRoute(tenant *repo.Tenant, peers []*repo.Peer, now time.T
 //     node (issue #137) and dst is exit_node_approved. Default-route
 //     reachability lets src forward public traffic through dst.
 func allowedIPsFor(p *policy.Policy, src, dst *repo.Peer, egress nat64EgressRoute) []string {
-	if !policy.Allow(p, peerView(src), peerView(dst)) {
+	if !policy.Allow(p, peerView(src, p), peerView(dst, p)) {
 		return nil
 	}
 	suffix := "/32"

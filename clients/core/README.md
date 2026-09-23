@@ -8,11 +8,10 @@ The target license is Apache 2.0; module-local notice in [LICENSE](./LICENSE).
 
 ## Status
 
-Pre-alpha skeleton. Currently provides:
-
-- gRPC client wrapper around all four controller services
-- `dev-agent` development binary that connects, calls `Register`, and reports
-  the controller's response (Unimplemented while handlers are stubs)
+Shared library used by `clients/cli` and the Apple tunnel. It covers the
+gRPC client, Linux WireGuard bring-up, STUN, the relay client, and the
+NAT64 egress helper. `dev-agent` is a small smoke binary against a
+running controller.
 
 ## Build and run
 

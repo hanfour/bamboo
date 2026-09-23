@@ -51,3 +51,29 @@ func WithTenant(ctx context.Context, pool *Pool, tenantID uuid.UUID, fn func(Que
 	}
 	return tx.Commit(ctx)
 }
+
+// WithBypass runs fn as bamboo_maintenance, which has BYPASSRLS.
+// Use it for two kinds of work only:
+//
+//   - Bootstrap reads that exist to discover tenant_id (API token,
+//     pre-auth key, invitation token).
+//   - Jobs that legitimately span tenants (retention, invite expiry,
+//     NAT64 egress enumeration, offline sweep, metrics aggregates).
+//
+// SET LOCAL keeps the role inside this transaction. The pooled
+// connection returns to bamboo_app when the transaction ends.
+func WithBypass(ctx context.Context, pool *Pool, fn func(Querier) error) error {
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin maintenance tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	if _, err := tx.Exec(ctx, `SET LOCAL ROLE bamboo_maintenance`); err != nil {
+		return fmt.Errorf("assume maintenance role: %w", err)
+	}
+	if err := fn(tx); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}

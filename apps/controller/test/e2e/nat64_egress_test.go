@@ -40,8 +40,8 @@ func TestRegister_NAT64EgressActive(t *testing.T) {
 	}
 
 	bg := context.Background()
-	peers := repo.NewPeers(f.pool)
-	tenants := repo.NewTenants(f.pool)
+	peers := repo.NewPeers(f.admin)
+	tenants := repo.NewTenants(f.admin)
 
 	tenant, err := tenants.GetBySlug(bg, f.tenantSlug)
 	if err != nil {

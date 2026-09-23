@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/hanfour/bamboo/apps/controller/internal/db"
 	"github.com/hanfour/bamboo/apps/controller/internal/db/repo"
 )
 
@@ -37,7 +38,15 @@ func (h *HTTPServer) routeAdminUsers(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, errors.New("admin auth required"))
 		return
 	}
-	actor, err := h.users.GetByID(r.Context(), authn.claims.UserID)
+	var actor *repo.User
+	err = db.WithTenant(r.Context(), h.pool, authn.claims.TenantID, func(q db.Querier) error {
+		u, gerr := repo.NewUsers(q).GetByID(r.Context(), authn.claims.UserID)
+		if gerr != nil {
+			return gerr
+		}
+		actor = u
+		return nil
+	})
 	if err != nil {
 		// Separate the DB-error path from the non-admin path so a
 		// transient PG blip doesn't look identical to a real
@@ -92,27 +101,45 @@ func (h *HTTPServer) adminUserSignOutAll(w http.ResponseWriter, r *http.Request,
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	target, err := h.users.GetByID(r.Context(), targetID)
-	if err != nil {
+	var (
+		target   *repo.User
+		next     int
+		notFound bool
+		auditEv  *repo.AuditEvent
+		auditOK  bool
+	)
+	if txErr := db.WithTenant(r.Context(), h.pool, actor.TenantID, func(q db.Querier) error {
+		users := repo.NewUsers(q)
+		t, err := users.GetByID(r.Context(), targetID)
 		if errors.Is(err, repo.ErrNotFound) {
-			http.NotFound(w, r)
-			return
+			notFound = true
+			return nil
 		}
-		writeError(w, http.StatusInternalServerError, fmt.Errorf("resolve user: %w", err))
+		if err != nil {
+			return fmt.Errorf("resolve user: %w", err)
+		}
+		if t.TenantID != actor.TenantID {
+			// Tenant boundary — do not leak that this id exists.
+			notFound = true
+			return nil
+		}
+		target = t
+		n, err := users.BumpSessionVersion(r.Context(), targetID)
+		if err != nil {
+			return fmt.Errorf("bump session_version: %w", err)
+		}
+		next = n
+		auditEv, auditOK = auditSessionRevokeAll(r.Context(), q, actor.TenantID, actor.ID, t.ID, t.Email, t.SessionVersion, n, requestIPString(r), r.UserAgent())
+		return nil
+	}); txErr != nil {
+		writeError(w, http.StatusInternalServerError, txErr)
 		return
 	}
-	if target.TenantID != actor.TenantID {
-		// Tenant boundary — do not leak that this id exists.
+	if notFound {
 		http.NotFound(w, r)
 		return
 	}
-
-	next, err := h.users.BumpSessionVersion(r.Context(), targetID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Errorf("bump session_version: %w", err))
-		return
-	}
-	auditSessionRevokeAll(r.Context(), h.audits, actor.TenantID, actor.ID, target.ID, target.Email, target.SessionVersion, next, requestIPString(r), r.UserAgent())
+	h.emitAuditHook(r.Context(), auditEv, auditOK)
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"userId":         target.ID.String(),
@@ -168,72 +195,73 @@ func (h *HTTPServer) adminUserErase(w http.ResponseWriter, r *http.Request, acto
 		return
 	}
 
-	target, err := h.users.GetByID(r.Context(), targetID)
-	if err != nil || target == nil {
-		// Already-erased or never-existed both surface as 404 so a
-		// retry doesn't get a weird 5xx.
-		writeError(w, http.StatusNotFound, errors.New("user not found"))
-		return
-	}
-	if target.TenantID != actor.TenantID {
-		// Cross-tenant erasure blocked. Don't reveal whether the
-		// user exists in another tenant — 404 is the right shape
-		// for "your tenant doesn't have this user."
-		writeError(w, http.StatusNotFound, errors.New("user not found"))
-		return
-	}
-
-	emailHash := sha256.Sum256([]byte(target.Email))
-	emailHashHex := hex.EncodeToString(emailHash[:])
-
-	if err := h.users.Erase(r.Context(), targetID); err != nil {
-		// Racy concurrent erase: another admin (or our own
-		// retry-after-network-blip) deleted the row between the
-		// GetByID above and the in-tx SELECT inside Erase. The
-		// docstring promises idempotent 404 on already-erased,
-		// so surface that rather than a misleading 500.
-		if errors.Is(err, repo.ErrNotFound) {
-			writeError(w, http.StatusNotFound, errors.New("user not found"))
-			return
-		}
-		slog.Warn("user erase", "target", targetID, "admin", actor.ID, "err", err)
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-
-	// Capture the wall-clock erasure time once and pin it on the
-	// AuditEvent. AuditLogs.Insert (since #222 follow-up) persists
-	// a non-zero OccurredAt verbatim instead of letting the DB
-	// default to `now()`, so the response's erasedAt and the
-	// stored audit row's occurred_at are byte-exactly equal —
-	// auditors can join the receipt to the audit row by timestamp.
+	// Capture erasedAt before the tx so the response and the audit
+	// row share one timestamp. The audit insert is a savepoint: a
+	// failed audit does not roll back the DELETE, and a failed
+	// DELETE never commits the audit row.
 	erasedAt := time.Now().UTC()
-
-	// Audit row for the erasure itself. Stored after the DELETE
-	// commits so a failed erase doesn't leave a misleading "erased"
-	// row in the audit log. Diff carries only the SHA-256 of the
-	// email so future auditors can verify a specific subject's
-	// erasure without the PII being re-introduced.
-	tenantID := actor.TenantID
-	resID := targetID
-	ev := &repo.AuditEvent{
-		TenantID:     &tenantID,
-		ActorID:      &actor.ID,
-		ActorType:    "user",
-		Action:       "user.erase",
-		ResourceType: "user",
-		ResourceID:   &resID,
-		OccurredAt:   erasedAt,
+	var (
+		notFound bool
+		auditEv  *repo.AuditEvent
+		auditOK  bool
+	)
+	if txErr := db.WithTenant(r.Context(), h.pool, actor.TenantID, func(q db.Querier) error {
+		users := repo.NewUsers(q)
+		target, err := users.GetByID(r.Context(), targetID)
+		if errors.Is(err, repo.ErrNotFound) || (err == nil && target == nil) {
+			// Already-erased or never-existed both surface as 404 so a
+			// retry doesn't get a weird 5xx. A real DB error is returned
+			// so we don't Commit an aborted transaction.
+			notFound = true
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if target.TenantID != actor.TenantID {
+			// Cross-tenant erasure blocked. Don't reveal whether the
+			// user exists in another tenant.
+			notFound = true
+			return nil
+		}
+		emailHash := sha256.Sum256([]byte(target.Email))
+		emailHashHex := hex.EncodeToString(emailHash[:])
+		if err := users.Erase(r.Context(), targetID); err != nil {
+			// Racy concurrent erase: another admin deleted the row
+			// between GetByID and the in-tx SELECT inside Erase.
+			if errors.Is(err, repo.ErrNotFound) {
+				notFound = true
+				return nil
+			}
+			return err
+		}
+		tenantID := actor.TenantID
+		resID := targetID
+		ev := &repo.AuditEvent{
+			TenantID:     &tenantID,
+			ActorID:      &actor.ID,
+			ActorType:    "user",
+			Action:       "user.erase",
+			ResourceType: "user",
+			ResourceID:   &resID,
+			OccurredAt:   erasedAt,
+			Diff: marshalDiffJSON(map[string]any{
+				"targetEmailSHA256": emailHashHex,
+			}),
+		}
+		auditEv = ev
+		auditOK = insertAuditTx(r.Context(), q, ev)
+		return nil
+	}); txErr != nil {
+		slog.Warn("user erase", "target", targetID, "admin", actor.ID, "err", txErr)
+		writeError(w, http.StatusInternalServerError, txErr)
+		return
 	}
-	ev.Diff = marshalDiffJSON(map[string]any{
-		"targetEmailSHA256": emailHashHex,
-	})
-	if err := h.audits.Insert(r.Context(), ev); err != nil {
-		// The erasure already committed; audit failure is a
-		// logged-but-tolerated case (same policy as every other
-		// audit insert path).
-		slog.Warn("user erase: audit insert", "target", targetID, "err", err)
+	if notFound {
+		writeError(w, http.StatusNotFound, errors.New("user not found"))
+		return
 	}
+	h.emitAuditHook(r.Context(), auditEv, auditOK)
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"erasedUserId": targetID.String(),
@@ -247,22 +275,20 @@ func (h *HTTPServer) adminUserErase(w http.ResponseWriter, r *http.Request, acto
 // pre-bump + post-bump session_version (so a single audit row
 // reads "from N to N+1" without cross-referencing earlier rows)
 // plus the target email for human-friendly searches.
-func auditSessionRevokeAll(ctx context.Context, audits *repo.AuditLogs, tenantID, actorID, targetID uuid.UUID, targetEmail string, oldVersion, newVersion int, ip, userAgent string) {
-	if audits == nil {
-		return
-	}
+func auditSessionRevokeAll(ctx context.Context, q db.Querier, tenantID, actorID, targetID uuid.UUID, targetEmail string, oldVersion, newVersion int, ip, userAgent string) (*repo.AuditEvent, bool) {
 	diff, _ := json.Marshal(map[string]any{
 		"targetEmail":       targetEmail,
 		"oldSessionVersion": oldVersion,
 		"newSessionVersion": newVersion,
 	})
+	tid, aid, rid := tenantID, actorID, targetID
 	ev := &repo.AuditEvent{
-		TenantID:     &tenantID,
+		TenantID:     &tid,
 		ActorType:    "user",
-		ActorID:      &actorID,
+		ActorID:      &aid,
 		Action:       "session.revoke_all",
 		ResourceType: "user",
-		ResourceID:   &targetID,
+		ResourceID:   &rid,
 		Diff:         diff,
 	}
 	if ip != "" {
@@ -271,7 +297,5 @@ func auditSessionRevokeAll(ctx context.Context, audits *repo.AuditLogs, tenantID
 	if userAgent != "" {
 		ev.UserAgent = &userAgent
 	}
-	if err := audits.Insert(ctx, ev); err != nil {
-		slog.Warn("audit session.revoke_all", "err", err, "target_id", targetID)
-	}
+	return ev, insertAuditTx(ctx, q, ev)
 }
