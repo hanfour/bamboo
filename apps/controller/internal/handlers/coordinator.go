@@ -385,7 +385,7 @@ func (h *CoordinatorHandler) Register(ctx context.Context, req *bamboov1.Registe
 		return nil, status.Error(codes.InvalidArgument, "hostname is required")
 	}
 
-	tenant, ownerUserID, autoApprove, err := h.resolveCredential(ctx, req)
+	tenant, ownerUserID, autoApprove, initialTags, err := h.resolveCredential(ctx, req)
 	if err != nil {
 		return nil, err
 	}
@@ -413,6 +413,21 @@ func (h *CoordinatorHandler) Register(ctx context.Context, req *bamboov1.Registe
 	)
 	if existing != nil {
 		self = existing
+		// A peer enrolled before its credential carried a user keeps
+		// that user on the next register. An already-attributed peer
+		// stays with its original owner.
+		if self.UserID == nil && ownerUserID != nil {
+			err = db.WithTenant(ctx, h.pool, tenant.ID, func(q db.Querier) error {
+				if _, uerr := repo.NewPeers(q).SetUserIDIfEmpty(ctx, self.ID, *ownerUserID); uerr != nil {
+					return status.Errorf(codes.Internal, "attribute peer: %v", uerr)
+				}
+				return nil
+			})
+			if err != nil {
+				return nil, err
+			}
+			self.UserID = ownerUserID
+		}
 		slog.Info("re-registration", "peer_id", self.ID, "tenant", tenant.Slug)
 		// Honor endpoints reported on a re-register so a client that
 		// re-registers (e.g. after STUN discovery completes between
@@ -532,9 +547,19 @@ func (h *CoordinatorHandler) Register(ctx context.Context, req *bamboov1.Registe
 				return status.Errorf(codes.Internal, "peer insert: %v", ierr)
 			}
 			self = p
+			if len(initialTags) > 0 {
+				applied, serr := peers.SetTags(ctx, self.ID, initialTags)
+				if serr != nil {
+					return status.Errorf(codes.Internal, "apply pre-auth tags: %v", serr)
+				}
+				self.Tags = applied
+			}
 			auditDiff := map[string]any{"hostname": self.Hostname, "ip": self.IP, "os": self.OS, "approval_status": self.ApprovalStatus}
 			if dnsName != "" {
 				auditDiff["peer_dns_name"] = dnsName
+			}
+			if len(self.Tags) > 0 {
+				auditDiff["tags"] = self.Tags
 			}
 			auditOnSavepoint(ctx, h.audits, q, &repo.AuditEvent{
 				TenantID:     &tenant.ID,
@@ -571,6 +596,14 @@ func (h *CoordinatorHandler) Register(ctx context.Context, req *bamboov1.Registe
 	})
 	if err != nil {
 		return nil, err
+	}
+	// ListByTenant joins the owner and the tags. The insert result and
+	// FindByPubKey do not, and AllowedIPs is computed from self.
+	for _, p := range allPeers {
+		if p.ID == self.ID {
+			self = p
+			break
+		}
 	}
 
 	// ListEligible (not ListEnabled) filters out relays the
@@ -929,22 +962,21 @@ func (h *CoordinatorHandler) loadPeerForMutation(ctx context.Context, peerID uui
 	return peer, err
 }
 
-// resolveCredential chooses the tenant + owning user for a Register
-// call by precedence:
+// resolveCredential chooses the tenant, owning user, and initial tags
+// for a Register call by precedence:
 //
 //  1. pre_auth_key_secret credential -> tenant from the key, owner =
-//     the user who minted the key (pre_auth_keys.created_by). Lets us
-//     attribute new peers to a human admin in the Users page. The
-//     redeemed key is returned to the caller so Register can read
-//     auto_approve and pick the new peer's approval_status (issue #133).
-//  2. bearer_token credential -> resolved via the AuthHandler. owner
-//     = nil today; will become the bearer's user when bearer tokens
-//     learn user-scoped identity. autoApprove returns true because
-//     a verified user-session token already establishes admin trust.
+//     the user who minted the key (pre_auth_keys.created_by), tags =
+//     the key's tags (copied onto the new peer). A headless service
+//     therefore carries the minter's email for user:/group: rules and
+//     the key's tags for tag: rules.
+//  2. bearer_token credential -> tenant and user from the session JWT.
+//     autoApprove is true because a verified user session is enough
+//     to enroll that person's own node.
 //  3. x-tenant-slug metadata fallback (dev convenience only — rejected
-//     in prod mode where requireAuth=true). owner = nil and
-//     autoApprove returns true because there's no admin context to
-//     queue against; dev tooling expects immediate visibility.
+//     in prod mode where requireAuth=true). owner is nil, tags are
+//     empty, and autoApprove is true because there's no admin context
+//     to queue against; dev tooling expects immediate visibility.
 //
 // The prod-mode rejection is the gate the project-understanding doc
 // Finding #1 calls for: a caller that knows a tenant slug should not
@@ -953,41 +985,44 @@ func (h *CoordinatorHandler) loadPeerForMutation(ctx context.Context, peerID uui
 // onboarding credential) or a bearer/session token issued by the
 // controller. The REST adapter has its own corresponding check; this
 // path covers gRPC Register.
-func (h *CoordinatorHandler) resolveCredential(ctx context.Context, req *bamboov1.RegisterRequest) (tenant *repo.Tenant, ownerUserID *uuid.UUID, autoApprove bool, err error) {
+func (h *CoordinatorHandler) resolveCredential(ctx context.Context, req *bamboov1.RegisterRequest) (tenant *repo.Tenant, ownerUserID *uuid.UUID, autoApprove bool, initialTags []string, err error) {
 	if secret := req.GetPreAuthKeySecret(); secret != "" {
 		key, err := h.auth.redeemAndReturnKey(ctx, secret)
 		if err != nil {
-			return nil, nil, false, err
+			return nil, nil, false, nil, err
 		}
 		t, err := h.tenants.GetByID(ctx, key.TenantID)
 		if err != nil {
-			return nil, nil, false, status.Errorf(codes.Internal, "tenant by id: %v", err)
+			return nil, nil, false, nil, status.Errorf(codes.Internal, "tenant by id: %v", err)
 		}
-		return t, key.CreatedBy, key.AutoApprove, nil
+		return t, key.CreatedBy, key.AutoApprove, key.Tags, nil
 	}
 
 	if token := req.GetBearerToken(); token != "" {
-		t, err := h.auth.resolveBearerToken(ctx, token)
-		// Bearer-token register implies an authenticated admin context —
-		// auto-approve so a human signing into the Web UI to add their
-		// own laptop doesn't have to click "approve" on their own
-		// device.
-		return t, nil, true, err
+		t, userID, err := h.auth.resolveBearerToken(ctx, token)
+		if err != nil {
+			return nil, nil, false, nil, err
+		}
+		// Bearer-token register implies an authenticated user —
+		// auto-approve so a person signing in to add their own laptop
+		// doesn't have to click "approve" on their own device.
+		return t, &userID, true, nil, nil
 	}
 
 	if h.requireAuth {
-		return nil, nil, false, status.Error(codes.PermissionDenied, "Register requires a pre-auth key or bearer credential when require_auth is enabled")
+		return nil, nil, false, nil, status.Error(codes.PermissionDenied, "Register requires a pre-auth key or bearer credential when require_auth is enabled")
 	}
 
 	slug := tenantSlugFromMetadata(ctx)
 	t, terr := h.tenants.GetOrCreate(ctx, slug, "Default Tenant", repo.DefaultTenantCIDR)
 	if terr != nil {
-		return nil, nil, false, status.Errorf(codes.Internal, "tenant resolve: %v", terr)
+		return nil, nil, false, nil, status.Errorf(codes.Internal, "tenant resolve: %v", terr)
 	}
 	// Dev-fallback path: no admin context, auto-approve so make
 	// local-up + make local-bootstrap keep working without a manual
-	// approval click in the middle.
-	return t, nil, true, nil
+	// approval click in the middle. The peer has no owner, so only
+	// tag: and cidr: rules can match it.
+	return t, nil, true, nil, nil
 }
 
 // tenantSlugFromMetadata extracts the tenant slug from gRPC metadata.
@@ -1034,10 +1069,11 @@ func (h *CoordinatorHandler) loadPolicyAndRevision(ctx context.Context, tenantID
 }
 
 // peerView projects a repo.Peer onto the shape the L3 enforcer needs.
-// User is the owning account's email (empty for a headless peer).
-// Groups are the policy `groups` block entries that list that email,
-// so a `group:` source matcher reaches AllowedIPs the same way a
-// `tag:` matcher does.
+// User is the owning account's email. A pre-auth peer is owned by the
+// admin who minted the key; a bearer registration is owned by that
+// session's user. Empty means a dev-fallback peer, which matches only
+// tag: and cidr:. Groups are the policy `groups` entries that list
+// that email, so group: matches on both sides of a rule.
 func peerView(p *repo.Peer, pol *policy.Policy) policy.PeerView {
 	view := policy.PeerView{
 		Tags:   p.Tags,

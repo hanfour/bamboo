@@ -2170,6 +2170,9 @@ type apiCreatePreAuthKeyReq struct {
 	// this to true when they want fleets of identical runners to
 	// onboard without per-device clicks.
 	AutoApprove bool `json:"autoApprove,omitempty"`
+	// Tags are copied onto each peer that redeems this key, so a
+	// headless service can match tag: rules without a later PATCH.
+	Tags []string `json:"tags,omitempty"`
 }
 
 // apiPreAuthKeyJSON is the response shape. Secret is the plaintext
@@ -2209,6 +2212,12 @@ func (h *HTTPServer) apiCreatePreAuthKey(w http.ResponseWriter, r *http.Request,
 		return
 	}
 
+	var createdBy *uuid.UUID
+	if authn != nil && authn.claims != nil && authn.claims.UserID != uuid.Nil {
+		uid := authn.claims.UserID
+		createdBy = &uid
+	}
+
 	var created *repo.PreAuthKey
 	var auditEv *repo.AuditEvent
 	var auditOK bool
@@ -2221,6 +2230,8 @@ func (h *HTTPServer) apiCreatePreAuthKey(w http.ResponseWriter, r *http.Request,
 			Reusable:    req.Reusable,
 			Ephemeral:   req.Ephemeral,
 			AutoApprove: req.AutoApprove,
+			Tags:        req.Tags,
+			CreatedBy:   createdBy,
 		})
 		if err != nil {
 			return fmt.Errorf("insert key: %w", err)
@@ -2237,6 +2248,7 @@ func (h *HTTPServer) apiCreatePreAuthKey(w http.ResponseWriter, r *http.Request,
 				"reusable":     c.Reusable,
 				"ephemeral":    c.Ephemeral,
 				"auto_approve": c.AutoApprove,
+				"tags":         c.Tags,
 			}),
 		}
 		if authn != nil && authn.claims != nil {

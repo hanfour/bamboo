@@ -9,18 +9,21 @@ import (
 
 // EvalRequest is the inbound query: "can src reach dst on port p?".
 //
-// SrcGroups / SrcTags / DstTags are slices because a peer may carry
-// multiple of each. Tag/group matchers in a rule are an OR over the
-// peer's memberships.
+// Groups and tags are slices because a peer may carry multiple of
+// each. Tag/group matchers in a rule are an OR over the peer's
+// memberships. User is the owning account's email; empty means the
+// peer has no owner and cannot match a user: or group: matcher.
 type EvalRequest struct {
 	SrcUser   string
 	SrcGroups []string
 	SrcTags   []string
 	SrcIP     netip.Addr
 
-	DstTags []string
-	DstIP   netip.Addr
-	DstPort uint16
+	DstUser   string
+	DstGroups []string
+	DstTags   []string
+	DstIP     netip.Addr
+	DstPort   uint16
 }
 
 // Evaluate scans rules in order and returns the first match. If no
@@ -81,9 +84,10 @@ func matchDestination(m Matcher, req EvalRequest) bool {
 		return contains(req.DstTags, m.Name)
 	case MatcherCIDR:
 		return req.DstIP.IsValid() && m.CIDR.Contains(req.DstIP)
-	case MatcherGroup, MatcherUser:
-		// Groups and users are not meaningful destinations; reject.
-		return false
+	case MatcherGroup:
+		return contains(req.DstGroups, m.Name)
+	case MatcherUser:
+		return req.DstUser != "" && strings.EqualFold(req.DstUser, m.Name)
 	default:
 		return false
 	}

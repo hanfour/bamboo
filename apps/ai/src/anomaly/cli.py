@@ -59,6 +59,23 @@ def main(argv: list[str] | None = None) -> int:
     )
     write_p.set_defaults(func=cmd_score_and_write)
 
+    run_p = sub.add_parser(
+        "run",
+        help="train a model for one tenant, then write findings at or above the threshold",
+    )
+    _add_common(run_p)
+    run_p.add_argument(
+        "--out",
+        type=Path,
+        default=None,
+        help="model path (default: $BAMBOO_AI_MODEL_DIR/<tenant>.joblib)",
+    )
+    run_p.add_argument("--contamination", type=float, default=0.05)
+    run_p.add_argument("--threshold", type=float, default=0.6, help="min score to record")
+    run_p.add_argument("--limit", type=int, default=20, help="cap on findings per run")
+    run_p.add_argument("--model-version", default="isolation-forest-v1")
+    run_p.set_defaults(func=cmd_run)
+
     args = parser.parse_args(argv)
     return args.func(args)
 
@@ -76,6 +93,23 @@ def _add_common(p: argparse.ArgumentParser) -> None:
             "CLICKHOUSE_URL", "clickhouse://bamboo:dev@localhost:19000/bamboo"
         ),
     )
+
+
+def cmd_run(args: argparse.Namespace) -> int:
+    """One tenant, one pass: fit the model, then persist findings.
+
+    The controller reads anomaly_findings from the last 24 hours and
+    turns rows at score >= 0.6 into KIND_FLAG_ANOMALOUS recommendations.
+    Schedule this command per tenant; it does not stay running.
+    """
+    if args.out is None:
+        model_dir = Path(os.environ.get("BAMBOO_AI_MODEL_DIR", "models"))
+        args.out = model_dir / f"{args.tenant}.joblib"
+    args.model = args.out
+    trained = cmd_train(args)
+    if trained != 0:
+        return trained
+    return cmd_score_and_write(args)
 
 
 def cmd_train(args: argparse.Namespace) -> int:

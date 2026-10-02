@@ -118,7 +118,7 @@ Every mutating call left an `audit_log` row: registrations, tag updates, policy 
 ## What this does NOT yet prove
 
 - **Port-level enforcement.** The rule `allow tag:dev → tag:db:*` is intentionally wildcard-port. WireGuard's `AllowedIPs` is L3-only, so the wire layer cannot filter port 5432 from port 80 once a peer is in the allowed set. Port-level enforcement is P1 follow-up work and will need a host-level firewall above WireGuard.
-- **`user:` / `group:` matchers.** OIDC identity is not yet propagated to the coordinator, so rules using `user:alice@example.com` or `group:engineering` will not contribute at the wire layer in v0.1.4. They evaluate fine in the policy preview and in the EvaluateAccess RPC.
+- **`user:` / `group:` matchers need an owner on the peer.** A node registered with a user-session bearer belongs to that user. A node registered with a pre-auth key belongs to the admin who minted the key, and it also receives the key's tags. `group:` membership comes from the policy `groups` block. A dev-fallback register (no credential, `BAMBOO_REQUIRE_AUTH=false`) has no owner, so only `tag:` and `cidr:` match it. See [the onboarding playbook](deployment/onboarding.md).
 - **OIDC sign-in.** The script runs against `X-Tenant-Slug: default` (the dev-fallback path). In production with `BAMBOO_REQUIRE_AUTH=true` the same REST calls return 401 unless they carry a session JWT.
 - **Live re-application without re-Register.** The script demonstrates the new state by re-Registering. Real clients receive the new state automatically via the `PolicyChanged` watch event, but verifying that requires a running WireGuard interface — out of scope for a 30-second demo.
 

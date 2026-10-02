@@ -9,6 +9,15 @@ This file is the assignment list. Historical roadmaps stay as records;
 several of their open items have since shipped and are listed under
 "Already done" so they are not re-opened.
 
+Update 2026-10-03, on `rls-tenant-backstop` after `fecbed3`: the RLS
+backstop in the P0 section below has landed (migration 00022,
+`WithTenant` / `WithBypass`, startup migrate). `user:` / `group:`
+match on both sides of a rule when the peer has an owner, and a
+pre-auth key copies its tags onto the new peer. `bamboo-ai run`
+writes `anomaly_findings`, which `ListRecommendations` already turns
+into `FLAG_ANOMALOUS`. The ten-minute path is
+`docs/deployment/onboarding.md`. Windows, SDKs, and billing stay out.
+
 ## Product goal
 
 A tenant can sign in, enroll peers, and have controller policy show up

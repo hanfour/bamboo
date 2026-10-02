@@ -556,6 +556,21 @@ func (r *Peers) UpdateDNSName(ctx context.Context, id uuid.UUID, name *string) (
 	return tag.RowsAffected() > 0, nil
 }
 
+// SetUserIDIfEmpty attributes a peer to a user when it has none.
+// A later register by someone else does not take the peer over.
+// Returns whether this call wrote the column.
+func (r *Peers) SetUserIDIfEmpty(ctx context.Context, id, userID uuid.UUID) (bool, error) {
+	tag, err := r.pool.Exec(ctx, `
+		UPDATE peers
+		   SET user_id = $2, updated_at = now()
+		 WHERE id = $1 AND user_id IS NULL
+	`, id, userID)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() == 1, nil
+}
+
 // IsDNSNameTaken reports whether a peer in the given tenant already
 // uses peer_dns_name = name. NULL rows are not counted as taken
 // (the partial unique index treats them as absent), so this is safe

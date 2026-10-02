@@ -9,9 +9,12 @@ ML-driven layer lands.
 
 ## Status
 
-Phase-2 starter scaffold. The package fits and scores Isolation
-Forest models end-to-end on synthetic data; the CLI loader against a
-live ClickHouse runs but is gated behind the network at the call site.
+The package fits and scores Isolation Forest models. `bamboo-ai run`
+trains one tenant and writes rows into ClickHouse `anomaly_findings`.
+The controller already reads that table (last 24 hours, score >= 0.6)
+and surfaces each row as a `KIND_FLAG_ANOMALOUS` recommendation next
+to the three rule-based kinds. Nothing inside the controller process
+starts the training; run the command on a schedule.
 
 ## Layout
 
@@ -52,6 +55,9 @@ bamboo-ai score \
   --tenant <uuid> \
   --model ./models/<uuid>.joblib \
   --limit 10
+
+# Train and write findings the controller will show as FLAG_ANOMALOUS.
+bamboo-ai run --tenant <uuid> --since 7d
 ```
 
 The CLI talks to ClickHouse via `clickhouse-connect`. The DSN comes
@@ -70,22 +76,28 @@ Per [ADR 0010 §Tier 2](../../docs/adr/0010-llm-multi-provider-strategy.md):
   03:00 UTC"). A future Autoencoder layer can sit alongside it
   without forcing a refactor.
 
-## How the model gets to the controller
+## How a score becomes a recommendation
 
-Out of scope for this PR; the path is:
+1. Cron (or `scripts/run-tenant.sh`) runs `bamboo-ai run --tenant <uuid>`
+   against the tenant's ClickHouse. The model file stays on the
+   machine that runs the job (`BAMBOO_AI_MODEL_DIR`, default `./models`).
+2. Findings at score >= 0.6 are inserted into `anomaly_findings`.
+   The controller creates that table on boot and only reads it.
+3. `ListRecommendations` appends `recommend.Anomalies` for findings
+   generated in the last 24 hours. The admin UI shows them as
+   `FLAG_ANOMALOUS`. The diff is empty: the operator triages, the
+   model does not change policy.
 
-1. A scheduled job runs `bamboo-ai train` per tenant overnight,
-   uploading `<uuid>.joblib` to a shared object store (S3 / GCS /
-   filesystem in dev).
-2. The controller (or a sibling Go binary) downloads the model and
-   serves anomaly scores in-process. ML-in-Python, scoring-in-Go is
-   possible via ONNX export; the simpler path is a thin Python
-   sidecar that the Go service calls over gRPC.
-3. Anomalies above a threshold become a fourth recommendation kind
-   (`KIND_*` proto enum extension) — Tier-2 lives alongside the
-   existing Tier-1 trio.
+```bash
+# nightly, one line per tenant
+0 3 * * * BAMBOO_AI_MODEL_DIR=/var/lib/bamboo/models \
+  CLICKHOUSE_URL=clickhouse://bamboo:dev@clickhouse:9000/bamboo \
+  /opt/bamboo/apps/ai/scripts/run-tenant.sh <tenant-uuid>
+```
 
-A follow-up ADR will pick the deployment shape.
+```bash
+bamboo-ai run --tenant <uuid> --since 7d --threshold 0.6
+```
 
 ## Tracking
 

@@ -164,6 +164,28 @@ rule "eng-to-staging" {
 	}
 }
 
+func TestAllow_UserAndGroupDestination(t *testing.T) {
+	p := mustParse(t, `
+groups = {
+  "group:engineering" = ["alice@example.com"]
+  "group:dba"         = ["dba@example.com"]
+}
+rule "eng-to-dba" {
+  action       = "allow"
+  sources      = ["group:engineering"]
+  destinations = ["group:dba:*"]
+}`)
+	src := policy.PeerView{User: "alice@example.com", Groups: []string{"engineering"}, IP: addr(t, "100.64.0.1")}
+	dst := policy.PeerView{User: "dba@example.com", Groups: []string{"dba"}, IP: addr(t, "100.64.0.9")}
+	if !policy.Allow(p, src, dst) {
+		t.Fatal("engineering should reach a peer owned by group:dba")
+	}
+	headless := policy.PeerView{IP: addr(t, "100.64.0.8"), Tags: []string{"db"}}
+	if policy.Allow(p, src, headless) {
+		t.Fatal("a peer with no owner must not match group:dba")
+	}
+}
+
 func TestAllow_NoRuleCoversPairIsDeny(t *testing.T) {
 	p := mustParse(t, `
 rule "narrow" {

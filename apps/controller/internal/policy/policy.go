@@ -21,11 +21,15 @@
 //   - cidr:PREFIX    peer's IP falls within the CIDR
 //   - *              wildcard
 //
-// Destination matchers are a source matcher followed by a port spec:
+// Destination matchers are a source matcher followed by a port spec.
+// user: and group: match the destination peer's owning account the
+// same way they match a source. A peer with no owner matches neither.
 //
-//	tag:staging:443         single port
-//	tag:db:5432,5433        comma-separated list
-//	cidr:0.0.0.0/0:*        wildcard ports
+//	tag:staging:443              single port
+//	tag:db:5432,5433             comma-separated list
+//	user:alice@example.com:*     that user's peers, any port
+//	group:engineering:443        peers owned by a member of the group
+//	cidr:0.0.0.0/0:*             wildcard ports
 //
 // Top-level (optional) blocks:
 //
@@ -39,8 +43,8 @@
 //	}
 //
 // `groups` maps "group:NAME" → member emails. Referenced by name
-// inside tagOwners owner lists (or, in future, inside rule source /
-// destination matchers); flat — groups can't nest in v1. `tagOwners`
+// inside tagOwners owner lists and inside rule source / destination
+// matchers; flat — groups can't nest in v1. `tagOwners`
 // gates which OIDC identities may assign/remove a given tag on a
 // peer (issue #139). Both blocks are optional; their absence
 // preserves pre-#139 admin-only assignment semantics.
