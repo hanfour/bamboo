@@ -87,6 +87,33 @@ rule "eng-to-db" {
 	}
 }
 
+func TestAllowedIPsFor_UserAndGroupDestinations(t *testing.T) {
+	p := mustParsePolicy(t, `
+groups = {
+  "group:engineering" = ["alice@example.com"]
+  "group:dba"         = ["dba@example.com"]
+}
+rule "eng-to-owners" {
+  action       = "allow"
+  sources      = ["group:engineering"]
+  destinations = ["group:dba:*", "user:carol@example.com:*"]
+}
+`)
+	alice := &repo.Peer{IP: "100.64.0.1", OwnerEmail: "alice@example.com"}
+	db := &repo.Peer{IP: "100.64.0.5", IP6: "fdba:1100::6440:5", OwnerEmail: "dba@example.com"}
+	carol := &repo.Peer{IP: "100.64.0.6", OwnerEmail: "carol@example.com"}
+	untagged := &repo.Peer{IP: "100.64.0.7"}
+	if got := allowedIPsFor(p, alice, db, nat64EgressRoute{}); len(got) < 2 || got[0] != "100.64.0.5/32" {
+		t.Errorf("alice → dba-owned peer: got %v, want the tunnel addresses", got)
+	}
+	if got := allowedIPsFor(p, alice, carol, nat64EgressRoute{}); len(got) == 0 {
+		t.Error("alice → user:carol should be allowed")
+	}
+	if got := allowedIPsFor(p, alice, untagged, nat64EgressRoute{}); got != nil {
+		t.Errorf("alice → ownerless peer: got %v, want nil", got)
+	}
+}
+
 func TestAllowedIPsFor_IPv6Destination(t *testing.T) {
 	src := &repo.Peer{IP: "fd00::1", Tags: []string{"dev"}}
 	dst := &repo.Peer{IP: "fd00::2", Tags: []string{"prod"}}

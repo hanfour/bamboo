@@ -434,6 +434,10 @@ func buildEvalRequest(req *bamboov1.EvaluateAccessRequest) (policy.EvalRequest, 
 	switch dprefix {
 	case "tag":
 		out.DstTags = []string{dname}
+	case "user":
+		out.DstUser = dname
+	case "group":
+		out.DstGroups = []string{dname}
 	case "ip":
 		addr, err := netip.ParseAddr(dname)
 		if err != nil {

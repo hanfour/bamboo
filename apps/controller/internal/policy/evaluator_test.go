@@ -147,6 +147,50 @@ rule "intranet-access" {
 	}
 }
 
+func TestEvaluate_UserAndGroupDestination(t *testing.T) {
+	p := mustParse(t, `
+rule "alice-to-dba" {
+  action       = "allow"
+  sources      = ["user:alice@example.com"]
+  destinations = ["group:dba:5432", "user:db@example.com:*"]
+}`)
+
+	got, rule := p.Evaluate(policy.EvalRequest{
+		SrcUser:   "alice@example.com",
+		DstGroups: []string{"dba"},
+		DstPort:   5432,
+	})
+	if got != policy.ActionAllow || rule == nil || rule.ID != "alice-to-dba" {
+		t.Errorf("group destination: action=%v rule=%+v, want allow alice-to-dba", got, rule)
+	}
+
+	got, _ = p.Evaluate(policy.EvalRequest{
+		SrcUser: "alice@example.com",
+		DstUser: "DB@example.com",
+		DstPort: 80,
+	})
+	if got != policy.ActionAllow {
+		t.Errorf("user destination: action=%v, want allow (email case and any port)", got)
+	}
+
+	got, _ = p.Evaluate(policy.EvalRequest{
+		SrcUser:   "alice@example.com",
+		DstGroups: []string{"engineering"},
+		DstPort:   5432,
+	})
+	if got != policy.ActionDeny {
+		t.Errorf("other group: action=%v, want deny", got)
+	}
+
+	got, _ = p.Evaluate(policy.EvalRequest{
+		SrcUser: "alice@example.com",
+		DstPort: 5432,
+	})
+	if got != policy.ActionDeny {
+		t.Errorf("peer with no owner: action=%v, want deny", got)
+	}
+}
+
 func TestEvaluate_PortMismatch(t *testing.T) {
 	p := mustParse(t, `
 rule "narrow-port" {

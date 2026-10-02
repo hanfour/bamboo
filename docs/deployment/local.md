@@ -34,7 +34,8 @@ Preauth key:      bka_aBcD12_ef34GhIjKlMnOpQ...
 
 Open http://localhost:3000 in a browser to see the Web UI, register
 peers from the bamboo CLI or the macOS / iOS app using the printed
-preauth key.
+preauth key. The ten-minute check that Alice can reach a database
+peer and Carol cannot is [onboarding.md](./onboarding.md).
 
 ## Connecting Mac + iPhone over the LAN
 

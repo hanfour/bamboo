@@ -2,7 +2,10 @@
 
 package policy
 
-import "net/netip"
+import (
+	"net/netip"
+	"strings"
+)
 
 // PeerView is the per-peer projection the L3 enforcer needs. Callers
 // build it from their own peer record.
@@ -33,6 +36,8 @@ func Allow(p *Policy, src, dst PeerView) bool {
 		SrcGroups: src.Groups,
 		SrcTags:   src.Tags,
 		SrcIP:     src.IP,
+		DstUser:   dst.User,
+		DstGroups: dst.Groups,
 		DstTags:   dst.Tags,
 		DstIP:     dst.IP,
 	}
@@ -75,6 +80,10 @@ func matchDestinationL3(m Matcher, req EvalRequest) bool {
 		return contains(req.DstTags, m.Name)
 	case MatcherCIDR:
 		return req.DstIP.IsValid() && m.CIDR.Contains(req.DstIP)
+	case MatcherGroup:
+		return contains(req.DstGroups, m.Name)
+	case MatcherUser:
+		return req.DstUser != "" && strings.EqualFold(req.DstUser, m.Name)
 	default:
 		return false
 	}

@@ -132,6 +132,11 @@ func (h *AuthHandler) CreatePreAuthKey(ctx context.Context, req *bamboov1.Create
 		expiresAt = &t
 	}
 
+	var createdBy *uuid.UUID
+	if uid, ok := h.sessionUserID(ctx); ok {
+		createdBy = &uid
+	}
+
 	var created *repo.PreAuthKey
 	err = db.WithTenant(ctx, h.pool, tenant.ID, func(q db.Querier) error {
 		c, cerr := repo.NewPreAuthKeys(q).Create(ctx, &repo.PreAuthKey{
@@ -143,6 +148,7 @@ func (h *AuthHandler) CreatePreAuthKey(ctx context.Context, req *bamboov1.Create
 			Reusable:    req.GetReusable(),
 			Ephemeral:   req.GetEphemeral(),
 			ExpiresAt:   expiresAt,
+			CreatedBy:   createdBy,
 		})
 		if cerr != nil {
 			return status.Errorf(codes.Internal, "insert key: %v", cerr)
@@ -512,14 +518,16 @@ func resolveTenantFromCredential(ctx context.Context, authH *AuthHandler, tenant
 	return t, nil
 }
 
-// resolveBearerToken validates a session JWT and returns the bound tenant.
-func (h *AuthHandler) resolveBearerToken(ctx context.Context, token string) (*repo.Tenant, error) {
+// resolveBearerToken validates a session JWT and returns the bound
+// tenant plus the session's user id. The user id is what Register
+// stores on peers.user_id so user: and group: rules can see the node.
+func (h *AuthHandler) resolveBearerToken(ctx context.Context, token string) (*repo.Tenant, uuid.UUID, error) {
 	if h.sessionSec == nil {
-		return nil, status.Error(codes.Unauthenticated, "session signing not configured")
+		return nil, uuid.Nil, status.Error(codes.Unauthenticated, "session signing not configured")
 	}
 	claims, err := auth.VerifySessionToken(h.sessionSec, token)
 	if err != nil {
-		return nil, status.Error(codes.Unauthenticated, "invalid bearer token")
+		return nil, uuid.Nil, status.Error(codes.Unauthenticated, "invalid bearer token")
 	}
 	// Defense in depth (audit H-1): a user-session JWT always carries a
 	// non-nil subject (UserID). Reject any token that verified but has no
@@ -528,13 +536,31 @@ func (h *AuthHandler) resolveBearerToken(ctx context.Context, token string) (*re
 	// re-shared the signing construction. The relay-token HMAC domain is
 	// the primary guard; this is the belt to that suspenders.
 	if claims.UserID == uuid.Nil {
-		return nil, status.Error(codes.Unauthenticated, "bearer token is not a user session")
+		return nil, uuid.Nil, status.Error(codes.Unauthenticated, "bearer token is not a user session")
 	}
 	t, err := h.tenants.GetByID(ctx, claims.TenantID)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "tenant by id: %v", err)
+		return nil, uuid.Nil, status.Errorf(codes.Internal, "tenant by id: %v", err)
 	}
-	return t, nil
+	return t, claims.UserID, nil
+}
+
+// sessionUserID returns the user id of a verified user-session bearer
+// on ctx. ok is false in the dev fallback (no token) and for peer-session
+// tokens, which are not user sessions.
+func (h *AuthHandler) sessionUserID(ctx context.Context) (uuid.UUID, bool) {
+	if h == nil || len(h.sessionSec) == 0 {
+		return uuid.Nil, false
+	}
+	token := bearerFromMetadata(ctx)
+	if token == "" {
+		return uuid.Nil, false
+	}
+	claims, err := auth.VerifySessionToken(h.sessionSec, token)
+	if err != nil || claims.UserID == uuid.Nil {
+		return uuid.Nil, false
+	}
+	return claims.UserID, true
 }
 
 // oidcProviderName maps the proto enum to our internal slug.
