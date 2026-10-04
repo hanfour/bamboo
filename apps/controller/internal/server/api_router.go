@@ -120,6 +120,67 @@ func (h *HTTPServer) routePeersSub(w http.ResponseWriter, r *http.Request, authn
 		h.apiPeerSetNAT64EgressApproved(w, r, authn, tenant, id)
 		return true
 	}
+	// Device desk. Longer suffixes first so /desk/term/out is not
+	// swallowed by /desk/term or /desk.
+	if id, found := strings.CutSuffix(rest, "/desk/term/out"); found && id != "" && !strings.Contains(id, "/") {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return true
+		}
+		h.apiDeskTermOut(w, r, authn, tenant, id)
+		return true
+	}
+	if id, found := strings.CutSuffix(rest, "/desk/term/in"); found && id != "" && !strings.Contains(id, "/") {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return true
+		}
+		h.apiDeskTermIn(w, r, authn, tenant, id)
+		return true
+	}
+	if id, found := strings.CutSuffix(rest, "/desk/term"); found && id != "" && !strings.Contains(id, "/") {
+		switch r.Method {
+		case http.MethodPost:
+			h.apiDeskTermStart(w, r, authn, tenant, id)
+		case http.MethodDelete:
+			h.apiDeskTermClose(w, r, authn, tenant, id)
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+		return true
+	}
+	if id, found := strings.CutSuffix(rest, "/desk/msg"); found && id != "" && !strings.Contains(id, "/") {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return true
+		}
+		h.apiDeskMsg(w, r, authn, tenant, id)
+		return true
+	}
+	if id, found := strings.CutSuffix(rest, "/desk/put"); found && id != "" && !strings.Contains(id, "/") {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return true
+		}
+		h.apiDeskPut(w, r, authn, tenant, id)
+		return true
+	}
+	if id, found := strings.CutSuffix(rest, "/desk/get"); found && id != "" && !strings.Contains(id, "/") {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return true
+		}
+		h.apiDeskGet(w, r, authn, tenant, id)
+		return true
+	}
+	if id, found := strings.CutSuffix(rest, "/desk"); found && id != "" && !strings.Contains(id, "/") {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return true
+		}
+		h.apiDeskStatus(w, r, authn, tenant, id)
+		return true
+	}
 	// "{id}" — single peer GET/PATCH/DELETE.
 	if !strings.Contains(rest, "/") {
 		switch r.Method {

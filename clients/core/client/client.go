@@ -30,6 +30,12 @@ func Dial(_ context.Context, addr string) (*Client, error) {
 	conn, err := grpc.NewClient(
 		addr,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		// A desk file is capped at 4MiB. The protobuf frame around it
+		// does not fit in gRPC's default 4MiB message.
+		grpc.WithDefaultCallOptions(
+			grpc.MaxCallRecvMsgSize(8<<20),
+			grpc.MaxCallSendMsgSize(8<<20),
+		),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("grpc dial %s: %w", addr, err)

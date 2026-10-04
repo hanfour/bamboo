@@ -1396,6 +1396,863 @@ func (x *ListPeersResponse) GetNextPageToken() string {
 	return ""
 }
 
+// DeviceOperateFrame is one frame on the device-to-controller half of
+// Operate. The first frame is hello. Later frames are results and
+// terminal output.
+type DeviceOperateFrame struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Types that are valid to be assigned to Frame:
+	//
+	//	*DeviceOperateFrame_Hello
+	//	*DeviceOperateFrame_Result
+	//	*DeviceOperateFrame_Output
+	Frame         isDeviceOperateFrame_Frame `protobuf_oneof:"frame"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DeviceOperateFrame) Reset() {
+	*x = DeviceOperateFrame{}
+	mi := &file_bamboo_v1_coordinator_proto_msgTypes[19]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeviceOperateFrame) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeviceOperateFrame) ProtoMessage() {}
+
+func (x *DeviceOperateFrame) ProtoReflect() protoreflect.Message {
+	mi := &file_bamboo_v1_coordinator_proto_msgTypes[19]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeviceOperateFrame.ProtoReflect.Descriptor instead.
+func (*DeviceOperateFrame) Descriptor() ([]byte, []int) {
+	return file_bamboo_v1_coordinator_proto_rawDescGZIP(), []int{19}
+}
+
+func (x *DeviceOperateFrame) GetFrame() isDeviceOperateFrame_Frame {
+	if x != nil {
+		return x.Frame
+	}
+	return nil
+}
+
+func (x *DeviceOperateFrame) GetHello() *DeviceOperateHello {
+	if x != nil {
+		if x, ok := x.Frame.(*DeviceOperateFrame_Hello); ok {
+			return x.Hello
+		}
+	}
+	return nil
+}
+
+func (x *DeviceOperateFrame) GetResult() *DeviceOperateResult {
+	if x != nil {
+		if x, ok := x.Frame.(*DeviceOperateFrame_Result); ok {
+			return x.Result
+		}
+	}
+	return nil
+}
+
+func (x *DeviceOperateFrame) GetOutput() *DeviceOperateOutput {
+	if x != nil {
+		if x, ok := x.Frame.(*DeviceOperateFrame_Output); ok {
+			return x.Output
+		}
+	}
+	return nil
+}
+
+type isDeviceOperateFrame_Frame interface {
+	isDeviceOperateFrame_Frame()
+}
+
+type DeviceOperateFrame_Hello struct {
+	Hello *DeviceOperateHello `protobuf:"bytes,1,opt,name=hello,proto3,oneof"`
+}
+
+type DeviceOperateFrame_Result struct {
+	Result *DeviceOperateResult `protobuf:"bytes,2,opt,name=result,proto3,oneof"`
+}
+
+type DeviceOperateFrame_Output struct {
+	Output *DeviceOperateOutput `protobuf:"bytes,3,opt,name=output,proto3,oneof"`
+}
+
+func (*DeviceOperateFrame_Hello) isDeviceOperateFrame_Frame() {}
+
+func (*DeviceOperateFrame_Result) isDeviceOperateFrame_Frame() {}
+
+func (*DeviceOperateFrame_Output) isDeviceOperateFrame_Frame() {}
+
+// DeviceOperateHello binds the stream to the device's peer and reports
+// whether that device will accept a terminal.
+type DeviceOperateHello struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	PeerId        string                 `protobuf:"bytes,1,opt,name=peer_id,json=peerId,proto3" json:"peer_id,omitempty"`
+	ExecEnabled   bool                   `protobuf:"varint,2,opt,name=exec_enabled,json=execEnabled,proto3" json:"exec_enabled,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DeviceOperateHello) Reset() {
+	*x = DeviceOperateHello{}
+	mi := &file_bamboo_v1_coordinator_proto_msgTypes[20]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeviceOperateHello) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeviceOperateHello) ProtoMessage() {}
+
+func (x *DeviceOperateHello) ProtoReflect() protoreflect.Message {
+	mi := &file_bamboo_v1_coordinator_proto_msgTypes[20]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeviceOperateHello.ProtoReflect.Descriptor instead.
+func (*DeviceOperateHello) Descriptor() ([]byte, []int) {
+	return file_bamboo_v1_coordinator_proto_rawDescGZIP(), []int{20}
+}
+
+func (x *DeviceOperateHello) GetPeerId() string {
+	if x != nil {
+		return x.PeerId
+	}
+	return ""
+}
+
+func (x *DeviceOperateHello) GetExecEnabled() bool {
+	if x != nil {
+		return x.ExecEnabled
+	}
+	return false
+}
+
+// DeviceOperateResult answers one admin operation. A terminal start
+// sends this twice: once when the shell is open, and again when it
+// exits. exit_code is meaningful on that second result.
+type DeviceOperateResult struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	OpId          string                 `protobuf:"bytes,1,opt,name=op_id,json=opId,proto3" json:"op_id,omitempty"`
+	Ok            bool                   `protobuf:"varint,2,opt,name=ok,proto3" json:"ok,omitempty"`
+	Error         string                 `protobuf:"bytes,3,opt,name=error,proto3" json:"error,omitempty"`
+	ExitCode      int32                  `protobuf:"varint,4,opt,name=exit_code,json=exitCode,proto3" json:"exit_code,omitempty"`
+	Data          []byte                 `protobuf:"bytes,5,opt,name=data,proto3" json:"data,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DeviceOperateResult) Reset() {
+	*x = DeviceOperateResult{}
+	mi := &file_bamboo_v1_coordinator_proto_msgTypes[21]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeviceOperateResult) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeviceOperateResult) ProtoMessage() {}
+
+func (x *DeviceOperateResult) ProtoReflect() protoreflect.Message {
+	mi := &file_bamboo_v1_coordinator_proto_msgTypes[21]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeviceOperateResult.ProtoReflect.Descriptor instead.
+func (*DeviceOperateResult) Descriptor() ([]byte, []int) {
+	return file_bamboo_v1_coordinator_proto_rawDescGZIP(), []int{21}
+}
+
+func (x *DeviceOperateResult) GetOpId() string {
+	if x != nil {
+		return x.OpId
+	}
+	return ""
+}
+
+func (x *DeviceOperateResult) GetOk() bool {
+	if x != nil {
+		return x.Ok
+	}
+	return false
+}
+
+func (x *DeviceOperateResult) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
+func (x *DeviceOperateResult) GetExitCode() int32 {
+	if x != nil {
+		return x.ExitCode
+	}
+	return 0
+}
+
+func (x *DeviceOperateResult) GetData() []byte {
+	if x != nil {
+		return x.Data
+	}
+	return nil
+}
+
+// DeviceOperateOutput is terminal bytes for an open shell. op_id is
+// the pty_start operation those bytes belong to.
+type DeviceOperateOutput struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	OpId          string                 `protobuf:"bytes,1,opt,name=op_id,json=opId,proto3" json:"op_id,omitempty"`
+	Data          []byte                 `protobuf:"bytes,2,opt,name=data,proto3" json:"data,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DeviceOperateOutput) Reset() {
+	*x = DeviceOperateOutput{}
+	mi := &file_bamboo_v1_coordinator_proto_msgTypes[22]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeviceOperateOutput) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeviceOperateOutput) ProtoMessage() {}
+
+func (x *DeviceOperateOutput) ProtoReflect() protoreflect.Message {
+	mi := &file_bamboo_v1_coordinator_proto_msgTypes[22]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeviceOperateOutput.ProtoReflect.Descriptor instead.
+func (*DeviceOperateOutput) Descriptor() ([]byte, []int) {
+	return file_bamboo_v1_coordinator_proto_rawDescGZIP(), []int{22}
+}
+
+func (x *DeviceOperateOutput) GetOpId() string {
+	if x != nil {
+		return x.OpId
+	}
+	return ""
+}
+
+func (x *DeviceOperateOutput) GetData() []byte {
+	if x != nil {
+		return x.Data
+	}
+	return nil
+}
+
+// AdminOperateFrame is one frame on the controller-to-device half of
+// Operate.
+type AdminOperateFrame struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Types that are valid to be assigned to Frame:
+	//
+	//	*AdminOperateFrame_Msg
+	//	*AdminOperateFrame_Put
+	//	*AdminOperateFrame_Get
+	//	*AdminOperateFrame_PtyStart
+	//	*AdminOperateFrame_PtyIn
+	//	*AdminOperateFrame_PtyWinsize
+	//	*AdminOperateFrame_PtyClose
+	Frame         isAdminOperateFrame_Frame `protobuf_oneof:"frame"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AdminOperateFrame) Reset() {
+	*x = AdminOperateFrame{}
+	mi := &file_bamboo_v1_coordinator_proto_msgTypes[23]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AdminOperateFrame) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AdminOperateFrame) ProtoMessage() {}
+
+func (x *AdminOperateFrame) ProtoReflect() protoreflect.Message {
+	mi := &file_bamboo_v1_coordinator_proto_msgTypes[23]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AdminOperateFrame.ProtoReflect.Descriptor instead.
+func (*AdminOperateFrame) Descriptor() ([]byte, []int) {
+	return file_bamboo_v1_coordinator_proto_rawDescGZIP(), []int{23}
+}
+
+func (x *AdminOperateFrame) GetFrame() isAdminOperateFrame_Frame {
+	if x != nil {
+		return x.Frame
+	}
+	return nil
+}
+
+func (x *AdminOperateFrame) GetMsg() *AdminOperateMsg {
+	if x != nil {
+		if x, ok := x.Frame.(*AdminOperateFrame_Msg); ok {
+			return x.Msg
+		}
+	}
+	return nil
+}
+
+func (x *AdminOperateFrame) GetPut() *AdminOperatePut {
+	if x != nil {
+		if x, ok := x.Frame.(*AdminOperateFrame_Put); ok {
+			return x.Put
+		}
+	}
+	return nil
+}
+
+func (x *AdminOperateFrame) GetGet() *AdminOperateGet {
+	if x != nil {
+		if x, ok := x.Frame.(*AdminOperateFrame_Get); ok {
+			return x.Get
+		}
+	}
+	return nil
+}
+
+func (x *AdminOperateFrame) GetPtyStart() *AdminOperatePTYStart {
+	if x != nil {
+		if x, ok := x.Frame.(*AdminOperateFrame_PtyStart); ok {
+			return x.PtyStart
+		}
+	}
+	return nil
+}
+
+func (x *AdminOperateFrame) GetPtyIn() *AdminOperatePTYIn {
+	if x != nil {
+		if x, ok := x.Frame.(*AdminOperateFrame_PtyIn); ok {
+			return x.PtyIn
+		}
+	}
+	return nil
+}
+
+func (x *AdminOperateFrame) GetPtyWinsize() *AdminOperatePTYWinsize {
+	if x != nil {
+		if x, ok := x.Frame.(*AdminOperateFrame_PtyWinsize); ok {
+			return x.PtyWinsize
+		}
+	}
+	return nil
+}
+
+func (x *AdminOperateFrame) GetPtyClose() *AdminOperatePTYClose {
+	if x != nil {
+		if x, ok := x.Frame.(*AdminOperateFrame_PtyClose); ok {
+			return x.PtyClose
+		}
+	}
+	return nil
+}
+
+type isAdminOperateFrame_Frame interface {
+	isAdminOperateFrame_Frame()
+}
+
+type AdminOperateFrame_Msg struct {
+	Msg *AdminOperateMsg `protobuf:"bytes,1,opt,name=msg,proto3,oneof"`
+}
+
+type AdminOperateFrame_Put struct {
+	Put *AdminOperatePut `protobuf:"bytes,2,opt,name=put,proto3,oneof"`
+}
+
+type AdminOperateFrame_Get struct {
+	Get *AdminOperateGet `protobuf:"bytes,3,opt,name=get,proto3,oneof"`
+}
+
+type AdminOperateFrame_PtyStart struct {
+	PtyStart *AdminOperatePTYStart `protobuf:"bytes,4,opt,name=pty_start,json=ptyStart,proto3,oneof"`
+}
+
+type AdminOperateFrame_PtyIn struct {
+	PtyIn *AdminOperatePTYIn `protobuf:"bytes,5,opt,name=pty_in,json=ptyIn,proto3,oneof"`
+}
+
+type AdminOperateFrame_PtyWinsize struct {
+	PtyWinsize *AdminOperatePTYWinsize `protobuf:"bytes,6,opt,name=pty_winsize,json=ptyWinsize,proto3,oneof"`
+}
+
+type AdminOperateFrame_PtyClose struct {
+	PtyClose *AdminOperatePTYClose `protobuf:"bytes,7,opt,name=pty_close,json=ptyClose,proto3,oneof"`
+}
+
+func (*AdminOperateFrame_Msg) isAdminOperateFrame_Frame() {}
+
+func (*AdminOperateFrame_Put) isAdminOperateFrame_Frame() {}
+
+func (*AdminOperateFrame_Get) isAdminOperateFrame_Frame() {}
+
+func (*AdminOperateFrame_PtyStart) isAdminOperateFrame_Frame() {}
+
+func (*AdminOperateFrame_PtyIn) isAdminOperateFrame_Frame() {}
+
+func (*AdminOperateFrame_PtyWinsize) isAdminOperateFrame_Frame() {}
+
+func (*AdminOperateFrame_PtyClose) isAdminOperateFrame_Frame() {}
+
+// AdminOperateMsg appends text to the device inbox. from is the admin
+// identity, not a WireGuard key.
+type AdminOperateMsg struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	OpId          string                 `protobuf:"bytes,1,opt,name=op_id,json=opId,proto3" json:"op_id,omitempty"`
+	From          string                 `protobuf:"bytes,2,opt,name=from,proto3" json:"from,omitempty"`
+	Text          string                 `protobuf:"bytes,3,opt,name=text,proto3" json:"text,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AdminOperateMsg) Reset() {
+	*x = AdminOperateMsg{}
+	mi := &file_bamboo_v1_coordinator_proto_msgTypes[24]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AdminOperateMsg) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AdminOperateMsg) ProtoMessage() {}
+
+func (x *AdminOperateMsg) ProtoReflect() protoreflect.Message {
+	mi := &file_bamboo_v1_coordinator_proto_msgTypes[24]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AdminOperateMsg.ProtoReflect.Descriptor instead.
+func (*AdminOperateMsg) Descriptor() ([]byte, []int) {
+	return file_bamboo_v1_coordinator_proto_rawDescGZIP(), []int{24}
+}
+
+func (x *AdminOperateMsg) GetOpId() string {
+	if x != nil {
+		return x.OpId
+	}
+	return ""
+}
+
+func (x *AdminOperateMsg) GetFrom() string {
+	if x != nil {
+		return x.From
+	}
+	return ""
+}
+
+func (x *AdminOperateMsg) GetText() string {
+	if x != nil {
+		return x.Text
+	}
+	return ""
+}
+
+// AdminOperatePut writes a file inside the device session directory.
+type AdminOperatePut struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	OpId          string                 `protobuf:"bytes,1,opt,name=op_id,json=opId,proto3" json:"op_id,omitempty"`
+	Path          string                 `protobuf:"bytes,2,opt,name=path,proto3" json:"path,omitempty"`
+	Data          []byte                 `protobuf:"bytes,3,opt,name=data,proto3" json:"data,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AdminOperatePut) Reset() {
+	*x = AdminOperatePut{}
+	mi := &file_bamboo_v1_coordinator_proto_msgTypes[25]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AdminOperatePut) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AdminOperatePut) ProtoMessage() {}
+
+func (x *AdminOperatePut) ProtoReflect() protoreflect.Message {
+	mi := &file_bamboo_v1_coordinator_proto_msgTypes[25]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AdminOperatePut.ProtoReflect.Descriptor instead.
+func (*AdminOperatePut) Descriptor() ([]byte, []int) {
+	return file_bamboo_v1_coordinator_proto_rawDescGZIP(), []int{25}
+}
+
+func (x *AdminOperatePut) GetOpId() string {
+	if x != nil {
+		return x.OpId
+	}
+	return ""
+}
+
+func (x *AdminOperatePut) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
+}
+
+func (x *AdminOperatePut) GetData() []byte {
+	if x != nil {
+		return x.Data
+	}
+	return nil
+}
+
+// AdminOperateGet reads a file from the device session directory.
+type AdminOperateGet struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	OpId          string                 `protobuf:"bytes,1,opt,name=op_id,json=opId,proto3" json:"op_id,omitempty"`
+	Path          string                 `protobuf:"bytes,2,opt,name=path,proto3" json:"path,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AdminOperateGet) Reset() {
+	*x = AdminOperateGet{}
+	mi := &file_bamboo_v1_coordinator_proto_msgTypes[26]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AdminOperateGet) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AdminOperateGet) ProtoMessage() {}
+
+func (x *AdminOperateGet) ProtoReflect() protoreflect.Message {
+	mi := &file_bamboo_v1_coordinator_proto_msgTypes[26]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AdminOperateGet.ProtoReflect.Descriptor instead.
+func (*AdminOperateGet) Descriptor() ([]byte, []int) {
+	return file_bamboo_v1_coordinator_proto_rawDescGZIP(), []int{26}
+}
+
+func (x *AdminOperateGet) GetOpId() string {
+	if x != nil {
+		return x.OpId
+	}
+	return ""
+}
+
+func (x *AdminOperateGet) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
+}
+
+// AdminOperatePTYStart opens a shell. An empty argv asks the device
+// for its default shell.
+type AdminOperatePTYStart struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	OpId          string                 `protobuf:"bytes,1,opt,name=op_id,json=opId,proto3" json:"op_id,omitempty"`
+	Argv          []string               `protobuf:"bytes,2,rep,name=argv,proto3" json:"argv,omitempty"`
+	Rows          int32                  `protobuf:"varint,3,opt,name=rows,proto3" json:"rows,omitempty"`
+	Cols          int32                  `protobuf:"varint,4,opt,name=cols,proto3" json:"cols,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AdminOperatePTYStart) Reset() {
+	*x = AdminOperatePTYStart{}
+	mi := &file_bamboo_v1_coordinator_proto_msgTypes[27]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AdminOperatePTYStart) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AdminOperatePTYStart) ProtoMessage() {}
+
+func (x *AdminOperatePTYStart) ProtoReflect() protoreflect.Message {
+	mi := &file_bamboo_v1_coordinator_proto_msgTypes[27]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AdminOperatePTYStart.ProtoReflect.Descriptor instead.
+func (*AdminOperatePTYStart) Descriptor() ([]byte, []int) {
+	return file_bamboo_v1_coordinator_proto_rawDescGZIP(), []int{27}
+}
+
+func (x *AdminOperatePTYStart) GetOpId() string {
+	if x != nil {
+		return x.OpId
+	}
+	return ""
+}
+
+func (x *AdminOperatePTYStart) GetArgv() []string {
+	if x != nil {
+		return x.Argv
+	}
+	return nil
+}
+
+func (x *AdminOperatePTYStart) GetRows() int32 {
+	if x != nil {
+		return x.Rows
+	}
+	return 0
+}
+
+func (x *AdminOperatePTYStart) GetCols() int32 {
+	if x != nil {
+		return x.Cols
+	}
+	return 0
+}
+
+// AdminOperatePTYIn is keystrokes for the shell opened by pty_start.
+type AdminOperatePTYIn struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	OpId          string                 `protobuf:"bytes,1,opt,name=op_id,json=opId,proto3" json:"op_id,omitempty"`
+	Data          []byte                 `protobuf:"bytes,2,opt,name=data,proto3" json:"data,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AdminOperatePTYIn) Reset() {
+	*x = AdminOperatePTYIn{}
+	mi := &file_bamboo_v1_coordinator_proto_msgTypes[28]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AdminOperatePTYIn) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AdminOperatePTYIn) ProtoMessage() {}
+
+func (x *AdminOperatePTYIn) ProtoReflect() protoreflect.Message {
+	mi := &file_bamboo_v1_coordinator_proto_msgTypes[28]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AdminOperatePTYIn.ProtoReflect.Descriptor instead.
+func (*AdminOperatePTYIn) Descriptor() ([]byte, []int) {
+	return file_bamboo_v1_coordinator_proto_rawDescGZIP(), []int{28}
+}
+
+func (x *AdminOperatePTYIn) GetOpId() string {
+	if x != nil {
+		return x.OpId
+	}
+	return ""
+}
+
+func (x *AdminOperatePTYIn) GetData() []byte {
+	if x != nil {
+		return x.Data
+	}
+	return nil
+}
+
+// AdminOperatePTYWinsize changes the shell window size.
+type AdminOperatePTYWinsize struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	OpId          string                 `protobuf:"bytes,1,opt,name=op_id,json=opId,proto3" json:"op_id,omitempty"`
+	Rows          int32                  `protobuf:"varint,2,opt,name=rows,proto3" json:"rows,omitempty"`
+	Cols          int32                  `protobuf:"varint,3,opt,name=cols,proto3" json:"cols,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AdminOperatePTYWinsize) Reset() {
+	*x = AdminOperatePTYWinsize{}
+	mi := &file_bamboo_v1_coordinator_proto_msgTypes[29]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AdminOperatePTYWinsize) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AdminOperatePTYWinsize) ProtoMessage() {}
+
+func (x *AdminOperatePTYWinsize) ProtoReflect() protoreflect.Message {
+	mi := &file_bamboo_v1_coordinator_proto_msgTypes[29]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AdminOperatePTYWinsize.ProtoReflect.Descriptor instead.
+func (*AdminOperatePTYWinsize) Descriptor() ([]byte, []int) {
+	return file_bamboo_v1_coordinator_proto_rawDescGZIP(), []int{29}
+}
+
+func (x *AdminOperatePTYWinsize) GetOpId() string {
+	if x != nil {
+		return x.OpId
+	}
+	return ""
+}
+
+func (x *AdminOperatePTYWinsize) GetRows() int32 {
+	if x != nil {
+		return x.Rows
+	}
+	return 0
+}
+
+func (x *AdminOperatePTYWinsize) GetCols() int32 {
+	if x != nil {
+		return x.Cols
+	}
+	return 0
+}
+
+// AdminOperatePTYClose asks the device to stop the shell.
+type AdminOperatePTYClose struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	OpId          string                 `protobuf:"bytes,1,opt,name=op_id,json=opId,proto3" json:"op_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AdminOperatePTYClose) Reset() {
+	*x = AdminOperatePTYClose{}
+	mi := &file_bamboo_v1_coordinator_proto_msgTypes[30]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AdminOperatePTYClose) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AdminOperatePTYClose) ProtoMessage() {}
+
+func (x *AdminOperatePTYClose) ProtoReflect() protoreflect.Message {
+	mi := &file_bamboo_v1_coordinator_proto_msgTypes[30]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AdminOperatePTYClose.ProtoReflect.Descriptor instead.
+func (*AdminOperatePTYClose) Descriptor() ([]byte, []int) {
+	return file_bamboo_v1_coordinator_proto_rawDescGZIP(), []int{30}
+}
+
+func (x *AdminOperatePTYClose) GetOpId() string {
+	if x != nil {
+		return x.OpId
+	}
+	return ""
+}
+
 var File_bamboo_v1_coordinator_proto protoreflect.FileDescriptor
 
 const file_bamboo_v1_coordinator_proto_rawDesc = "" +
@@ -1492,13 +2349,65 @@ const file_bamboo_v1_coordinator_proto_rawDesc = "" +
 	"\x06filter\x18\x03 \x01(\tR\x06filter\"b\n" +
 	"\x11ListPeersResponse\x12%\n" +
 	"\x05peers\x18\x01 \x03(\v2\x0f.bamboo.v1.PeerR\x05peers\x12&\n" +
-	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken*t\n" +
+	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\"\xc8\x01\n" +
+	"\x12DeviceOperateFrame\x125\n" +
+	"\x05hello\x18\x01 \x01(\v2\x1d.bamboo.v1.DeviceOperateHelloH\x00R\x05hello\x128\n" +
+	"\x06result\x18\x02 \x01(\v2\x1e.bamboo.v1.DeviceOperateResultH\x00R\x06result\x128\n" +
+	"\x06output\x18\x03 \x01(\v2\x1e.bamboo.v1.DeviceOperateOutputH\x00R\x06outputB\a\n" +
+	"\x05frame\"P\n" +
+	"\x12DeviceOperateHello\x12\x17\n" +
+	"\apeer_id\x18\x01 \x01(\tR\x06peerId\x12!\n" +
+	"\fexec_enabled\x18\x02 \x01(\bR\vexecEnabled\"\x81\x01\n" +
+	"\x13DeviceOperateResult\x12\x13\n" +
+	"\x05op_id\x18\x01 \x01(\tR\x04opId\x12\x0e\n" +
+	"\x02ok\x18\x02 \x01(\bR\x02ok\x12\x14\n" +
+	"\x05error\x18\x03 \x01(\tR\x05error\x12\x1b\n" +
+	"\texit_code\x18\x04 \x01(\x05R\bexitCode\x12\x12\n" +
+	"\x04data\x18\x05 \x01(\fR\x04data\">\n" +
+	"\x13DeviceOperateOutput\x12\x13\n" +
+	"\x05op_id\x18\x01 \x01(\tR\x04opId\x12\x12\n" +
+	"\x04data\x18\x02 \x01(\fR\x04data\"\xa9\x03\n" +
+	"\x11AdminOperateFrame\x12.\n" +
+	"\x03msg\x18\x01 \x01(\v2\x1a.bamboo.v1.AdminOperateMsgH\x00R\x03msg\x12.\n" +
+	"\x03put\x18\x02 \x01(\v2\x1a.bamboo.v1.AdminOperatePutH\x00R\x03put\x12.\n" +
+	"\x03get\x18\x03 \x01(\v2\x1a.bamboo.v1.AdminOperateGetH\x00R\x03get\x12>\n" +
+	"\tpty_start\x18\x04 \x01(\v2\x1f.bamboo.v1.AdminOperatePTYStartH\x00R\bptyStart\x125\n" +
+	"\x06pty_in\x18\x05 \x01(\v2\x1c.bamboo.v1.AdminOperatePTYInH\x00R\x05ptyIn\x12D\n" +
+	"\vpty_winsize\x18\x06 \x01(\v2!.bamboo.v1.AdminOperatePTYWinsizeH\x00R\n" +
+	"ptyWinsize\x12>\n" +
+	"\tpty_close\x18\a \x01(\v2\x1f.bamboo.v1.AdminOperatePTYCloseH\x00R\bptyCloseB\a\n" +
+	"\x05frame\"N\n" +
+	"\x0fAdminOperateMsg\x12\x13\n" +
+	"\x05op_id\x18\x01 \x01(\tR\x04opId\x12\x12\n" +
+	"\x04from\x18\x02 \x01(\tR\x04from\x12\x12\n" +
+	"\x04text\x18\x03 \x01(\tR\x04text\"N\n" +
+	"\x0fAdminOperatePut\x12\x13\n" +
+	"\x05op_id\x18\x01 \x01(\tR\x04opId\x12\x12\n" +
+	"\x04path\x18\x02 \x01(\tR\x04path\x12\x12\n" +
+	"\x04data\x18\x03 \x01(\fR\x04data\":\n" +
+	"\x0fAdminOperateGet\x12\x13\n" +
+	"\x05op_id\x18\x01 \x01(\tR\x04opId\x12\x12\n" +
+	"\x04path\x18\x02 \x01(\tR\x04path\"g\n" +
+	"\x14AdminOperatePTYStart\x12\x13\n" +
+	"\x05op_id\x18\x01 \x01(\tR\x04opId\x12\x12\n" +
+	"\x04argv\x18\x02 \x03(\tR\x04argv\x12\x12\n" +
+	"\x04rows\x18\x03 \x01(\x05R\x04rows\x12\x12\n" +
+	"\x04cols\x18\x04 \x01(\x05R\x04cols\"<\n" +
+	"\x11AdminOperatePTYIn\x12\x13\n" +
+	"\x05op_id\x18\x01 \x01(\tR\x04opId\x12\x12\n" +
+	"\x04data\x18\x02 \x01(\fR\x04data\"U\n" +
+	"\x16AdminOperatePTYWinsize\x12\x13\n" +
+	"\x05op_id\x18\x01 \x01(\tR\x04opId\x12\x12\n" +
+	"\x04rows\x18\x02 \x01(\x05R\x04rows\x12\x12\n" +
+	"\x04cols\x18\x03 \x01(\x05R\x04cols\"+\n" +
+	"\x14AdminOperatePTYClose\x12\x13\n" +
+	"\x05op_id\x18\x01 \x01(\tR\x04opId*t\n" +
 	"\n" +
 	"PeerStatus\x12\x1b\n" +
 	"\x17PEER_STATUS_UNSPECIFIED\x10\x00\x12\x16\n" +
 	"\x12PEER_STATUS_ONLINE\x10\x01\x12\x17\n" +
 	"\x13PEER_STATUS_OFFLINE\x10\x02\x12\x18\n" +
-	"\x14PEER_STATUS_DISABLED\x10\x032\xc0\x03\n" +
+	"\x14PEER_STATUS_DISABLED\x10\x032\x8c\x04\n" +
 	"\x12CoordinatorService\x12C\n" +
 	"\bRegister\x12\x1a.bamboo.v1.RegisterRequest\x1a\x1b.bamboo.v1.RegisterResponse\x12I\n" +
 	"\n" +
@@ -1507,7 +2416,8 @@ const file_bamboo_v1_coordinator_proto_rawDesc = "" +
 	"\n" +
 	"WatchPeers\x12\x1c.bamboo.v1.WatchPeersRequest\x1a\x1a.bamboo.v1.WatchPeersEvent0\x01\x12@\n" +
 	"\aGetPeer\x12\x19.bamboo.v1.GetPeerRequest\x1a\x1a.bamboo.v1.GetPeerResponse\x12F\n" +
-	"\tListPeers\x12\x1b.bamboo.v1.ListPeersRequest\x1a\x1c.bamboo.v1.ListPeersResponseB;Z9github.com/hanfour/bamboo/proto/gen/go/bamboo/v1;bamboov1b\x06proto3"
+	"\tListPeers\x12\x1b.bamboo.v1.ListPeersRequest\x1a\x1c.bamboo.v1.ListPeersResponse\x12J\n" +
+	"\aOperate\x12\x1d.bamboo.v1.DeviceOperateFrame\x1a\x1c.bamboo.v1.AdminOperateFrame(\x010\x01B;Z9github.com/hanfour/bamboo/proto/gen/go/bamboo/v1;bamboov1b\x06proto3"
 
 var (
 	file_bamboo_v1_coordinator_proto_rawDescOnce sync.Once
@@ -1522,34 +2432,46 @@ func file_bamboo_v1_coordinator_proto_rawDescGZIP() []byte {
 }
 
 var file_bamboo_v1_coordinator_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_bamboo_v1_coordinator_proto_msgTypes = make([]protoimpl.MessageInfo, 19)
+var file_bamboo_v1_coordinator_proto_msgTypes = make([]protoimpl.MessageInfo, 31)
 var file_bamboo_v1_coordinator_proto_goTypes = []any{
-	(PeerStatus)(0),               // 0: bamboo.v1.PeerStatus
-	(*Peer)(nil),                  // 1: bamboo.v1.Peer
-	(*RegisterRequest)(nil),       // 2: bamboo.v1.RegisterRequest
-	(*RegisterResponse)(nil),      // 3: bamboo.v1.RegisterResponse
-	(*RelayServer)(nil),           // 4: bamboo.v1.RelayServer
-	(*UnregisterRequest)(nil),     // 5: bamboo.v1.UnregisterRequest
-	(*UnregisterResponse)(nil),    // 6: bamboo.v1.UnregisterResponse
-	(*HeartbeatRequest)(nil),      // 7: bamboo.v1.HeartbeatRequest
-	(*HeartbeatResponse)(nil),     // 8: bamboo.v1.HeartbeatResponse
-	(*WatchPeersRequest)(nil),     // 9: bamboo.v1.WatchPeersRequest
-	(*WatchPeersEvent)(nil),       // 10: bamboo.v1.WatchPeersEvent
-	(*PeerAdded)(nil),             // 11: bamboo.v1.PeerAdded
-	(*PeerUpdated)(nil),           // 12: bamboo.v1.PeerUpdated
-	(*PeerRemoved)(nil),           // 13: bamboo.v1.PeerRemoved
-	(*PolicyChanged)(nil),         // 14: bamboo.v1.PolicyChanged
-	(*RelaysChanged)(nil),         // 15: bamboo.v1.RelaysChanged
-	(*GetPeerRequest)(nil),        // 16: bamboo.v1.GetPeerRequest
-	(*GetPeerResponse)(nil),       // 17: bamboo.v1.GetPeerResponse
-	(*ListPeersRequest)(nil),      // 18: bamboo.v1.ListPeersRequest
-	(*ListPeersResponse)(nil),     // 19: bamboo.v1.ListPeersResponse
-	(*timestamppb.Timestamp)(nil), // 20: google.protobuf.Timestamp
+	(PeerStatus)(0),                // 0: bamboo.v1.PeerStatus
+	(*Peer)(nil),                   // 1: bamboo.v1.Peer
+	(*RegisterRequest)(nil),        // 2: bamboo.v1.RegisterRequest
+	(*RegisterResponse)(nil),       // 3: bamboo.v1.RegisterResponse
+	(*RelayServer)(nil),            // 4: bamboo.v1.RelayServer
+	(*UnregisterRequest)(nil),      // 5: bamboo.v1.UnregisterRequest
+	(*UnregisterResponse)(nil),     // 6: bamboo.v1.UnregisterResponse
+	(*HeartbeatRequest)(nil),       // 7: bamboo.v1.HeartbeatRequest
+	(*HeartbeatResponse)(nil),      // 8: bamboo.v1.HeartbeatResponse
+	(*WatchPeersRequest)(nil),      // 9: bamboo.v1.WatchPeersRequest
+	(*WatchPeersEvent)(nil),        // 10: bamboo.v1.WatchPeersEvent
+	(*PeerAdded)(nil),              // 11: bamboo.v1.PeerAdded
+	(*PeerUpdated)(nil),            // 12: bamboo.v1.PeerUpdated
+	(*PeerRemoved)(nil),            // 13: bamboo.v1.PeerRemoved
+	(*PolicyChanged)(nil),          // 14: bamboo.v1.PolicyChanged
+	(*RelaysChanged)(nil),          // 15: bamboo.v1.RelaysChanged
+	(*GetPeerRequest)(nil),         // 16: bamboo.v1.GetPeerRequest
+	(*GetPeerResponse)(nil),        // 17: bamboo.v1.GetPeerResponse
+	(*ListPeersRequest)(nil),       // 18: bamboo.v1.ListPeersRequest
+	(*ListPeersResponse)(nil),      // 19: bamboo.v1.ListPeersResponse
+	(*DeviceOperateFrame)(nil),     // 20: bamboo.v1.DeviceOperateFrame
+	(*DeviceOperateHello)(nil),     // 21: bamboo.v1.DeviceOperateHello
+	(*DeviceOperateResult)(nil),    // 22: bamboo.v1.DeviceOperateResult
+	(*DeviceOperateOutput)(nil),    // 23: bamboo.v1.DeviceOperateOutput
+	(*AdminOperateFrame)(nil),      // 24: bamboo.v1.AdminOperateFrame
+	(*AdminOperateMsg)(nil),        // 25: bamboo.v1.AdminOperateMsg
+	(*AdminOperatePut)(nil),        // 26: bamboo.v1.AdminOperatePut
+	(*AdminOperateGet)(nil),        // 27: bamboo.v1.AdminOperateGet
+	(*AdminOperatePTYStart)(nil),   // 28: bamboo.v1.AdminOperatePTYStart
+	(*AdminOperatePTYIn)(nil),      // 29: bamboo.v1.AdminOperatePTYIn
+	(*AdminOperatePTYWinsize)(nil), // 30: bamboo.v1.AdminOperatePTYWinsize
+	(*AdminOperatePTYClose)(nil),   // 31: bamboo.v1.AdminOperatePTYClose
+	(*timestamppb.Timestamp)(nil),  // 32: google.protobuf.Timestamp
 }
 var file_bamboo_v1_coordinator_proto_depIdxs = []int32{
 	0,  // 0: bamboo.v1.Peer.status:type_name -> bamboo.v1.PeerStatus
-	20, // 1: bamboo.v1.Peer.created_at:type_name -> google.protobuf.Timestamp
-	20, // 2: bamboo.v1.Peer.last_seen_at:type_name -> google.protobuf.Timestamp
+	32, // 1: bamboo.v1.Peer.created_at:type_name -> google.protobuf.Timestamp
+	32, // 2: bamboo.v1.Peer.last_seen_at:type_name -> google.protobuf.Timestamp
 	1,  // 3: bamboo.v1.RegisterResponse.self:type_name -> bamboo.v1.Peer
 	1,  // 4: bamboo.v1.RegisterResponse.peers:type_name -> bamboo.v1.Peer
 	4,  // 5: bamboo.v1.RegisterResponse.relay_servers:type_name -> bamboo.v1.RelayServer
@@ -1563,23 +2485,35 @@ var file_bamboo_v1_coordinator_proto_depIdxs = []int32{
 	4,  // 13: bamboo.v1.RelaysChanged.relay_servers:type_name -> bamboo.v1.RelayServer
 	1,  // 14: bamboo.v1.GetPeerResponse.peer:type_name -> bamboo.v1.Peer
 	1,  // 15: bamboo.v1.ListPeersResponse.peers:type_name -> bamboo.v1.Peer
-	2,  // 16: bamboo.v1.CoordinatorService.Register:input_type -> bamboo.v1.RegisterRequest
-	5,  // 17: bamboo.v1.CoordinatorService.Unregister:input_type -> bamboo.v1.UnregisterRequest
-	7,  // 18: bamboo.v1.CoordinatorService.Heartbeat:input_type -> bamboo.v1.HeartbeatRequest
-	9,  // 19: bamboo.v1.CoordinatorService.WatchPeers:input_type -> bamboo.v1.WatchPeersRequest
-	16, // 20: bamboo.v1.CoordinatorService.GetPeer:input_type -> bamboo.v1.GetPeerRequest
-	18, // 21: bamboo.v1.CoordinatorService.ListPeers:input_type -> bamboo.v1.ListPeersRequest
-	3,  // 22: bamboo.v1.CoordinatorService.Register:output_type -> bamboo.v1.RegisterResponse
-	6,  // 23: bamboo.v1.CoordinatorService.Unregister:output_type -> bamboo.v1.UnregisterResponse
-	8,  // 24: bamboo.v1.CoordinatorService.Heartbeat:output_type -> bamboo.v1.HeartbeatResponse
-	10, // 25: bamboo.v1.CoordinatorService.WatchPeers:output_type -> bamboo.v1.WatchPeersEvent
-	17, // 26: bamboo.v1.CoordinatorService.GetPeer:output_type -> bamboo.v1.GetPeerResponse
-	19, // 27: bamboo.v1.CoordinatorService.ListPeers:output_type -> bamboo.v1.ListPeersResponse
-	22, // [22:28] is the sub-list for method output_type
-	16, // [16:22] is the sub-list for method input_type
-	16, // [16:16] is the sub-list for extension type_name
-	16, // [16:16] is the sub-list for extension extendee
-	0,  // [0:16] is the sub-list for field type_name
+	21, // 16: bamboo.v1.DeviceOperateFrame.hello:type_name -> bamboo.v1.DeviceOperateHello
+	22, // 17: bamboo.v1.DeviceOperateFrame.result:type_name -> bamboo.v1.DeviceOperateResult
+	23, // 18: bamboo.v1.DeviceOperateFrame.output:type_name -> bamboo.v1.DeviceOperateOutput
+	25, // 19: bamboo.v1.AdminOperateFrame.msg:type_name -> bamboo.v1.AdminOperateMsg
+	26, // 20: bamboo.v1.AdminOperateFrame.put:type_name -> bamboo.v1.AdminOperatePut
+	27, // 21: bamboo.v1.AdminOperateFrame.get:type_name -> bamboo.v1.AdminOperateGet
+	28, // 22: bamboo.v1.AdminOperateFrame.pty_start:type_name -> bamboo.v1.AdminOperatePTYStart
+	29, // 23: bamboo.v1.AdminOperateFrame.pty_in:type_name -> bamboo.v1.AdminOperatePTYIn
+	30, // 24: bamboo.v1.AdminOperateFrame.pty_winsize:type_name -> bamboo.v1.AdminOperatePTYWinsize
+	31, // 25: bamboo.v1.AdminOperateFrame.pty_close:type_name -> bamboo.v1.AdminOperatePTYClose
+	2,  // 26: bamboo.v1.CoordinatorService.Register:input_type -> bamboo.v1.RegisterRequest
+	5,  // 27: bamboo.v1.CoordinatorService.Unregister:input_type -> bamboo.v1.UnregisterRequest
+	7,  // 28: bamboo.v1.CoordinatorService.Heartbeat:input_type -> bamboo.v1.HeartbeatRequest
+	9,  // 29: bamboo.v1.CoordinatorService.WatchPeers:input_type -> bamboo.v1.WatchPeersRequest
+	16, // 30: bamboo.v1.CoordinatorService.GetPeer:input_type -> bamboo.v1.GetPeerRequest
+	18, // 31: bamboo.v1.CoordinatorService.ListPeers:input_type -> bamboo.v1.ListPeersRequest
+	20, // 32: bamboo.v1.CoordinatorService.Operate:input_type -> bamboo.v1.DeviceOperateFrame
+	3,  // 33: bamboo.v1.CoordinatorService.Register:output_type -> bamboo.v1.RegisterResponse
+	6,  // 34: bamboo.v1.CoordinatorService.Unregister:output_type -> bamboo.v1.UnregisterResponse
+	8,  // 35: bamboo.v1.CoordinatorService.Heartbeat:output_type -> bamboo.v1.HeartbeatResponse
+	10, // 36: bamboo.v1.CoordinatorService.WatchPeers:output_type -> bamboo.v1.WatchPeersEvent
+	17, // 37: bamboo.v1.CoordinatorService.GetPeer:output_type -> bamboo.v1.GetPeerResponse
+	19, // 38: bamboo.v1.CoordinatorService.ListPeers:output_type -> bamboo.v1.ListPeersResponse
+	24, // 39: bamboo.v1.CoordinatorService.Operate:output_type -> bamboo.v1.AdminOperateFrame
+	33, // [33:40] is the sub-list for method output_type
+	26, // [26:33] is the sub-list for method input_type
+	26, // [26:26] is the sub-list for extension type_name
+	26, // [26:26] is the sub-list for extension extendee
+	0,  // [0:26] is the sub-list for field type_name
 }
 
 func init() { file_bamboo_v1_coordinator_proto_init() }
@@ -1598,13 +2532,27 @@ func file_bamboo_v1_coordinator_proto_init() {
 		(*WatchPeersEvent_PolicyChanged)(nil),
 		(*WatchPeersEvent_RelaysChanged)(nil),
 	}
+	file_bamboo_v1_coordinator_proto_msgTypes[19].OneofWrappers = []any{
+		(*DeviceOperateFrame_Hello)(nil),
+		(*DeviceOperateFrame_Result)(nil),
+		(*DeviceOperateFrame_Output)(nil),
+	}
+	file_bamboo_v1_coordinator_proto_msgTypes[23].OneofWrappers = []any{
+		(*AdminOperateFrame_Msg)(nil),
+		(*AdminOperateFrame_Put)(nil),
+		(*AdminOperateFrame_Get)(nil),
+		(*AdminOperateFrame_PtyStart)(nil),
+		(*AdminOperateFrame_PtyIn)(nil),
+		(*AdminOperateFrame_PtyWinsize)(nil),
+		(*AdminOperateFrame_PtyClose)(nil),
+	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_bamboo_v1_coordinator_proto_rawDesc), len(file_bamboo_v1_coordinator_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   19,
+			NumMessages:   31,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

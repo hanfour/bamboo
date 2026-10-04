@@ -55,13 +55,24 @@ type relaySession struct {
 	fallbackCancel context.CancelFunc
 }
 
+var flagUpSessionExec bool
+
+func init() {
+	upCmd.Flags().BoolVar(&flagUpSessionExec, "session-exec", false, "let mesh peers run commands on this device; file transfer and messages listen either way")
+}
+
 var upCmd = &cobra.Command{
 	Use:   "up",
 	Short: "Register with the controller and bring up the WireGuard tunnel",
 	Long: `Register with the controller, generate (or reuse) a stable Curve25519
 key pair, build the WireGuard configuration, and bring up the local
 interface. The command runs in the foreground until interrupted with
-Ctrl-C, at which point the interface is removed.`,
+Ctrl-C, at which point the interface is removed.
+
+While the tunnel is up, this device also listens for session requests
+on its mesh IP at port 54110. The allowlist is the controller's peer
+set, and it follows peer join and leave. File transfer and messages
+are accepted from those peers. Commands run only with --session-exec.`,
 	RunE: runUp,
 }
 
@@ -225,6 +236,8 @@ func runUp(cmd *cobra.Command, _ []string) error {
 	// the whole daemon.
 	daemonCtx, daemonCancel := context.WithCancel(cmd.Context())
 	defer daemonCancel()
+	startMeshSession(daemonCtx, priv, resp.GetSelf().GetIp(), cache)
+	startOperateDesk(daemonCtx, cli.Coordinator, session, resp.GetSelf().GetId())
 
 	// onRelaysChanged is the §4 P2 multi-relay stage 4b-2 swap
 	// handler. When the controller pushes a fresh eligible-relay

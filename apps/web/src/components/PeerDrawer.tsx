@@ -2,7 +2,7 @@
 
 'use client';
 
-import { useRef, useState, useTransition } from 'react';
+import { useMemo, useRef, useState, useTransition } from 'react';
 import { useTranslations } from 'next-intl';
 import {
  deletePeerAction,
@@ -16,6 +16,8 @@ import {
  setUsingExitNodeAction,
 } from '@/lib/actions';
 import { useDialogA11y } from '@/hooks/useDialogA11y';
+import { DeviceDesk } from '@/components/DeviceDesk';
+import { deviceDeskActions } from '@/components/deviceDeskActions';
 import type {
  PeerBandwidthSample,
  PeerConnectionEvent,
@@ -179,6 +181,7 @@ function DrawerBody({
 }) {
  const t = useTranslations('peers.drawer');
  const [error, setError] = useState<string | null>(null);
+ const desk = useMemo(() => deviceDeskActions(peer.id), [peer.id]);
 
  return (
  <div className="space-y-6">
@@ -261,6 +264,10 @@ function DrawerBody({
  <AdvertiseSection peer={peer} routeConflicts={routeConflicts} onError={setError} />
 
  <UseExitNodeSection peer={peer} options={exitNodeOptions} onError={setError} />
+
+ <Section title={t('desk.title')}>
+ <DeviceDesk meshIP={peer.ip} peerKey={peer.wireguardPublicKey ?? ''} actions={desk} />
+ </Section>
 
  <Section title={t('sections.actions')}>
  <DisableToggle peer={peer} onError={setError} />

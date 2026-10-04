@@ -17,6 +17,7 @@ import (
 	"github.com/hanfour/bamboo/apps/controller/internal/events"
 	"github.com/hanfour/bamboo/apps/controller/internal/ipalloc"
 	"github.com/hanfour/bamboo/apps/controller/internal/nat64"
+	"github.com/hanfour/bamboo/apps/controller/internal/operate"
 	"github.com/hanfour/bamboo/apps/controller/internal/policy"
 	bamboov1 "github.com/hanfour/bamboo/proto/gen/go/bamboo/v1"
 	"google.golang.org/grpc/codes"
@@ -37,6 +38,7 @@ type CoordinatorHandler struct {
 	policies *repo.Policies
 	auth     *AuthHandler
 	bus      *events.Bus
+	ops      *operate.Hub
 	// pool opens per-request WithTenant transactions for tenant-scoped
 	// tables so the RLS backstop (ADR-0014) sees app.tenant_id.
 	// tenants and relay_servers are not RLS-scoped and stay on the pool.
@@ -371,6 +373,7 @@ func NewCoordinatorHandler(pool *db.Pool, auth *AuthHandler, bus *events.Bus) *C
 		policies: repo.NewPolicies(pool),
 		auth:     auth,
 		bus:      bus,
+		ops:      operate.NewHub(),
 		pool:     pool,
 	}
 }

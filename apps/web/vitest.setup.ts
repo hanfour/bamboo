@@ -4,4 +4,13 @@
 // toHaveAttribute, …) on vitest's expect AND augments its Assertion types,
 // so component tests get the matchers with full type-checking. Imported via
 // setupFiles in vitest.config.ts.
+import { afterEach } from 'vitest';
+import { cleanup } from '@testing-library/react';
 import '@testing-library/jest-dom/vitest';
+
+// Vitest does not enable globals, so Testing Library never sees a global
+// afterEach and leaves each render in the document. Later tests then match
+// every copy. Unmount explicitly.
+afterEach(() => {
+  cleanup();
+});

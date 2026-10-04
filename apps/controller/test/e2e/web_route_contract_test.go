@@ -78,6 +78,16 @@ func TestWebRouteContract(t *testing.T) {
 		{method: http.MethodGet, path: "/api/v1/logs"},
 		{method: http.MethodGet, path: "/api/v1/dns"},
 		{method: http.MethodPut, path: "/api/v1/policy", noBody: true},
+
+		// Device desk (apps/web peers drawer + /api/peers desk proxies).
+		{method: http.MethodGet, path: "/api/v1/peers/" + dummyID + "/desk"},
+		{method: http.MethodPost, path: "/api/v1/peers/" + dummyID + "/desk/msg", noBody: true},
+		{method: http.MethodPost, path: "/api/v1/peers/" + dummyID + "/desk/put", noBody: true},
+		{method: http.MethodGet, path: "/api/v1/peers/" + dummyID + "/desk/get"},
+		{method: http.MethodPost, path: "/api/v1/peers/" + dummyID + "/desk/term", noBody: true},
+		{method: http.MethodPost, path: "/api/v1/peers/" + dummyID + "/desk/term/in", noBody: true},
+		{method: http.MethodDelete, path: "/api/v1/peers/" + dummyID + "/desk/term", noBody: true},
+		{method: http.MethodGet, path: "/api/v1/peers/" + dummyID + "/desk/term/out"},
 	}
 
 	// First probe a synthetic path that definitely doesn't exist so

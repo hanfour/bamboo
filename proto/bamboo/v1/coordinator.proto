@@ -28,6 +28,11 @@ service CoordinatorService {
 
   // ListPeers returns all peers visible to the caller (admin view).
   rpc ListPeers(ListPeersRequest) returns (ListPeersResponse);
+
+  // Operate is the admin desk. The device opens the stream; the
+  // controller sends messages, files, and terminal input back down
+  // it. The controller never dials a mesh address.
+  rpc Operate(stream DeviceOperateFrame) returns (stream AdminOperateFrame);
 }
 
 // PeerStatus indicates whether a peer is reachable.
@@ -211,4 +216,102 @@ message ListPeersRequest {
 message ListPeersResponse {
   repeated Peer peers = 1;
   string next_page_token = 2;
+}
+
+// DeviceOperateFrame is one frame on the device-to-controller half of
+// Operate. The first frame is hello. Later frames are results and
+// terminal output.
+message DeviceOperateFrame {
+  oneof frame {
+    DeviceOperateHello hello = 1;
+    DeviceOperateResult result = 2;
+    DeviceOperateOutput output = 3;
+  }
+}
+
+// DeviceOperateHello binds the stream to the device's peer and reports
+// whether that device will accept a terminal.
+message DeviceOperateHello {
+  string peer_id = 1;
+  bool exec_enabled = 2;
+}
+
+// DeviceOperateResult answers one admin operation. A terminal start
+// sends this twice: once when the shell is open, and again when it
+// exits. exit_code is meaningful on that second result.
+message DeviceOperateResult {
+  string op_id = 1;
+  bool ok = 2;
+  string error = 3;
+  int32 exit_code = 4;
+  bytes data = 5;
+}
+
+// DeviceOperateOutput is terminal bytes for an open shell. op_id is
+// the pty_start operation those bytes belong to.
+message DeviceOperateOutput {
+  string op_id = 1;
+  bytes data = 2;
+}
+
+// AdminOperateFrame is one frame on the controller-to-device half of
+// Operate.
+message AdminOperateFrame {
+  oneof frame {
+    AdminOperateMsg msg = 1;
+    AdminOperatePut put = 2;
+    AdminOperateGet get = 3;
+    AdminOperatePTYStart pty_start = 4;
+    AdminOperatePTYIn pty_in = 5;
+    AdminOperatePTYWinsize pty_winsize = 6;
+    AdminOperatePTYClose pty_close = 7;
+  }
+}
+
+// AdminOperateMsg appends text to the device inbox. from is the admin
+// identity, not a WireGuard key.
+message AdminOperateMsg {
+  string op_id = 1;
+  string from = 2;
+  string text = 3;
+}
+
+// AdminOperatePut writes a file inside the device session directory.
+message AdminOperatePut {
+  string op_id = 1;
+  string path = 2;
+  bytes data = 3;
+}
+
+// AdminOperateGet reads a file from the device session directory.
+message AdminOperateGet {
+  string op_id = 1;
+  string path = 2;
+}
+
+// AdminOperatePTYStart opens a shell. An empty argv asks the device
+// for its default shell.
+message AdminOperatePTYStart {
+  string op_id = 1;
+  repeated string argv = 2;
+  int32 rows = 3;
+  int32 cols = 4;
+}
+
+// AdminOperatePTYIn is keystrokes for the shell opened by pty_start.
+message AdminOperatePTYIn {
+  string op_id = 1;
+  bytes data = 2;
+}
+
+// AdminOperatePTYWinsize changes the shell window size.
+message AdminOperatePTYWinsize {
+  string op_id = 1;
+  int32 rows = 2;
+  int32 cols = 3;
+}
+
+// AdminOperatePTYClose asks the device to stop the shell.
+message AdminOperatePTYClose {
+  string op_id = 1;
 }
