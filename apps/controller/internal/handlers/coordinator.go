@@ -388,7 +388,7 @@ func (h *CoordinatorHandler) Register(ctx context.Context, req *bamboov1.Registe
 		return nil, status.Error(codes.InvalidArgument, "hostname is required")
 	}
 
-	tenant, ownerUserID, autoApprove, initialTags, err := h.resolveCredential(ctx, req)
+	tenant, ownerUserID, autoApprove, initialTags, renewOnly, err := h.resolveCredential(ctx, req)
 	if err != nil {
 		return nil, err
 	}
@@ -488,6 +488,11 @@ func (h *CoordinatorHandler) Register(ctx context.Context, req *bamboov1.Registe
 			}
 		}
 	} else {
+		// A peer-session token renews the peer it already names. It
+		// must not allocate a new IP when that row is gone.
+		if renewOnly {
+			return nil, status.Error(codes.PermissionDenied, "peer session cannot enroll a new peer")
+		}
 		// MagicDNS auto-slug: derive a DNS-safe label from the reported
 		// hostname and pick a non-colliding form within this tenant.
 		// Failing this is non-fatal — we'd rather a peer register without
@@ -968,15 +973,19 @@ func (h *CoordinatorHandler) loadPeerForMutation(ctx context.Context, peerID uui
 // resolveCredential chooses the tenant, owning user, and initial tags
 // for a Register call by precedence:
 //
-//  1. pre_auth_key_secret credential -> tenant from the key, owner =
+//  1. A peer-session bearer for an existing peer with the same
+//     wireguard public key. This re-registers that peer and does not
+//     redeem a pre-auth key. renewOnly is true: the token cannot
+//     enroll a different device.
+//  2. pre_auth_key_secret credential -> tenant from the key, owner =
 //     the user who minted the key (pre_auth_keys.created_by), tags =
 //     the key's tags (copied onto the new peer). A headless service
 //     therefore carries the minter's email for user:/group: rules and
 //     the key's tags for tag: rules.
-//  2. bearer_token credential -> tenant and user from the session JWT.
+//  3. bearer_token credential -> tenant and user from the session JWT.
 //     autoApprove is true because a verified user session is enough
 //     to enroll that person's own node.
-//  3. x-tenant-slug metadata fallback (dev convenience only — rejected
+//  4. x-tenant-slug metadata fallback (dev convenience only — rejected
 //     in prod mode where requireAuth=true). owner is nil, tags are
 //     empty, and autoApprove is true because there's no admin context
 //     to queue against; dev tooling expects immediate visibility.
@@ -988,44 +997,109 @@ func (h *CoordinatorHandler) loadPeerForMutation(ctx context.Context, peerID uui
 // onboarding credential) or a bearer/session token issued by the
 // controller. The REST adapter has its own corresponding check; this
 // path covers gRPC Register.
-func (h *CoordinatorHandler) resolveCredential(ctx context.Context, req *bamboov1.RegisterRequest) (tenant *repo.Tenant, ownerUserID *uuid.UUID, autoApprove bool, initialTags []string, err error) {
+func (h *CoordinatorHandler) resolveCredential(ctx context.Context, req *bamboov1.RegisterRequest) (tenant *repo.Tenant, ownerUserID *uuid.UUID, autoApprove bool, initialTags []string, renewOnly bool, err error) {
+	if tenant, owner, ok, perr := h.reusePeerSession(ctx, req); perr != nil {
+		return nil, nil, false, nil, false, perr
+	} else if ok {
+		return tenant, owner, true, nil, true, nil
+	}
+
 	if secret := req.GetPreAuthKeySecret(); secret != "" {
 		key, err := h.auth.redeemAndReturnKey(ctx, secret)
 		if err != nil {
-			return nil, nil, false, nil, err
+			return nil, nil, false, nil, false, err
 		}
 		t, err := h.tenants.GetByID(ctx, key.TenantID)
 		if err != nil {
-			return nil, nil, false, nil, status.Errorf(codes.Internal, "tenant by id: %v", err)
+			return nil, nil, false, nil, false, status.Errorf(codes.Internal, "tenant by id: %v", err)
 		}
-		return t, key.CreatedBy, key.AutoApprove, key.Tags, nil
+		return t, key.CreatedBy, key.AutoApprove, key.Tags, false, nil
 	}
 
 	if token := req.GetBearerToken(); token != "" {
 		t, userID, err := h.auth.resolveBearerToken(ctx, token)
 		if err != nil {
-			return nil, nil, false, nil, err
+			return nil, nil, false, nil, false, err
 		}
 		// Bearer-token register implies an authenticated user —
 		// auto-approve so a person signing in to add their own laptop
 		// doesn't have to click "approve" on their own device.
-		return t, &userID, true, nil, nil
+		return t, &userID, true, nil, false, nil
 	}
 
 	if h.requireAuth {
-		return nil, nil, false, nil, status.Error(codes.PermissionDenied, "Register requires a pre-auth key or bearer credential when require_auth is enabled")
+		return nil, nil, false, nil, false, status.Error(codes.PermissionDenied, "Register requires a pre-auth key or bearer credential when require_auth is enabled")
 	}
 
 	slug := tenantSlugFromMetadata(ctx)
 	t, terr := h.tenants.GetOrCreate(ctx, slug, "Default Tenant", repo.DefaultTenantCIDR)
 	if terr != nil {
-		return nil, nil, false, nil, status.Errorf(codes.Internal, "tenant resolve: %v", terr)
+		return nil, nil, false, nil, false, status.Errorf(codes.Internal, "tenant resolve: %v", terr)
 	}
 	// Dev-fallback path: no admin context, auto-approve so make
 	// local-up + make local-bootstrap keep working without a manual
 	// approval click in the middle. The peer has no owner, so only
 	// tag: and cidr: rules can match it.
-	return t, nil, true, nil, nil
+	return t, nil, true, nil, false, nil
+}
+
+// reusePeerSession returns the tenant of a peer-session bearer that
+// names an existing peer with this wireguard public key. ok is false
+// when the token is not a peer session. A mismatched peer session
+// with no pre-auth key is an error; a pre-auth key still enrolls.
+func (h *CoordinatorHandler) reusePeerSession(ctx context.Context, req *bamboov1.RegisterRequest) (*repo.Tenant, *uuid.UUID, bool, error) {
+	tok := bearerFromMetadata(ctx)
+	if tok == "" {
+		tok = req.GetBearerToken()
+	}
+	if tok == "" {
+		return nil, nil, false, nil
+	}
+	tenant, owner, ok, err := h.peerSessionReRegister(ctx, tok, req.GetWireguardPublicKey())
+	if err != nil {
+		if status.Code(err) == codes.PermissionDenied && req.GetPreAuthKeySecret() != "" {
+			return nil, nil, false, nil
+		}
+		return nil, nil, false, err
+	}
+	return tenant, owner, ok, nil
+}
+
+// peerSessionReRegister accepts a bearer that is a peer-session token
+// for an existing peer with the same wireguard public key. ok is false
+// when the token is not a peer session. A peer session that does not
+// match this register is PermissionDenied.
+func (h *CoordinatorHandler) peerSessionReRegister(ctx context.Context, token, wgPublicKey string) (*repo.Tenant, *uuid.UUID, bool, error) {
+	if h.auth == nil || len(h.auth.sessionSec) == 0 || token == "" {
+		return nil, nil, false, nil
+	}
+	claims, verr := auth.VerifyPeerSessionToken(h.auth.sessionSec, token)
+	if verr != nil {
+		return nil, nil, false, nil
+	}
+	var peer *repo.Peer
+	err := db.WithTenant(ctx, h.pool, claims.TenantID, func(q db.Querier) error {
+		p, gerr := repo.NewPeers(q).GetByID(ctx, claims.PeerID)
+		if errors.Is(gerr, repo.ErrNotFound) {
+			return nil
+		}
+		if gerr != nil {
+			return status.Errorf(codes.Internal, "peer lookup: %v", gerr)
+		}
+		peer = p
+		return nil
+	})
+	if err != nil {
+		return nil, nil, false, err
+	}
+	if peer == nil || peer.TenantID != claims.TenantID || peer.WireGuardPublicKey != wgPublicKey || (claims.WGPublicKey != "" && claims.WGPublicKey != peer.WireGuardPublicKey) {
+		return nil, nil, false, status.Error(codes.PermissionDenied, "peer session does not match this register")
+	}
+	t, terr := h.tenants.GetByID(ctx, claims.TenantID)
+	if terr != nil {
+		return nil, nil, false, status.Errorf(codes.Internal, "tenant by id: %v", terr)
+	}
+	return t, peer.UserID, true, nil
 }
 
 // tenantSlugFromMetadata extracts the tenant slug from gRPC metadata.

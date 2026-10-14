@@ -51,7 +51,12 @@
         "peer_register": "註冊節點",
         "peer_update": "更新節點",
         "peer_delete": "刪除節點",
-        "policy_update": "更新政策"
+        "policy_update": "更新政策",
+        "peer_desk_msg": "送出訊息",
+        "peer_desk_put": "上傳檔案",
+        "peer_desk_get": "下載檔案",
+        "peer_desk_term": "開啟終端機",
+        "peer_desk_term_close": "關閉終端機"
       }
     }
   },
@@ -256,7 +261,12 @@
         "action": {
           "peer_register": "註冊節點",
           "peer_update": "更新節點",
-          "peer_delete": "刪除節點"
+          "peer_delete": "刪除節點",
+          "peer_desk_msg": "送出訊息",
+          "peer_desk_put": "上傳檔案",
+          "peer_desk_get": "下載檔案",
+          "peer_desk_term": "開啟終端機",
+          "peer_desk_term_close": "關閉終端機"
         }
       }
     }

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { DeviceDesk, type DeskActions } from './DeviceDesk';
 
@@ -27,6 +27,7 @@ function actions(overrides: Partial<DeskActions> = {}): DeskActions {
 describe('DeviceDesk', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.useRealTimers();
   });
 
   it('shows the mesh command and keeps the terminal off when exec is disabled', async () => {
@@ -101,6 +102,21 @@ describe('DeviceDesk', () => {
       expect(term).toHaveTextContent('closed');
     });
     expect(screen.queryByText('streamClosed')).not.toBeInTheDocument();
+  });
+
+  it('refreshes status while the desk stays open', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const status = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true as const, online: false, execEnabled: false })
+      .mockResolvedValue({ ok: true as const, online: true, execEnabled: true });
+    render(<DeviceDesk meshIP="100.64.0.8" peerKey="pubkey" actions={actions({ status })} />);
+    expect(await screen.findByText('offline')).toBeInTheDocument();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15_000);
+    });
+    expect(await screen.findByText('execOn')).toBeInTheDocument();
+    expect(status.mock.calls.length).toBeGreaterThanOrEqual(2);
   });
 });
 

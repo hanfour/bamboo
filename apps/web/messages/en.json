@@ -51,7 +51,12 @@
         "peer_register": "Registered",
         "peer_update": "Updated",
         "peer_delete": "Deleted",
-        "policy_update": "Policy updated"
+        "policy_update": "Policy updated",
+        "peer_desk_msg": "Sent a message",
+        "peer_desk_put": "Uploaded a file",
+        "peer_desk_get": "Downloaded a file",
+        "peer_desk_term": "Opened a terminal",
+        "peer_desk_term_close": "Closed a terminal"
       }
     }
   },
@@ -256,7 +261,12 @@
         "action": {
           "peer_register": "Registered",
           "peer_update": "Updated",
-          "peer_delete": "Deleted"
+          "peer_delete": "Deleted",
+          "peer_desk_msg": "Sent a message",
+          "peer_desk_put": "Uploaded a file",
+          "peer_desk_get": "Downloaded a file",
+          "peer_desk_term": "Opened a terminal",
+          "peer_desk_term_close": "Closed a terminal"
         }
       }
     }

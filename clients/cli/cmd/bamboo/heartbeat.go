@@ -8,9 +8,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
+	"time"
 
 	clientsync "github.com/hanfour/bamboo/clients/cli/internal/sync"
 )
@@ -64,9 +67,11 @@ type restHeartbeatRequest struct {
 }
 
 type restHeartbeatResponse struct {
-	PeersChanged          bool  `json:"peersChanged"`
-	PolicyChanged         bool  `json:"policyChanged"`
-	CurrentPolicyRevision int64 `json:"currentPolicyRevision"`
+	PeersChanged          bool   `json:"peersChanged"`
+	PolicyChanged         bool   `json:"policyChanged"`
+	CurrentPolicyRevision int64  `json:"currentPolicyRevision"`
+	PeerSessionToken      string `json:"peerSessionToken,omitempty"`
+	PeerSessionExpiresAt  int64  `json:"peerSessionExpiresAt,omitempty"`
 }
 
 // Heartbeat satisfies clientsync.Heartbeater. Errors propagate so the
@@ -113,9 +118,48 @@ func (r *restHeartbeater) Heartbeat(ctx context.Context, args clientsync.Heartbe
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		return clientsync.HeartbeatResult{}, fmt.Errorf("decode heartbeat response: %w", err)
 	}
+	if r.session != nil && out.PeerSessionToken != "" && out.PeerSessionExpiresAt > 0 && out.PeerSessionToken != r.session.Token() {
+		exp := time.Unix(out.PeerSessionExpiresAt, 0)
+		r.session.set(out.PeerSessionToken, exp)
+		slog.Info("peer session token renewed", "expires_at", exp.UTC().Format(time.RFC3339))
+	}
 	return clientsync.HeartbeatResult{
 		PeersChanged:          out.PeersChanged,
 		PolicyChanged:         out.PolicyChanged,
 		CurrentPolicyRevision: out.CurrentPolicyRevision,
 	}, nil
+}
+
+// refreshingHeartbeater re-registers once when the controller rejects
+// the bearer, then retries that heartbeat. The cooldown stops a dead
+// credential from calling Register on every 30s tick.
+type refreshingHeartbeater struct {
+	inner   clientsync.Heartbeater
+	refresh func(context.Context) error
+	mu      sync.Mutex
+	last    time.Time
+}
+
+func newRefreshingHeartbeater(inner clientsync.Heartbeater, refresh func(context.Context) error) clientsync.Heartbeater {
+	return &refreshingHeartbeater{inner: inner, refresh: refresh}
+}
+
+func (h *refreshingHeartbeater) Heartbeat(ctx context.Context, args clientsync.HeartbeatArgs) (clientsync.HeartbeatResult, error) {
+	res, err := h.inner.Heartbeat(ctx, args)
+	if err == nil || h.refresh == nil || !strings.Contains(err.Error(), "401") {
+		return res, err
+	}
+	h.mu.Lock()
+	if !h.last.IsZero() && time.Since(h.last) < time.Minute {
+		h.mu.Unlock()
+		return res, err
+	}
+	h.last = time.Now()
+	h.mu.Unlock()
+	if rerr := h.refresh(ctx); rerr != nil {
+		slog.Warn("peer session refresh failed", "err", rerr)
+		return res, err
+	}
+	slog.Info("peer session refreshed after heartbeat rejected the bearer")
+	return h.inner.Heartbeat(ctx, args)
 }

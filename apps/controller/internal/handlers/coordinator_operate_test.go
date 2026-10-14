@@ -21,14 +21,29 @@ func TestServeOperateForwardsMessage(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- h.serveOperate(stream) }()
 
+	const peerID = "11111111-1111-1111-1111-111111111111"
 	stream.in <- &bamboov1.DeviceOperateFrame{Frame: &bamboov1.DeviceOperateFrame_Hello{Hello: &bamboov1.DeviceOperateHello{
-		PeerId: "11111111-1111-1111-1111-111111111111", ExecEnabled: false,
+		PeerId: peerID, ExecEnabled: false,
 	}}}
+	// DeskCall returns offline immediately when the hello has not been
+	// attached yet. Wait for that attach before asserting the forward.
+	peer := mustPeer(t, peerID)
+	deadline := time.Now().Add(time.Second)
+	for {
+		online, _, err := h.DeskStatus(ctx, peer)
+		if err == nil && online {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("device did not attach")
+		}
+		time.Sleep(time.Millisecond)
+	}
 
 	resCh := make(chan operate.Result, 1)
 	errCh := make(chan error, 1)
 	go func() {
-		res, err := h.DeskCall(ctx, mustPeer(t, "11111111-1111-1111-1111-111111111111"), operate.Frame{
+		res, err := h.DeskCall(ctx, peer, operate.Frame{
 			OpID: "m1", Kind: operate.KindMsg, From: "admin@example.com", Text: "ping",
 		})
 		if err != nil {

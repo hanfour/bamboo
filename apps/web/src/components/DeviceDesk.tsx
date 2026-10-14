@@ -22,6 +22,8 @@ export type DeskActions = {
   termOutURL: (opId: string) => string;
 };
 
+const statusRefreshMs = 15_000;
+
 const buttonClass =
   'rounded border border-bamboo-50 bg-bamboo-50 px-2 text-xs font-medium text-ink-950 transition-colors hover:bg-ink-800 disabled:opacity-50';
 const fieldClass =
@@ -51,11 +53,16 @@ export function DeviceDesk({
 
   useEffect(() => {
     let cancelled = false;
-    void actions.status().then((result) => {
-      if (!cancelled) setStatus(result);
-    });
+    const load = () => {
+      void actions.status().then((result) => {
+        if (!cancelled) setStatus(result);
+      });
+    };
+    load();
+    const timer = setInterval(load, statusRefreshMs);
     return () => {
       cancelled = true;
+      clearInterval(timer);
     };
   }, [actions]);
 
