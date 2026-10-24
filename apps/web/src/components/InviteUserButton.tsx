@@ -314,7 +314,7 @@ function CopyableField({
  <button
  type="button"
  onClick={copy}
- className="rounded border border-bamboo-200/30 px-2 text-xs text-bamboo-100 transition-colors hover:border-bamboo-200/60 hover:text-bamboo-50 dark:text-bamboo-100 dark:hover:text-bamboo-50"
+ className="rounded-full bg-[#777]/20 px-2 text-xs text-bamboo-100 transition-colors hover:bg-[#777]/30 hover:text-bamboo-50"
  >
  {copied ? t('copied') : t('copy')}
  </button>

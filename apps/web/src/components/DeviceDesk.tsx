@@ -27,7 +27,7 @@ const statusRefreshMs = 15_000;
 const buttonClass =
   'rounded-full bg-bamboo-50 px-3 text-xs font-medium text-ink-950 transition-colors hover:bg-bamboo-100 disabled:opacity-50';
 const fieldClass =
-  'w-full rounded border border-ink-800 bg-transparent px-2 py-1 font-mono text-xs text-bamboo-100';
+  'w-full rounded-lg bg-transparent px-2 py-1 font-mono text-xs text-bamboo-100';
 
 export function DeviceDesk({
   meshIP,
@@ -141,7 +141,7 @@ export function DeviceDesk({
       {mesh && (
         <div>
           <p className="mb-1 text-xs text-bamboo-200/70">{t('mesh')}</p>
-          <code className="block break-all rounded border border-ink-800 px-2 py-1 font-mono text-xs text-bamboo-100">
+          <code className="block break-all rounded-lg px-2 py-1 font-mono text-xs text-bamboo-100 bg-ink-900">
             {mesh}
           </code>
         </div>
@@ -247,7 +247,7 @@ export function DeviceDesk({
         </div>
         <pre
           aria-label={t('terminal')}
-          className="max-h-64 overflow-auto whitespace-pre-wrap rounded border border-ink-800 bg-ink-950 p-2 font-mono text-xs text-bamboo-50"
+          className="max-h-64 overflow-auto whitespace-pre-wrap rounded-lg p-2 font-mono text-xs text-bamboo-50 bg-ink-900"
         >
           {output || t('noOutput')}
         </pre>

@@ -28,7 +28,7 @@ function WebhooksPageView({ hooks }: { hooks: Webhook[] }) {
  <h1 className="text-2xl font-medium tracking-tight text-bamboo-50">
  {t('title')}
  </h1>
- <p className="text-sm text-bamboo-200/60">{t('subtitle')}</p>
+ <p className="text-[13px] text-bamboo-200/60">{t('subtitle')}</p>
  </div>
  </header>
  <WebhooksView hooks={hooks} />

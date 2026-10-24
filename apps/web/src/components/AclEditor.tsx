@@ -101,10 +101,8 @@ function TabBar({
   versionCount: number;
 }) {
   const t = useTranslations('acl.tabs');
-  // Tabs read as ghost buttons; the active one carries a 2px bottom
-  // stripe (same affordance the sidebar active item uses) and the
-  // bamboo-50 text the rest of the page already uses for primary
-  // content. The "editing" pill next to Source nudges the operator
+  // Pill tabs, as on the peers page: the active one has a translucent
+  // grey fill. The "editing" badge next to Source nudges the operator
   // away from accidentally clicking Preview before they save.
   const items: { id: Tab; label: string; badge?: string }[] = [
     { id: 'source', label: t('source'), badge: editing ? t('editing') : undefined },
@@ -113,19 +111,19 @@ function TabBar({
     { id: 'examples', label: t('examples') },
   ];
   return (
-    <div className="flex items-end gap-6 border-b border-ink-800">
+    <div role="tablist" className="flex flex-wrap items-center gap-1">
       {items.map((it) => {
         const active = it.id === tab;
         return (
           <button
             key={it.id}
             type="button"
+            role="tab"
+            aria-selected={active}
             onClick={() => onChange(it.id)}
             className={[
-              'relative pb-2 text-sm font-medium transition-colors',
-              active
-                ? 'text-bamboo-50 before:absolute before:inset-x-0 before:-bottom-px before:h-0.5 before:rounded-full before:bg-bamboo-400'
-                : 'text-bamboo-200/60 hover:text-bamboo-50',
+              'h-8 rounded-full px-4 text-[13px] transition-colors',
+              active ? 'bg-[#777]/25 text-bamboo-50' : 'text-bamboo-200/60 hover:text-bamboo-50',
             ].join(' ')}
           >
             {it.label}
@@ -202,7 +200,7 @@ function SourceTab({
             {tEdit('edit')}
           </button>
         </div>
-        <pre className="overflow-x-auto rounded-lg border border-ink-800 p-4 font-mono text-xs leading-relaxed text-bamboo-50">
+        <pre className="overflow-x-auto rounded-lg p-4 font-mono text-xs leading-relaxed text-bamboo-50 bg-ink-900">
           <code>{hclSource}</code>
         </pre>
       </div>
@@ -310,7 +308,7 @@ function PreviewTab({ hclSource, editing }: { hclSource: string; editing: boolea
       </div>
 
       {state.kind === 'idle' && (
-        <p className="rounded-md border border-dashed border-ink-700 p-6 text-center text-sm text-bamboo-200/60">
+        <p className="rounded-2xl border border-dashed border-[#777]/30 p-10 text-center text-[13px] text-bamboo-200/60">
           {t('idle')}
         </p>
       )}
@@ -341,7 +339,7 @@ function SimulationMatrix({ simulation }: { simulation: PolicySimulation }) {
 
   if (peers.length === 0) {
     return (
-      <p className="rounded-md border border-dashed border-ink-700 p-6 text-center text-sm text-bamboo-200/60">
+      <p className="rounded-2xl border border-dashed border-[#777]/30 p-10 text-center text-[13px] text-bamboo-200/60">
         {t('emptyPeers')}
       </p>
     );
@@ -360,13 +358,13 @@ function SimulationMatrix({ simulation }: { simulation: PolicySimulation }) {
         <table className="border-collapse text-xs">
           <thead>
             <tr>
-              <th className="border border-ink-800 bg-ink-900/50 p-2 text-left font-medium text-bamboo-200/60">
+              <th className="bg-ink-900/50 p-2 text-left font-medium text-bamboo-200/60">
                 {t('matrixHeader')}
               </th>
               {peers.map(([id, name]) => (
                 <th
                   key={id}
-                  className="border border-ink-800 bg-ink-900/50 p-2 font-medium text-bamboo-200/80"
+                  className="bg-ink-900/50 p-2 font-medium text-bamboo-200/80"
                   title={id}
                 >
                   {name}
@@ -378,7 +376,7 @@ function SimulationMatrix({ simulation }: { simulation: PolicySimulation }) {
             {peers.map(([srcId, srcName]) => (
               <tr key={srcId}>
                 <th
-                  className="border border-ink-800 bg-ink-900/50 p-2 text-left font-medium text-bamboo-200/80"
+                  className="bg-ink-900/50 p-2 text-left font-medium text-bamboo-200/80"
                   title={srcId}
                 >
                   {srcName}
@@ -388,7 +386,7 @@ function SimulationMatrix({ simulation }: { simulation: PolicySimulation }) {
                     return (
                       <td
                         key={dstId}
-                        className="border border-ink-800 p-2 text-center text-bamboo-200/30"
+                        className="p-2 text-center text-bamboo-200/30 bg-ink-900"
                       >
                         —
                       </td>
@@ -400,7 +398,7 @@ function SimulationMatrix({ simulation }: { simulation: PolicySimulation }) {
                     <td
                       key={dstId}
                       className={[
-                        'border border-ink-800 p-2 text-center text-xs font-medium',
+                        'p-2 text-center text-xs font-medium bg-ink-900',
                         allow ? 'text-bamboo-300' : 'text-red-400/70',
                       ].join(' ')}
                       title={
@@ -455,7 +453,7 @@ function VersionsTab({
 
   if (revisions.length === 0) {
     return (
-      <p className="rounded-md border border-dashed border-ink-700 p-6 text-center text-sm text-bamboo-200/60">
+      <p className="rounded-2xl border border-dashed border-[#777]/30 p-10 text-center text-[13px] text-bamboo-200/60">
         {t('empty')}
       </p>
     );
@@ -469,7 +467,7 @@ function VersionsTab({
           {error}
         </div>
       )}
-      <ol className="divide-y divide-ink-800 rounded-lg border border-ink-800">
+      <ol className="divide-y divide-[#777]/20 rounded-2xl bg-ink-900">
         {revisions.map((r) => {
           const isCurrent = r.revision === currentRevision;
           const isSourceOpen = expanded?.rev === r.revision && expanded.mode === 'source';
@@ -512,7 +510,7 @@ function VersionsTab({
                   <button
                     type="button"
                     onClick={() => toggle('source')}
-                    className="rounded border border-ink-700 px-2.5 py-1 text-xs text-bamboo-200/80 transition-colors hover:bg-ink-800 hover:text-bamboo-50"
+                    className="rounded-full bg-[#777]/20 px-2.5 py-1 text-xs text-bamboo-200/80 transition-colors hover:bg-[#777]/30 hover:text-bamboo-50"
                   >
                     {isSourceOpen ? t('hideSource') : t('viewSource')}
                   </button>
@@ -522,7 +520,7 @@ function VersionsTab({
                       onClick={() => toggle('diff')}
                       disabled={sameAsCurrent}
                       title={sameAsCurrent ? t('rollbackSameAsCurrent') : undefined}
-                      className="rounded border border-ink-700 px-2.5 py-1 text-xs text-bamboo-200/80 transition-colors hover:bg-ink-800 hover:text-bamboo-50 disabled:cursor-not-allowed disabled:opacity-50"
+                      className="rounded-full bg-[#777]/20 px-2.5 py-1 text-xs text-bamboo-200/80 transition-colors hover:bg-[#777]/30 hover:text-bamboo-50 disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       {isDiffOpen ? t('hideDiff') : t('viewDiff')}
                     </button>
@@ -541,7 +539,7 @@ function VersionsTab({
                 </div>
               </div>
               {isSourceOpen && (
-                <pre className="overflow-x-auto rounded border border-ink-800 p-3 font-mono text-[11px] leading-relaxed text-bamboo-100">
+                <pre className="overflow-x-auto rounded-lg p-3 font-mono text-[11px] leading-relaxed text-bamboo-100 bg-ink-900">
                   <code>{r.hclSource}</code>
                 </pre>
               )}
@@ -591,13 +589,13 @@ function DiffView({
   const rows = lineDiff(oldText, newText);
   if (rows.length === 0) {
     return (
-      <p className="rounded border border-ink-800 p-3 text-xs text-bamboo-200/60">
+      <p className="rounded-lg p-3 text-xs text-bamboo-200/60 bg-ink-900">
         {t('diffEmpty')}
       </p>
     );
   }
   return (
-    <div className="overflow-hidden rounded border border-ink-800 font-mono text-[11px] leading-relaxed">
+    <div className="overflow-hidden rounded-lg font-mono text-[11px] leading-relaxed bg-ink-900">
       <div className="grid grid-cols-2 divide-x divide-ink-800 border-b border-ink-800 bg-ink-900/60 text-[10px] uppercase tracking-wide text-bamboo-200/60">
         <div className="px-3 py-1.5">{oldLabel}</div>
         <div className="px-3 py-1.5">{newLabel}</div>
@@ -776,7 +774,7 @@ function ExampleCard({
   }
 
   return (
-    <article className="space-y-2 rounded-lg border border-ink-800 bg-ink-950 p-4">
+    <article className="space-y-2 rounded-2xl p-4 bg-ink-900">
       <header className="flex flex-wrap items-baseline justify-between gap-2">
         <div className="space-y-1">
           <h3 className="text-sm font-medium text-bamboo-50">
@@ -790,7 +788,7 @@ function ExampleCard({
           <button
             type="button"
             onClick={copy}
-            className="rounded-md border border-bamboo-200/30 px-2.5 py-1 text-xs text-bamboo-100 transition-colors hover:border-bamboo-200/60 hover:text-bamboo-50"
+            className="rounded-full bg-[#777]/20 px-2.5 py-1 text-xs text-bamboo-100 transition-colors hover:bg-[#777]/30 hover:text-bamboo-50"
           >
             {copied ? t('copied') : t('copy')}
           </button>
@@ -803,7 +801,7 @@ function ExampleCard({
           </button>
         </div>
       </header>
-      <pre className="overflow-x-auto rounded border border-ink-800 bg-ink-900/40 p-3 font-mono text-[11px] leading-relaxed text-bamboo-100">
+      <pre className="overflow-x-auto rounded-lg p-3 font-mono text-[11px] leading-relaxed text-bamboo-100 bg-ink-900">
         <code>{code}</code>
       </pre>
     </article>

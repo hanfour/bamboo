@@ -1,71 +1,22 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import { getTranslations } from 'next-intl/server';
-
 import { Link } from '@/i18n/routing';
-import { fetchMe } from '@/lib/api';
 import { HamburgerButton } from './HamburgerButton';
-import { UserMenu } from './UserMenu';
 
-const CONTROLLER_BASE = process.env.BAMBOO_API_URL ?? 'http://localhost:8081';
-
-// TopBar is the thin chrome at the very top of every page.
-//
-// Design target: Google Account / Workspace Admin / GCP Console —
-// minimal top bar (brand + user only, no nav) paired with a left
-// sidebar (Sidebar.tsx) below. Differentiates from Tailscale's
-// horizontal-tab top bar so we don't read as a clone.
-//
-// Brand is the plain "bamboo" wordmark in the UI sans. The user slot is just the avatar
-// circle — clicking opens a popover with identity + Settings +
-// Sign out (see UserMenu). Unauthenticated users see a
-// pill-shaped Sign-in link to the controller's Google OIDC flow.
-export async function TopBar() {
- const t = await getTranslations();
-
- const me = await fetchMe();
-
+// TopBar is the slim bar shown below lg only. On lg and wider the
+// Sidebar carries the brand and the signed-in user, so this bar would
+// repeat them. Here it holds the menu button that opens the Sidebar
+// drawer, plus the brand.
+export function TopBar() {
  return (
- <header className="sticky top-0 z-30 h-14 border-b border-ink-800 bg-ink-950/95 backdrop-blur supports-[backdrop-filter]:bg-ink-950/80">
- <div className="flex h-full items-center justify-between px-6">
- <div className="flex items-center gap-3">
+ <header className="sticky top-0 z-10 flex h-14 items-center gap-3 bg-ink-950/90 px-4 backdrop-blur lg:hidden">
  <HamburgerButton />
- <Brand />
- </div>
- <div className="flex items-center gap-3 text-sm">
- {me.authenticated && me.email ? (
- <UserMenu
- email={me.email}
- tenantSlug={me.tenantSlug}
- signOutHref={`${CONTROLLER_BASE}/auth/sign-out`}
- labels={{
- menuAria: t('auth.menu.aria'),
- settings: t('auth.menu.settings'),
- signOut: t('auth.signOut'),
- tenant: t('auth.menu.tenant'),
- }}
- />
- ) : (
- <a
- href={`${CONTROLLER_BASE}/auth/google/login`}
- className="inline-flex h-8 items-center rounded-full bg-bamboo-50 px-4 text-[13px] font-medium text-ink-950 transition-colors hover:bg-bamboo-100"
- >
- {t('auth.signIn')}
- </a>
- )}
- </div>
- </div>
- </header>
- );
-}
-
-function Brand() {
- return (
  <Link
  href="/"
- className="text-[17px] font-semibold leading-none tracking-tight text-bamboo-50 transition-colors hover:text-bamboo-200"
+ className="text-[17px] font-semibold leading-none tracking-tight text-bamboo-50"
  >
  bamboo
  </Link>
+ </header>
  );
 }

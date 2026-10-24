@@ -117,7 +117,7 @@ export function PeerRowMenu({ peer }: { peer: Peer }) {
  role="menu"
  // right-0 anchors to the right edge of the kebab so the
  // popover doesn't overflow the table on the actions column.
- className="absolute right-0 top-full z-40 mt-1 w-48 overflow-hidden rounded-md border border-ink-800 bg-ink-950 shadow-lg shadow-ink-950/40"
+ className="absolute right-0 top-full z-40 mt-1 w-48 overflow-hidden rounded-2xl shadow-lg shadow-ink-950/40 bg-ink-900"
  onClick={(e) => e.stopPropagation()}
  >
  <ul className="py-1 text-sm">
@@ -157,7 +157,7 @@ export function PeerRowMenu({ peer }: { peer: Peer }) {
  setError(null);
  }}
  disabled={pending}
- className="flex-1 rounded border border-ink-700 px-2 py-1 text-xs text-bamboo-200/80 transition-colors hover:bg-ink-800 hover:text-bamboo-50 disabled:opacity-50"
+ className="flex-1 rounded-full bg-[#777]/20 px-2 py-1 text-xs text-bamboo-200/80 transition-colors hover:bg-[#777]/30 hover:text-bamboo-50 disabled:opacity-50"
  >
  {t('confirmCancel')}
  </button>

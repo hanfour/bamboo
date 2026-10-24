@@ -6,6 +6,8 @@
   },
   "nav": {
     "dashboard": "總覽",
+    "groupNetwork": "網路",
+    "groupSystem": "系統",
     "peers": "節點",
     "users": "成員",
     "dns": "DNS",
@@ -30,6 +32,9 @@
     "subtitle": "登入以管理你的網路。",
     "signInWithGoogle": "使用 Google 登入",
     "selfHosted": "自架版本請於 CLI 使用 pre-auth key。"
+  },
+  "login": {
+    "title": "登入 bamboo"
   },
   "dashboard": {
     "title": "總覽",
@@ -57,6 +62,30 @@
         "peer_desk_get": "下載檔案",
         "peer_desk_term": "開啟終端機",
         "peer_desk_term_close": "關閉終端機"
+      }
+    },
+    "networkCard": "網路",
+    "managePeers": "管理節點",
+    "offlineCount": "{count} 台節點離線",
+    "policyCard": "存取政策",
+    "editPolicy": "編輯政策",
+    "policyRevisionValue": "第 {revision} 版",
+    "tiles": {
+      "peers": {
+        "title": "節點",
+        "desc": "網路內的裝置與其 MagicDNS 名稱。"
+      },
+      "users": {
+        "title": "成員",
+        "desc": "邀請成員並管理誰可以登入。"
+      },
+      "acl": {
+        "title": "存取政策",
+        "desc": "撰寫規則並查看建議。"
+      },
+      "dns": {
+        "title": "DNS",
+        "desc": "解析器、搜尋網域與 DNS64。"
       }
     }
   },
@@ -271,6 +300,12 @@
           "peer_desk_term_close": "關閉終端機"
         }
       }
+    },
+    "toolbar": {
+      "all": "全部",
+      "online": "在線",
+      "offline": "離線",
+      "search": "搜尋節點"
     }
   },
   "preAuthKeys": {
@@ -387,7 +422,7 @@
   },
   "users": {
     "title": "成員",
-    "subtitle": "目前已加入此租戶的人員。新成員透過 OIDC 登入後自動建立；邀請與角色管理流程仍在規劃中。",
+    "subtitle": "目前已加入此租戶的人員。成員會在第一次透過 OIDC 登入，或接受邀請後自動建立。",
     "columns": {
       "user": "成員",
       "role": "角色",
@@ -470,6 +505,10 @@
         "working": "處理中…",
         "noAction": "—"
       }
+    },
+    "inviteCard": {
+      "title": "邀請成員",
+      "desc": "用電子郵件寄出邀請。對方需用被邀請的信箱登入，你可以決定他是否為管理員。"
     }
   },
   "dns": {
@@ -703,7 +742,8 @@
         "last90d": "近 90 天"
       },
       "hint": "單次下載上限 5 萬列。要更長歷史請按日期區段呼叫 /api/audit-export?since=…&until=…。"
-    }
+    },
+    "manageTitle": "管理"
   },
   "invite": {
     "title": "邀請函",

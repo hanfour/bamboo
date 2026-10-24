@@ -93,25 +93,23 @@ function Peers({
  const t = useTranslations('peers');
  const tKeys = useTranslations('preAuthKeys');
  return (
- <div className="space-y-8 pt-2">
- <header className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between sm:gap-6">
- <div className="space-y-2">
- <h1 className="text-2xl font-medium tracking-tight text-bamboo-50">
- {t('title')}
- </h1>
- <p className="text-sm text-bamboo-200/60">{t('subtitle')}</p>
- </div>
- <div className="flex items-center gap-4">
+ <div className="space-y-6">
+ <header className="space-y-1.5">
+ <h1 className="text-2xl font-medium tracking-tight text-bamboo-50">{t('title')}</h1>
+ <p className="text-[13px] text-bamboo-200/60">{t('subtitle')}</p>
+ </header>
+ <PeersView
+ actions={
+ <>
  <Link
  href="/preauth-keys"
- className="text-xs text-bamboo-200/70 transition-colors hover:text-bamboo-50"
+ className="inline-flex h-8 items-center rounded-full bg-[#777]/20 px-4 text-[13px] font-medium text-bamboo-50 transition-colors hover:bg-[#777]/30"
  >
  {tKeys('manageLink')}
  </Link>
  <NewPeerButton tenantSlug={tenantSlug} />
- </div>
- </header>
- <PeersView
+ </>
+ }
  peers={peers}
  latestClientVersion={latestClientVersion}
  selectedPeer={selectedPeer}

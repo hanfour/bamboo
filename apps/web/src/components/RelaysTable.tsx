@@ -59,14 +59,14 @@ export function RelaysTable({ relays }: { relays: Relay[] }) {
 
   if (relays.length === 0) {
     return (
-      <p className="rounded-md border border-dashed border-ink-700 p-6 text-center text-sm text-bamboo-200/60">
+      <p className="rounded-2xl border border-dashed border-[#777]/30 p-10 text-center text-[13px] text-bamboo-200/60">
         {t('empty')}
       </p>
     );
   }
   return (
-    <div className="overflow-x-auto rounded-lg border border-ink-800">
-      <table className="min-w-full divide-y divide-ink-800 text-sm">
+    <div className="overflow-x-auto">
+      <table className="min-w-full divide-y divide-[#777]/20 text-[13px]">
         <thead className="bg-ink-900/40">
           <tr>
             <Th>{t('columns.region')}</Th>
@@ -76,7 +76,7 @@ export function RelaysTable({ relays }: { relays: Relay[] }) {
             <Th>{t('columns.lastCheck')}</Th>
           </tr>
         </thead>
-        <tbody className="divide-y divide-ink-800">
+        <tbody className="divide-y divide-[#777]/20">
           {relays.map((r) => (
             <RelayRow key={r.id} relay={r} />
           ))}

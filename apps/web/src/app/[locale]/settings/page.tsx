@@ -54,51 +54,42 @@ function SettingsView({
  const t = useTranslations('settings');
  return (
  <div className="space-y-8">
- <header>
- <h1 className="text-2xl font-medium tracking-tight text-bamboo-50">{t("title")}</h1>
- <p className="mt-1 text-sm text-bamboo-200/70">{t('subtitle')}</p>
+ <header className="space-y-1.5">
+ <h1 className="text-2xl font-medium tracking-tight text-bamboo-50">{t('title')}</h1>
+ <p className="text-[13px] text-bamboo-200/60">{t('subtitle')}</p>
  </header>
 
- <Section title={t('tenant.title')}>
+ <section className="grid gap-4 lg:grid-cols-2">
+ <InfoCard title={t('tenant.title')}>
  <Field label={t('tenant.id')} value={tenantId} mono />
  <Field label={t('tenant.slug')} value={tenantSlug} mono />
- </Section>
-
- <Section title={t('account.title')}>
+ </InfoCard>
+ <InfoCard title={t('account.title')}>
  <Field label={t('account.email')} value={email} />
  <Field label={t('account.role')} value={<RoleBadge admin={isAdmin} />} />
- </Section>
+ </InfoCard>
+ </section>
 
- <Section title={t('sessionCard.title')}>
- <SessionCard
- issuedAt={issuedAt}
- expiresAt={expiresAt}
- oidcProvider={oidcProvider}
- />
- </Section>
+ <section className="space-y-3">
+ <h2 className="text-base font-medium text-bamboo-50">{t('sessionCard.title')}</h2>
+ <SessionCard issuedAt={issuedAt} expiresAt={expiresAt} oidcProvider={oidcProvider} />
+ </section>
 
- <Section title={t('preAuthKeysCard.title')}>
+ <section className="space-y-3">
+ <h2 className="text-base font-medium text-bamboo-50">{t('manageTitle')}</h2>
+ <div className="grid gap-4 sm:grid-cols-2">
  <PreAuthKeysCard />
- </Section>
-
- <Section title={t('webhooksCard.title')}>
- <WebhooksCard />
- </Section>
-
- <Section title={t('apiTokensCard.title')}>
  <APITokensCard />
- </Section>
+ <WebhooksCard />
+ {isAdmin && <RelaysCard />}
+ </div>
+ </section>
 
  {isAdmin && (
- <Section title={t('relaysCard.title')}>
- <RelaysCard />
- </Section>
- )}
-
- {isAdmin && (
- <Section title={t('auditExportCard.title')}>
+ <section className="space-y-3">
+ <h2 className="text-base font-medium text-bamboo-50">{t('auditExportCard.title')}</h2>
  <AuditExportCard />
- </Section>
+ </section>
  )}
  </div>
  );
@@ -106,16 +97,14 @@ function SettingsView({
 
 function RoleBadge({ admin }: { admin: boolean }) {
  const t = useTranslations('settings.account');
- // Outlined badge in the same vocabulary as PeerTable / PreAuthKeyTable
- // status dots — bamboo-300 outline + bamboo-700 text for admin
- // (single brand accent), zinc outline + zinc-700 text for member.
- return admin ? (
- <span className="inline-flex items-center rounded-full border border-bamboo-300 px-2 py-0.5 text-xs font-medium text-bamboo-700 dark:border-bamboo-700 dark:text-bamboo-300">
- {t('admin')}
- </span>
- ) : (
- <span className="inline-flex items-center rounded-full border border-bamboo-200/30 px-2 py-0.5 text-xs font-medium text-bamboo-100 dark:text-bamboo-100">
- {t('member')}
+ return (
+ <span
+ className={[
+ 'inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium',
+ admin ? 'bg-bamboo-50 text-ink-950' : 'bg-[#777]/25 text-bamboo-100',
+ ].join(' ')}
+ >
+ {admin ? t('admin') : t('member')}
  </span>
  );
 }
@@ -125,12 +114,12 @@ function PreAuthKeysCard() {
  return (
  <Link
  href="/preauth-keys"
- className="group flex items-start justify-between gap-4 rounded-lg border border-ink-800 bg-ink-950 p-4 transition-colors hover:border-zinc-300 dark:bg-ink-950 dark:hover:border-ink-700"
+ className="group flex h-full items-start justify-between gap-4 rounded-2xl bg-ink-900 p-5 transition-colors hover:bg-[#181818]"
  >
  <div className="min-w-0">
- <h3 className="text-sm font-medium text-bamboo-50">{t('title')}</h3>
- <p className="mt-1 text-sm text-bamboo-200/70">{t('description')}</p>
- <p className="mt-2 text-xs font-medium text-bamboo-700 group-hover:text-bamboo-800 dark:text-bamboo-300 dark:group-hover:text-bamboo-200">
+ <h3 className="text-[15px] font-medium text-bamboo-50">{t('title')}</h3>
+ <p className="mt-1.5 text-[13px] leading-5 text-bamboo-200/60">{t('description')}</p>
+ <p className="mt-3 text-xs font-medium text-bamboo-200/80 group-hover:text-bamboo-50">
  {t('link')} →
  </p>
  </div>
@@ -143,12 +132,12 @@ function WebhooksCard() {
  return (
  <Link
  href="/webhooks"
- className="group flex items-start justify-between gap-4 rounded-lg border border-ink-800 bg-ink-950 p-4 transition-colors hover:border-zinc-300 dark:bg-ink-950 dark:hover:border-ink-700"
+ className="group flex h-full items-start justify-between gap-4 rounded-2xl bg-ink-900 p-5 transition-colors hover:bg-[#181818]"
  >
  <div className="min-w-0">
- <h3 className="text-sm font-medium text-bamboo-50">{t('title')}</h3>
- <p className="mt-1 text-sm text-bamboo-200/70">{t('description')}</p>
- <p className="mt-2 text-xs font-medium text-bamboo-700 group-hover:text-bamboo-800 dark:text-bamboo-300 dark:group-hover:text-bamboo-200">
+ <h3 className="text-[15px] font-medium text-bamboo-50">{t('title')}</h3>
+ <p className="mt-1.5 text-[13px] leading-5 text-bamboo-200/60">{t('description')}</p>
+ <p className="mt-3 text-xs font-medium text-bamboo-200/80 group-hover:text-bamboo-50">
  {t('link')} →
  </p>
  </div>
@@ -161,12 +150,12 @@ function RelaysCard() {
  return (
  <Link
  href="/relays"
- className="group flex items-start justify-between gap-4 rounded-lg border border-ink-800 bg-ink-950 p-4 transition-colors hover:border-zinc-300 dark:bg-ink-950 dark:hover:border-ink-700"
+ className="group flex h-full items-start justify-between gap-4 rounded-2xl bg-ink-900 p-5 transition-colors hover:bg-[#181818]"
  >
  <div className="min-w-0">
- <h3 className="text-sm font-medium text-bamboo-50">{t('title')}</h3>
- <p className="mt-1 text-sm text-bamboo-200/70">{t('description')}</p>
- <p className="mt-2 text-xs font-medium text-bamboo-700 group-hover:text-bamboo-800 dark:text-bamboo-300 dark:group-hover:text-bamboo-200">
+ <h3 className="text-[15px] font-medium text-bamboo-50">{t('title')}</h3>
+ <p className="mt-1.5 text-[13px] leading-5 text-bamboo-200/60">{t('description')}</p>
+ <p className="mt-3 text-xs font-medium text-bamboo-200/80 group-hover:text-bamboo-50">
  {t('link')} →
  </p>
  </div>
@@ -179,12 +168,12 @@ function APITokensCard() {
  return (
  <Link
  href="/api-tokens"
- className="group flex items-start justify-between gap-4 rounded-lg border border-ink-800 bg-ink-950 p-4 transition-colors hover:border-zinc-300 dark:bg-ink-950 dark:hover:border-ink-700"
+ className="group flex h-full items-start justify-between gap-4 rounded-2xl bg-ink-900 p-5 transition-colors hover:bg-[#181818]"
  >
  <div className="min-w-0">
- <h3 className="text-sm font-medium text-bamboo-50">{t('title')}</h3>
- <p className="mt-1 text-sm text-bamboo-200/70">{t('description')}</p>
- <p className="mt-2 text-xs font-medium text-bamboo-700 group-hover:text-bamboo-800 dark:text-bamboo-300 dark:group-hover:text-bamboo-200">
+ <h3 className="text-[15px] font-medium text-bamboo-50">{t('title')}</h3>
+ <p className="mt-1.5 text-[13px] leading-5 text-bamboo-200/60">{t('description')}</p>
+ <p className="mt-3 text-xs font-medium text-bamboo-200/80 group-hover:text-bamboo-50">
  {t('link')} →
  </p>
  </div>
@@ -216,7 +205,7 @@ function SessionCard({
  const expiresMs = expiresAt ? new Date(expiresAt).getTime() : NaN;
  const provider = formatProvider(oidcProvider, t);
  return (
- <div className="space-y-3 rounded-lg border border-ink-800 bg-ink-950 p-4 dark:bg-ink-950">
+ <div className="space-y-3 rounded-2xl bg-ink-900 p-5">
  <div className="space-y-1 text-sm text-bamboo-100">
  {Number.isFinite(issuedMs) ? (
  <p>{t('agePrefix', { value: formatDuration(now - issuedMs), provider })}</p>
@@ -233,7 +222,7 @@ function SessionCard({
  </div>
  <a
  href={`${CONTROLLER_BASE}/auth/sign-out`}
- className="inline-flex items-center text-xs font-medium text-bamboo-700 transition-colors hover:text-bamboo-800 dark:text-bamboo-300 dark:hover:text-bamboo-200"
+ className="inline-flex h-8 items-center rounded-full bg-[#777]/20 px-4 text-[13px] font-medium text-bamboo-50 transition-colors hover:bg-[#777]/30"
  >
  {t('signOut')} →
  </a>
@@ -267,14 +256,12 @@ function formatDuration(ms: number): string {
  return `${Math.round(s / 86_400)}d`;
 }
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
+function InfoCard({ title, children }: { title: string; children: React.ReactNode }) {
  return (
- <section className="space-y-3">
- <h2 className="text-xs font-medium uppercase tracking-wide text-bamboo-200/60">
- {title}
- </h2>
- <div className="space-y-2">{children}</div>
- </section>
+ <div className="space-y-4 rounded-2xl bg-ink-900 p-5">
+ <h2 className="text-[13px] text-bamboo-200/60">{title}</h2>
+ <div className="space-y-3">{children}</div>
+ </div>
  );
 }
 
@@ -288,7 +275,7 @@ function Field({
  mono?: boolean;
 }) {
  return (
- <div className="grid grid-cols-[8rem_1fr] gap-3 text-sm">
+ <div className="grid grid-cols-[7rem_1fr] gap-3 text-[13px]">
  <dt className="text-bamboo-200/60">{label}</dt>
  <dd
  className={`min-w-0 break-words text-bamboo-50 ${

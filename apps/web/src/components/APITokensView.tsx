@@ -62,11 +62,11 @@ export function APITokensView({ tokens }: { tokens: APIToken[] }) {
       )}
 
       {tokens.length === 0 ? (
-        <p className="rounded-md border border-dashed border-ink-700 p-6 text-center text-sm text-bamboo-200/60">
+        <p className="rounded-2xl border border-dashed border-[#777]/30 p-10 text-center text-[13px] text-bamboo-200/60">
           {t('empty')}
         </p>
       ) : (
-        <ol className="divide-y divide-ink-800 rounded-lg border border-ink-800">
+        <ol className="divide-y divide-[#777]/20 rounded-2xl bg-ink-900">
           {tokens.map((tk) => (
             <TokenRow key={tk.id} token={tk} onError={setError} />
           ))}
@@ -122,7 +122,7 @@ function MintForm({
   }
 
   return (
-    <div className="space-y-3 rounded-md border border-ink-800 p-4">
+    <div className="space-y-3 rounded-2xl p-4 bg-ink-900">
       <FormField label={t('nameLabel')} hint={t('nameHint')}>
         <input
           type="text"
@@ -265,7 +265,7 @@ function TokenRow({ token, onError }: { token: APIToken; onError: (msg: string |
                   type="button"
                   onClick={() => setConfirmDelete(false)}
                   disabled={pending}
-                  className="rounded border border-ink-700 px-2.5 py-1 text-xs text-bamboo-200/80 transition-colors hover:bg-ink-800 hover:text-bamboo-50"
+                  className="rounded-full bg-[#777]/20 px-2.5 py-1 text-xs text-bamboo-200/80 transition-colors hover:bg-[#777]/30 hover:text-bamboo-50"
                 >
                   {t('actions.cancel')}
                 </button>
@@ -275,7 +275,7 @@ function TokenRow({ token, onError }: { token: APIToken; onError: (msg: string |
                 type="button"
                 onClick={() => setConfirmDelete(true)}
                 disabled={pending}
-                className="rounded border border-ink-700 px-2.5 py-1 text-xs text-bamboo-200/70 transition-colors hover:border-red-900/50 hover:text-red-400 disabled:opacity-50"
+                className="rounded-full bg-[#777]/20 px-2.5 py-1 text-xs text-bamboo-200/70 transition-colors hover:bg-red-500/15 hover:text-red-400 disabled:opacity-50"
               >
                 {t('actions.revoke')}
               </button>
@@ -368,7 +368,7 @@ function TokenRevealModal({ minted, onClose }: { minted: MintedToken; onClose: (
           </code>
           <p className="text-xs text-amber-300/80">{t('warning')}</p>
         </div>
-        <div className="rounded border border-ink-800 bg-ink-900/40 p-3 text-xs text-bamboo-200/70">
+        <div className="rounded-lg p-3 text-xs text-bamboo-200/70 bg-ink-900">
           <p className="mb-1 font-medium text-bamboo-100">{t('usageLabel')}</p>
           <code className="block break-all font-mono text-[11px] text-bamboo-100">
             curl -H &quot;Authorization: Bearer {minted.token}&quot; …

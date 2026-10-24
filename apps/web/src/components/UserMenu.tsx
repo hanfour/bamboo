@@ -5,10 +5,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link } from '@/i18n/routing';
 
-// UserMenu replaces the inline email + sign-out chip the TopBar used
-// to render. Same visual vocabulary as Google / Vercel / Linear: the
-// top bar shows just the avatar circle; clicking opens a popover
-// with the identity header + a Settings shortcut + sign-out.
+// UserMenu is the account block at the bottom of the Sidebar: avatar,
+// email and tenant, with a popover that opens upward for Settings and
+// sign-out.
 //
 // The popover handles its own dismissal — click outside or Escape
 // closes it, the avatar button toggles. Focus is not trapped
@@ -60,44 +59,43 @@ export function UserMenu({
  aria-haspopup="menu"
  aria-expanded={open}
  aria-label={labels.menuAria}
- className="flex h-8 w-8 items-center justify-center rounded-full border border-bamboo-200/30 bg-ink-900 text-xs font-medium text-bamboo-100 transition-colors hover:border-bamboo-200/60 hover:text-bamboo-50"
+ className="flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-[#777]/20"
  >
+ <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#262626] text-xs font-medium text-bamboo-50">
  {initial}
+ </span>
+ <span className="min-w-0 flex-1">
+ <span className="block truncate text-[13px] leading-[18px] text-bamboo-50">{email}</span>
+ <span className="block truncate text-[11px] leading-4 text-bamboo-200/60">{tenantSlug}</span>
+ </span>
+ <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4 shrink-0 text-bamboo-300/80" aria-hidden>
+ <path d="M8 9l4-4 4 4" />
+ <path d="M8 15l4 4 4-4" />
+ </svg>
  </button>
  {open && (
  <div
  role="menu"
- className="absolute right-0 top-full z-40 mt-2 w-64 overflow-hidden rounded-lg border border-ink-800 bg-ink-950 shadow-lg shadow-ink-950/40"
+ className="absolute inset-x-0 bottom-full z-40 mb-2 overflow-hidden rounded-xl bg-[#1c1c1c] p-1 shadow-xl ring-1 ring-white/10"
  >
- <header className="space-y-0.5 border-b border-ink-800 px-3 py-2.5">
- <div className="truncate text-sm font-medium text-bamboo-50">
- {email}
- </div>
- <div className="truncate text-[11px] text-bamboo-200/60">
+ <div className="px-3 py-2 text-[11px] text-bamboo-200/60">
  {labels.tenant}: {tenantSlug}
  </div>
- </header>
- <ul className="py-1 text-sm">
- <li>
  <Link
  href="/settings"
  role="menuitem"
  onClick={() => setOpen(false)}
- className="block px-3 py-2 text-bamboo-100 transition-colors hover:bg-ink-900 hover:text-bamboo-50"
+ className="block rounded-lg px-3 py-2 text-[13px] text-bamboo-100 transition-colors hover:bg-[#777]/20 hover:text-bamboo-50"
  >
  {labels.settings}
  </Link>
- </li>
- <li>
  <a
  href={signOutHref}
  role="menuitem"
- className="block px-3 py-2 text-bamboo-100 transition-colors hover:bg-ink-900 hover:text-bamboo-50"
+ className="block rounded-lg px-3 py-2 text-[13px] text-bamboo-100 transition-colors hover:bg-[#777]/20 hover:text-bamboo-50"
  >
  {labels.signOut}
  </a>
- </li>
- </ul>
  </div>
  )}
  </div>

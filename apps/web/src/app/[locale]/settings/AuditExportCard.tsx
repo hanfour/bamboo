@@ -27,7 +27,7 @@ export function AuditExportCard() {
     window.location.assign(url.toString());
   };
   return (
-    <div className="space-y-3 rounded-lg border border-ink-800 bg-ink-950 p-4">
+    <div className="space-y-3 rounded-2xl p-4 bg-ink-900">
       <div className="space-y-1">
         <h3 className="text-sm font-medium text-bamboo-50">{t('title')}</h3>
         <p className="text-sm text-bamboo-200/70">{t('description')}</p>
