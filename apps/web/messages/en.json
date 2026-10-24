@@ -62,7 +62,6 @@
   },
   "peers": {
     "title": "Peers",
-    "titleAccent": "fleet",
     "subtitle": "Every device on your tailnet and its MagicDNS name.",
     "addPeer": "Add peer",
     "newPeer": {
@@ -276,7 +275,6 @@
   },
   "preAuthKeys": {
     "title": "Pre-auth keys",
-    "titleAccent": "tokens",
     "subtitle": "Admin-issued keys you paste into a bamboo client on a new device for its first connection. The plaintext is shown once at mint time; afterward only revocation is possible.",
     "empty": "No pre-auth keys yet. Go to Peers → Add peer to mint one.",
     "columns": {
@@ -309,7 +307,6 @@
   },
   "acl": {
     "title": "Access Policy",
-    "titleAccent": "policy",
     "revision": "Revision",
     "lastUpdated": "Last updated",
     "viewSource": "View source",
@@ -390,7 +387,6 @@
   },
   "users": {
     "title": "Users",
-    "titleAccent": "people",
     "subtitle": "People currently in this tenant. New members are created automatically on first OIDC sign-in; invite and role-management flows are planned but not yet shipped.",
     "columns": {
       "user": "User",
@@ -451,7 +447,6 @@
     },
     "invitations": {
       "title": "Invitations",
-      "titleAccent": "invites",
       "empty": "No invitations yet. Click \"Invite user\" above to create the first.",
       "columns": {
         "email": "Email",
@@ -479,7 +474,6 @@
   },
   "dns": {
     "title": "DNS",
-    "titleAccent": "resolution",
     "empty": {
       "title": "MagicDNS not configured yet",
       "body": "Once enabled, peers can resolve each other by short hostname — e.g. mac-mini.bamboo → 100.64.0.1, no memorizing IPs. The controller auto-derives a DNS-safe label from each peer's hostname on register (migration 00008 onwards).",
@@ -517,7 +511,6 @@
   },
   "logs": {
     "title": "Logs",
-    "titleAccent": "trail",
     "subtitle": "Recent policy-evaluation traces from peers in this tenant. Allow/deny decisions are recorded with the matching rule so you can audit access in production.",
     "emptyCard": {
       "title": "No policy evaluations yet",
@@ -540,7 +533,6 @@
   },
   "apiTokens": {
     "title": "API tokens",
-    "titleAccent": "automation",
     "subtitle": "Long-lived admin tokens for CI runners, Terraform providers, ops scripts. Present the token as Authorization: Bearer bat_… on any /api/v1/* call.",
     "empty": "No API tokens yet. Mint one to start automating tenant-admin operations.",
     "errorPrefix": "Action failed:",
@@ -592,7 +584,6 @@
   },
   "webhooks": {
     "title": "Webhooks",
-    "titleAccent": "delivery",
     "subtitle": "Outbound HTTP endpoints that receive a signed POST whenever an audited event happens in this tenant. The receiver verifies the X-Bamboo-Signature header (sha256=<hex>) against the raw request body using the subscription secret.",
     "empty": "No webhook subscriptions yet. Add one to start receiving event deliveries.",
     "errorPrefix": "Action failed:",
@@ -639,7 +630,6 @@
   },
   "relays": {
     "title": "Relay servers",
-    "titleAccent": "registry",
     "subtitle": "Shared infrastructure that forwards WireGuard packets for peers behind symmetric NAT. The controller probes each relay's /healthz every 30 seconds; relays marked unhealthy are hidden from the relay list clients receive on register.",
     "empty": "No relays registered yet. Add one via POST /api/v1/admin/relays (create form coming in a follow-up).",
     "columns": {
@@ -660,7 +650,6 @@
   },
   "settings": {
     "title": "Settings",
-    "titleAccent": "tenant",
     "subtitle": "Manage tenant and account settings.",
     "tenant": {
       "title": "Tenant",

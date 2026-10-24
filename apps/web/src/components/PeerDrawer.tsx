@@ -342,7 +342,7 @@ function HostnameField({ peer, onError }: { peer: Peer; onError: (msg: string | 
  type="button"
  onClick={save}
  disabled={pending}
- className="rounded border border-bamboo-50 bg-bamboo-50 px-2 text-xs font-medium text-ink-950 transition-colors hover:bg-ink-800 disabled:opacity-50"
+ className="rounded-full bg-bamboo-50 px-3 text-xs font-medium text-ink-950 transition-colors hover:bg-bamboo-100 disabled:opacity-50"
  >
  {t('inline.save')}
  </button>
@@ -437,7 +437,7 @@ function DnsNameField({ peer, onError }: { peer: Peer; onError: (msg: string | n
  type="button"
  onClick={save}
  disabled={pending}
- className="rounded border border-bamboo-50 bg-bamboo-50 px-2 text-xs font-medium text-ink-950 transition-colors hover:bg-ink-800 disabled:opacity-50"
+ className="rounded-full bg-bamboo-50 px-3 text-xs font-medium text-ink-950 transition-colors hover:bg-bamboo-100 disabled:opacity-50"
  >
  {t('inline.save')}
  </button>
@@ -585,7 +585,7 @@ function DisableToggle({ peer, onError }: { peer: Peer; onError: (msg: string | 
  else onError(res.error);
  });
  }}
- className="w-full rounded-md border border-bamboo-200/30 px-3 py-1.5 text-left text-sm text-bamboo-100 transition-colors hover:border-bamboo-200/60 hover:text-bamboo-50 disabled:opacity-50"
+ className="w-full rounded-lg px-3 py-1.5 text-left text-[13px] text-bamboo-100 transition-colors hover:bg-[#777]/20 hover:text-bamboo-50 disabled:opacity-50"
  >
  {pending ? t('inline.working') : label}
  </button>
@@ -880,7 +880,7 @@ function DeleteButton({
  type="button"
  disabled={pending}
  onClick={() => setConfirming(false)}
- className="flex-1 rounded-md border border-bamboo-200/30 px-3 py-1.5 text-sm text-bamboo-100 transition-colors hover:border-bamboo-200/60 hover:text-bamboo-50 disabled:opacity-50"
+ className="flex-1 rounded-full bg-[#777]/20 px-4 py-1.5 text-[13px] text-bamboo-100 transition-colors hover:bg-[#777]/30 hover:text-bamboo-50 disabled:opacity-50"
  >
  {t('actions.confirmCancel')}
  </button>
@@ -893,7 +893,7 @@ function DeleteButton({
  <button
  type="button"
  onClick={() => setConfirming(true)}
- className="w-full rounded-md border border-bamboo-200/30 px-3 py-1.5 text-left text-sm text-bamboo-100 transition-colors hover:border-red-300 hover:text-red-700 dark:hover:border-red-900/50 dark:hover:text-red-400"
+ className="w-full rounded-lg px-3 py-1.5 text-left text-[13px] text-bamboo-100 transition-colors hover:bg-red-500/15 hover:text-red-400"
  >
  {t('actions.delete')}
  </button>

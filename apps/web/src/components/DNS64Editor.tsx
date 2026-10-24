@@ -78,7 +78,7 @@ export function DNS64Editor({
           type="button"
           onClick={save}
           disabled={pending || !dirty}
-          className="rounded-md border border-bamboo-300/40 bg-bamboo-50 px-3 py-1.5 text-sm font-medium text-ink-950 transition-colors hover:bg-bamboo-100 disabled:cursor-not-allowed disabled:opacity-50"
+          className="rounded-full bg-bamboo-50 px-4 py-1.5 text-[13px] font-medium text-ink-950 transition-colors hover:bg-bamboo-100 disabled:cursor-not-allowed disabled:opacity-50"
         >
           {pending ? t('saving') : t('save')}
         </button>

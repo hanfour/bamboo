@@ -9,15 +9,13 @@ import { useDrawer } from './ChromeShell';
 // Sidebar is the persistent left navigation rail on lg+ viewports and
 // a slide-in drawer below lg.
 //
-// Design (committed 2026-05-17): warm-dark surface (ink-950), active
-// state shown by a 2px bamboo-400 left bar + bamboo-50 text — no
-// background fill, no pill. Inspired by Linear's nav (no filled
-// active pill, just typography weight + color shift). The icon
-// dims/brightens to track.
+// Design (2026-10-24, after the Cursor dashboard): the active row is a
+// rounded 8px fill in translucent grey with bright text, and idle rows
+// are dim text that gain the same fill, lighter, on hover. 13px type.
 //
 // Responsive behavior:
 // - lg+ (≥1024): always-visible static rail inside the flex flow.
-// Takes 240px of main-axis space; transparent bg so it sits on
+// Takes 256px of main-axis space; transparent bg so it sits on
 // the page surface.
 // - <lg: fixed-position drawer that slides in from the left over
 // an ink-950/80 backdrop. Drawer open state lives in ChromeShell
@@ -61,7 +59,7 @@ export function Sidebar() {
  className={[
  // Shared chrome: ink-800 hairline on the right, generous
  // vertical breathing room.
- 'h-[calc(100vh-3.5rem)] w-60 shrink-0 overflow-y-auto border-r border-ink-800 px-3 py-4',
+ 'h-[calc(100vh-3.5rem)] w-64 shrink-0 overflow-y-auto border-r border-ink-800 px-3 py-4',
  // <lg: fixed drawer that slides in. ink-900 raises it one
  // step above the page surface so the backdrop reads
  // distinctly.
@@ -87,15 +85,15 @@ export function Sidebar() {
  // rows hover into an ink-900 fill for
  // affordance without committing to the pill
  // look.
- 'relative flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors',
+ 'relative flex items-center gap-3 rounded-lg px-2.5 py-1.5 text-[13px] leading-[18px] transition-colors',
  active
- ? 'font-medium text-bamboo-50 before:absolute before:inset-y-1.5 before:left-0 before:w-0.5 before:rounded-full before:bg-bamboo-400'
- : 'text-bamboo-200/80 hover:bg-ink-900 hover:text-bamboo-50',
+ ? 'bg-[#777]/30 font-medium text-bamboo-50'
+ : 'text-bamboo-200/80 hover:bg-[#777]/20 hover:text-bamboo-50',
  ].join(' ')}
  >
  <span
  aria-hidden
- className={active ? 'text-bamboo-300' : 'text-bamboo-400/70'}
+ className={active ? 'text-bamboo-50' : 'text-bamboo-300/80'}
  >
  {it.icon}
  </span>

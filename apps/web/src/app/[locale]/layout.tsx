@@ -4,46 +4,19 @@ import type { ReactNode } from 'react';
 import { NextIntlClientProvider } from 'next-intl';
 import { getMessages } from 'next-intl/server';
 import { notFound } from 'next/navigation';
-import { Saira_Stencil_One, Sora, Lora } from 'next/font/google';
+import { Inter } from 'next/font/google';
 import { routing } from '@/i18n/routing';
 import { TopBar } from '@/components/TopBar';
 import { Sidebar } from '@/components/Sidebar';
 import { ChromeShell } from '@/components/ChromeShell';
 import '../globals.css';
 
-// Saira Stencil One — loaded only for the wordmark via the
-// --font-wordmark CSS variable. Display font kept distinct from
-// body text so the stencil aesthetic stays scoped to the wordmark
-// (using it for body would push us back to the editorial look
-// rejected on 2026-05-12).
-const wordmarkFont = Saira_Stencil_One({
- subsets: ['latin'],
- weight: '400',
- variable: '--font-wordmark',
- display: 'swap',
-});
-
-// Sora — primary body / UI sans. Humanist geometric, light weights
-// land cleanly on the warm-dark theme (Tailscale-marketing ×
-// Linear-app feel). 200-700 covers labels (300), body (400), and
-// emphasis (500-600). Tabular-nums comes free via Tailwind's
-// `tabular-nums` utility.
-const bodySans = Sora({
- subsets: ['latin'],
- weight: ['200', '300', '400', '500', '600', '700'],
- variable: '--font-sans',
- display: 'swap',
-});
-
-// Lora — serif used exclusively for italic emphasis on key
-// nouns/verbs in headings (a la Resend's `developers`). Body text
-// stays in Sora; pulling Lora onto paragraphs would tip the page
-// back toward editorial.
-const serifAccent = Lora({
+// Inter, the single UI sans. Weights 400 to 600 cover body, labels and
+// headings. Tabular figures come from Tailwind's `tabular-nums`.
+const bodySans = Inter({
  subsets: ['latin'],
  weight: ['400', '500', '600'],
- style: ['italic'],
- variable: '--font-serif',
+ variable: '--font-sans',
  display: 'swap',
 });
 
@@ -69,14 +42,12 @@ export default async function LocaleLayout({
 
  // Force the dark theme via the `dark` class on <html>. The
  // tailwind config has darkMode: 'class', so this opts every
- // `dark:` variant in. Light mode is deliberately off — the
- // brand voice committed on 2026-05-17 is warm-dark (bamboo-900
- // surface, bamboo-50 ink) inspired by Linear's dark-first app
- // pairing with Tailscale's cream-warm marketing palette.
+ // `dark:` variant in. Light mode is deliberately off. The look
+ // follows the Cursor dashboard: neutral greys, one sans, no accents.
  return (
  <html
  lang={locale}
- className={`dark ${wordmarkFont.variable} ${bodySans.variable} ${serifAccent.variable}`}
+ className={`dark ${bodySans.variable}`}
  >
  <body className="min-h-screen bg-ink-950 font-sans text-bamboo-50 antialiased">
  <NextIntlClientProvider messages={messages}>

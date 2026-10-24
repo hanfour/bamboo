@@ -197,7 +197,7 @@ function SourceTab({
           <button
             type="button"
             onClick={() => setEditing(true)}
-            className="rounded-md border border-bamboo-200/30 px-3 py-1.5 text-sm font-medium text-bamboo-100 transition-colors hover:border-bamboo-200/60 hover:text-bamboo-50"
+            className="rounded-full bg-[#777]/20 px-4 py-1.5 text-[13px] font-medium text-bamboo-100 transition-colors hover:bg-[#777]/30 hover:text-bamboo-50"
           >
             {tEdit('edit')}
           </button>
@@ -216,7 +216,7 @@ function SourceTab({
           type="button"
           onClick={cancel}
           disabled={pending}
-          className="rounded-md border border-bamboo-200/30 px-3 py-1.5 text-sm text-bamboo-100 transition-colors hover:border-bamboo-200/60 hover:text-bamboo-50 disabled:opacity-50"
+          className="rounded-full bg-[#777]/20 px-4 py-1.5 text-[13px] text-bamboo-100 transition-colors hover:bg-[#777]/30 hover:text-bamboo-50 disabled:opacity-50"
         >
           {tEdit('cancel')}
         </button>
@@ -224,7 +224,7 @@ function SourceTab({
           type="button"
           onClick={validate}
           disabled={pending}
-          className="rounded-md border border-bamboo-200/30 px-3 py-1.5 text-sm text-bamboo-100 transition-colors hover:border-bamboo-200/60 hover:text-bamboo-50 disabled:opacity-50"
+          className="rounded-full bg-[#777]/20 px-4 py-1.5 text-[13px] text-bamboo-100 transition-colors hover:bg-[#777]/30 hover:text-bamboo-50 disabled:opacity-50"
         >
           {tEdit('validate')}
         </button>
@@ -232,7 +232,7 @@ function SourceTab({
           type="button"
           onClick={save}
           disabled={pending || draft === hclSource}
-          className="rounded-md border border-bamboo-300/40 bg-bamboo-50 px-3 py-1.5 text-sm font-medium text-ink-950 transition-colors hover:bg-bamboo-100 disabled:cursor-not-allowed disabled:opacity-50"
+          className="rounded-full bg-bamboo-50 px-4 py-1.5 text-[13px] font-medium text-ink-950 transition-colors hover:bg-bamboo-100 disabled:cursor-not-allowed disabled:opacity-50"
         >
           {pending ? tEdit('working') : tEdit('save')}
         </button>
@@ -303,7 +303,7 @@ function PreviewTab({ hclSource, editing }: { hclSource: string; editing: boolea
           type="button"
           onClick={run}
           disabled={state.kind === 'loading'}
-          className="rounded-md border border-bamboo-200/30 px-3 py-1.5 text-sm font-medium text-bamboo-100 transition-colors hover:border-bamboo-200/60 hover:text-bamboo-50 disabled:opacity-50"
+          className="rounded-full bg-[#777]/20 px-4 py-1.5 text-[13px] font-medium text-bamboo-100 transition-colors hover:bg-[#777]/30 hover:text-bamboo-50 disabled:opacity-50"
         >
           {state.kind === 'loading' ? t('working') : t('run')}
         </button>
@@ -533,7 +533,7 @@ function VersionsTab({
                       onClick={() => rollback(r.revision)}
                       disabled={busyRev !== null || sameAsCurrent}
                       title={sameAsCurrent ? t('rollbackSameAsCurrent') : undefined}
-                      className="rounded border border-bamboo-300/40 bg-bamboo-50 px-2.5 py-1 text-xs font-medium text-ink-950 transition-colors hover:bg-bamboo-100 disabled:cursor-not-allowed disabled:opacity-50"
+                      className="rounded-full bg-bamboo-50 px-3 py-1 text-xs font-medium text-ink-950 transition-colors hover:bg-bamboo-100 disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       {busyRev === r.revision ? t('rollingBack') : t('rollback')}
                     </button>
@@ -797,7 +797,7 @@ function ExampleCard({
           <button
             type="button"
             onClick={() => onLoad(code)}
-            className="rounded-md border border-bamboo-300/40 bg-bamboo-50 px-2.5 py-1 text-xs font-medium text-ink-950 transition-colors hover:bg-bamboo-100"
+            className="rounded-full bg-bamboo-50 px-3 py-1 text-xs font-medium text-ink-950 transition-colors hover:bg-bamboo-100"
           >
             {t('useThis')}
           </button>

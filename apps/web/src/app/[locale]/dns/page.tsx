@@ -43,11 +43,8 @@ function DNSEmptyState() {
  return (
  <div className="space-y-10 pt-2">
  <header className="space-y-2">
- <h1 className="text-4xl font-light tracking-tight text-bamboo-50 sm:text-5xl">
+ <h1 className="text-2xl font-medium tracking-tight text-bamboo-50">
  {t('title')}
- <span className="ml-3 font-serif italic font-normal text-bamboo-300/80">
- {t('titleAccent')}
- </span>
  </h1>
  <p className="max-w-2xl text-sm text-bamboo-200/60">{t('subtitle')}</p>
  </header>
@@ -73,11 +70,8 @@ function DNSView({ dns }: { dns: DNSConfig }) {
  return (
  <div className="space-y-10 pt-2">
  <header className="space-y-2">
- <h1 className="text-4xl font-light tracking-tight text-bamboo-50 sm:text-5xl">
+ <h1 className="text-2xl font-medium tracking-tight text-bamboo-50">
  {t('title')}
- <span className="ml-3 font-serif italic font-normal text-bamboo-300/80">
- {t('titleAccent')}
- </span>
  </h1>
  <p className="max-w-2xl text-sm text-bamboo-200/60">{t('subtitle')}</p>
  </header>

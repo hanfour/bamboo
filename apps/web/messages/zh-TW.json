@@ -62,7 +62,6 @@
   },
   "peers": {
     "title": "節點",
-    "titleAccent": "fleet",
     "subtitle": "你網路內的所有裝置與其 MagicDNS 名稱。",
     "addPeer": "新增節點",
     "newPeer": {
@@ -276,7 +275,6 @@
   },
   "preAuthKeys": {
     "title": "Pre-auth keys",
-    "titleAccent": "tokens",
     "subtitle": "由管理員產生、給新節點貼進客戶端用於首次連線的金鑰。產生後即顯示一次明文；之後僅能撤銷。",
     "empty": "尚未產生任何 pre-auth key。前往「節點」頁點「新增節點」即可產生第一支。",
     "columns": {
@@ -309,7 +307,6 @@
   },
   "acl": {
     "title": "存取政策",
-    "titleAccent": "policy",
     "revision": "版本",
     "lastUpdated": "最後更新",
     "viewSource": "檢視原始碼",
@@ -390,7 +387,6 @@
   },
   "users": {
     "title": "成員",
-    "titleAccent": "people",
     "subtitle": "目前已加入此租戶的人員。新成員透過 OIDC 登入後自動建立；邀請與角色管理流程仍在規劃中。",
     "columns": {
       "user": "成員",
@@ -451,7 +447,6 @@
     },
     "invitations": {
       "title": "邀請",
-      "titleAccent": "invites",
       "empty": "尚未有任何邀請。點上方「邀請成員」建立第一筆。",
       "columns": {
         "email": "電子郵件",
@@ -479,7 +474,6 @@
   },
   "dns": {
     "title": "DNS",
-    "titleAccent": "resolution",
     "subtitle": "租戶的 DNS 設定。下方的 DNS64(NAT64 合成)可編輯;MagicDNS 與 nameservers 目前仍為唯讀,透過 controller API 管理。",
     "empty": {
       "title": "MagicDNS 尚未設定",
@@ -517,7 +511,6 @@
   },
   "logs": {
     "title": "日誌",
-    "titleAccent": "trail",
     "subtitle": "本租戶內各節點最近的政策判定紀錄。每一筆 allow / deny 都會附上命中的規則，方便正式環境的存取稽核。",
     "emptyCard": {
       "title": "尚未有任何政策判定紀錄",
@@ -540,7 +533,6 @@
   },
   "apiTokens": {
     "title": "API tokens",
-    "titleAccent": "automation",
     "subtitle": "長效 admin token，供 CI runner / Terraform provider / 維運腳本使用。呼叫 /api/v1/* 時帶 Authorization: Bearer bat_… 即可。",
     "empty": "尚無 API token。產生一個即可開始自動化租戶管理操作。",
     "errorPrefix": "操作失敗：",
@@ -592,7 +584,6 @@
   },
   "webhooks": {
     "title": "Webhooks",
-    "titleAccent": "delivery",
     "subtitle": "對外 HTTP 端點，當本租戶有可稽核事件時，controller 會帶 HMAC 簽章 POST 過去。接收端用訂閱 secret 對原始 request body 算 sha256 然後比對 X-Bamboo-Signature header 即可驗證。",
     "empty": "尚無 webhook 訂閱。新增一筆即可開始接收事件。",
     "errorPrefix": "操作失敗：",
@@ -639,7 +630,6 @@
   },
   "relays": {
     "title": "Relay 伺服器",
-    "titleAccent": "registry",
     "subtitle": "共用基礎設施，協助位於對稱 NAT 後的節點轉發 WireGuard 封包。Controller 每 30 秒探測一次各台 relay 的 /healthz；被標記為不健康的 relay 不會出現在 client 註冊時收到的清單裡。",
     "empty": "尚未註冊任何 relay。可透過 POST /api/v1/admin/relays 新增（建立表單預計後續上線）。",
     "columns": {
@@ -660,7 +650,6 @@
   },
   "settings": {
     "title": "設定",
-    "titleAccent": "tenant",
     "subtitle": "管理租戶與帳號相關設定。",
     "tenant": {
       "title": "租戶",

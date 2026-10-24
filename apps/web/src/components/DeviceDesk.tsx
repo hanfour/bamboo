@@ -25,7 +25,7 @@ export type DeskActions = {
 const statusRefreshMs = 15_000;
 
 const buttonClass =
-  'rounded border border-bamboo-50 bg-bamboo-50 px-2 text-xs font-medium text-ink-950 transition-colors hover:bg-ink-800 disabled:opacity-50';
+  'rounded-full bg-bamboo-50 px-3 text-xs font-medium text-ink-950 transition-colors hover:bg-bamboo-100 disabled:opacity-50';
 const fieldClass =
   'w-full rounded border border-ink-800 bg-transparent px-2 py-1 font-mono text-xs text-bamboo-100';
 

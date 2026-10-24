@@ -67,7 +67,7 @@ export function NewPeerButton({ tenantSlug }: { tenantSlug: string }) {
  <button
  type="button"
  onClick={() => setOpen(true)}
- className="rounded-md bg-bamboo-50 px-3 py-1.5 text-sm font-medium text-ink-950 transition-colors hover:bg-ink-800"
+ className="rounded-full bg-bamboo-50 px-4 py-1.5 text-[13px] font-medium text-ink-950 transition-colors hover:bg-bamboo-100"
  >
  {t('button')}
  </button>
@@ -134,7 +134,7 @@ function Modal({
  role="dialog"
  aria-modal="true"
  aria-label={title}
- className="relative w-full max-w-md rounded-lg border border-ink-800 bg-ink-950 shadow-xl dark:bg-ink-950"
+ className="relative w-full max-w-md rounded-2xl bg-ink-900 shadow-xl ring-1 ring-white/5"
  >
  <header className="border-b border-ink-800 px-5 py-3 dark:border-ink-800">
  <h2 className="text-base font-semibold text-bamboo-50">{title}</h2>
@@ -241,14 +241,14 @@ function FormView({
  type="button"
  onClick={onCancel}
  disabled={pending}
- className="rounded-md border border-bamboo-200/30 px-3 py-1.5 text-sm text-bamboo-100 transition-colors hover:border-bamboo-200/60 hover:text-bamboo-50 disabled:opacity-50 dark:text-bamboo-100 dark:hover:text-bamboo-50"
+ className="rounded-full bg-[#777]/20 px-4 py-1.5 text-[13px] text-bamboo-100 transition-colors hover:bg-[#777]/30 hover:text-bamboo-50 disabled:opacity-50"
  >
  {t('cancel')}
  </button>
  <button
  type="submit"
  disabled={pending}
- className="rounded-md bg-bamboo-50 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-ink-800 hover:bg-ink-800 dark:text-bamboo-50"
+ className="rounded-full bg-bamboo-50 px-4 py-1.5 text-[13px] font-medium text-ink-950 transition-colors hover:bg-bamboo-100"
  >
  {pending ? t('working') : t('submit')}
  </button>
@@ -329,7 +329,7 @@ function ResultView({
  <button
  type="button"
  onClick={onDone}
- className="rounded-md bg-bamboo-50 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-ink-800 hover:bg-ink-800 dark:text-bamboo-50"
+ className="rounded-full bg-bamboo-50 px-4 py-1.5 text-[13px] font-medium text-ink-950 transition-colors hover:bg-bamboo-100"
  >
  {t('done')}
  </button>
