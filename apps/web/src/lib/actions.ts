@@ -109,6 +109,9 @@ export async function mintPreAuthKeyAction(input: {
   // (issue #133). Defaults false so the safe path is the path of
   // least resistance.
   autoApprove?: boolean;
+  // tags are copied onto every peer that redeems the key, so a
+  // headless service matches `tag:` rules from its first register.
+  tags?: string[];
 }): Promise<MintResult> {
   try {
     const res = await fetch(`${BASE}/api/v1/preauth-keys`, {
@@ -119,6 +122,7 @@ export async function mintPreAuthKeyAction(input: {
         reusable: input.reusable,
         ephemeral: false,
         autoApprove: input.autoApprove ?? false,
+        tags: input.tags ?? [],
       }),
       cache: 'no-store',
     });

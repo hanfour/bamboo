@@ -6,12 +6,13 @@ import { useRef, useState, useTransition } from 'react';
 import { useTranslations } from 'next-intl';
 import { QRCodeSVG } from 'qrcode.react';
 import { mintPreAuthKeyAction } from '@/lib/actions';
+import { parseTagList } from '@/lib/tags';
 import { useDialogA11y } from '@/hooks/useDialogA11y';
 
 // NewPeerButton wraps the /peers header's"新增節點" button with a
 // modal that mints a pre-auth key and shows the connect info once.
 // Two stages:
-// - 'form' — description + reusable checkbox + submit
+// - 'form' — description + tags + reusable / auto-approve + submit
 // - 'result' — controller URL / tenant slug / pre-auth key, each
 // with a copy button; Done closes the modal
 //
@@ -24,6 +25,7 @@ export function NewPeerButton({ tenantSlug }: { tenantSlug: string }) {
  const [description, setDescription] = useState('');
  const [reusable, setReusable] = useState(false);
  const [autoApprove, setAutoApprove] = useState(false);
+ const [tags, setTags] = useState('');
  const [pending, startTransition] = useTransition();
  const [error, setError] = useState<string | null>(null);
  const [result, setResult] = useState<{ secret: string; description: string } | null>(null);
@@ -37,6 +39,7 @@ export function NewPeerButton({ tenantSlug }: { tenantSlug: string }) {
  setDescription('');
  setReusable(false);
  setAutoApprove(false);
+ setTags('');
  setError(null);
  setResult(null);
  }, 200);
@@ -45,7 +48,12 @@ export function NewPeerButton({ tenantSlug }: { tenantSlug: string }) {
  function submit() {
  setError(null);
  startTransition(async () => {
- const res = await mintPreAuthKeyAction({ description, reusable, autoApprove });
+ const res = await mintPreAuthKeyAction({
+ description,
+ reusable,
+ autoApprove,
+ tags: parseTagList(tags),
+ });
  if (res.ok) {
  setResult({ secret: res.secret, description: res.description });
  } else {
@@ -77,9 +85,11 @@ export function NewPeerButton({ tenantSlug }: { tenantSlug: string }) {
  description={description}
  reusable={reusable}
  autoApprove={autoApprove}
+ tags={tags}
  pending={pending}
  error={error}
  onDescriptionChange={setDescription}
+ onTagsChange={setTags}
  onReusableChange={setReusable}
  onAutoApproveChange={setAutoApprove}
  onSubmit={submit}
@@ -139,9 +149,11 @@ function FormView({
  description,
  reusable,
  autoApprove,
+ tags,
  pending,
  error,
  onDescriptionChange,
+ onTagsChange,
  onReusableChange,
  onAutoApproveChange,
  onSubmit,
@@ -150,9 +162,11 @@ function FormView({
  description: string;
  reusable: boolean;
  autoApprove: boolean;
+ tags: string;
  pending: boolean;
  error: string | null;
  onDescriptionChange: (v: string) => void;
+ onTagsChange: (v: string) => void;
  onReusableChange: (v: boolean) => void;
  onAutoApproveChange: (v: boolean) => void;
  onSubmit: () => void;
@@ -180,6 +194,19 @@ function FormView({
  className="w-full rounded border border-bamboo-200/30 bg-ink-950 px-2 py-1.5 text-sm text-bamboo-50 outline-none focus:border-bamboo-300 focus:ring-1 focus:ring-bamboo-300 dark:bg-ink-900 dark:text-bamboo-50"
  />
  </label>
+
+ <label className="block space-y-1 text-sm">
+ <span className="text-bamboo-100">{t('tagsLabel')}</span>
+ <input
+ type="text"
+ value={tags}
+ disabled={pending}
+ onChange={(e) => onTagsChange(e.target.value)}
+ placeholder={t('tagsPlaceholder')}
+ className="w-full rounded border border-bamboo-200/30 bg-ink-950 px-2 py-1.5 text-sm text-bamboo-50 outline-none focus:border-bamboo-300 focus:ring-1 focus:ring-bamboo-300 dark:bg-ink-900 dark:text-bamboo-50"
+ />
+ </label>
+ <p className="-mt-2 text-xs text-bamboo-200/60">{t('tagsHint')}</p>
 
  <label className="flex items-center gap-2 text-sm">
  <input

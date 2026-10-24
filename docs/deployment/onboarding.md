@@ -46,9 +46,13 @@ is every peer carrying that tag, including one with no owner.
 
 ## 2. Enroll the database
 
-Sign in as the DBA (the account whose email is in `group:dba`) and
-mint a pre-auth key. The JSON body the UI's create call does not send
-yet, so use the API when the service needs a tag:
+Sign in as the DBA (the account whose email is in `group:dba`). On
+the Peers page, choose **Add peer**, enter `db` as the description and
+`db` under **Tags**, and tick **Reusable key** and **Auto-approve**.
+The dialog shows the key once. Minting a key needs an admin account,
+so the DBA must be an admin.
+
+The same key from the API:
 
 ```bash
 curl -s -X POST "$CONTROLLER/api/v1/preauth-keys" \
@@ -57,7 +61,8 @@ curl -s -X POST "$CONTROLLER/api/v1/preauth-keys" \
   -d '{"description":"db","reusable":true,"autoApprove":true,"tags":["db"]}'
 ```
 
-The response includes `secret` once. On the database host:
+The API response includes `secret` once. Use either key as `$SECRET` on
+the database host:
 
 ```bash
 bamboo up --login-server "$CONTROLLER" --preauth-key "$SECRET" --hostname db-server
