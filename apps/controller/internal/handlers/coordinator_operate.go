@@ -8,6 +8,7 @@ import (
 	"io"
 
 	"github.com/google/uuid"
+	"github.com/hanfour/bamboo/apps/controller/internal/auth"
 	"github.com/hanfour/bamboo/apps/controller/internal/db/repo"
 	"github.com/hanfour/bamboo/apps/controller/internal/operate"
 	bamboov1 "github.com/hanfour/bamboo/proto/gen/go/bamboo/v1"
@@ -41,7 +42,7 @@ func (h *CoordinatorHandler) serveOperate(stream operateStream) error {
 		return status.Error(codes.InvalidArgument, "operate hello is required")
 	}
 	ctx := stream.Context()
-	if err := h.enforcePeerBinding(ctx, hello.GetPeerId()); err != nil {
+	if err := h.requireDeviceSession(ctx, hello.GetPeerId()); err != nil {
 		return err
 	}
 	if _, err := h.lookupOperatePeer(ctx, hello.GetPeerId()); err != nil {
@@ -86,6 +87,32 @@ func (h *CoordinatorHandler) serveOperate(stream operateStream) error {
 			}
 		}
 	}
+}
+
+// requireDeviceSession admits only the device itself to the desk
+// stream. Admins send files and terminal keystrokes down this stream
+// and trust what comes back, so the tenant-level check that
+// enforcePeerBinding applies to a user-session JWT is not enough here:
+// any member of the tenant could attach as another user's machine and
+// take over its link. When the controller has a session secret, the
+// bearer must be a peer-session token minted for this exact peer.
+// Without a secret (dev mode) there is nothing to verify against.
+func (h *CoordinatorHandler) requireDeviceSession(ctx context.Context, peerID string) error {
+	if h.auth == nil || len(h.auth.sessionSec) == 0 {
+		return nil
+	}
+	token := bearerFromMetadata(ctx)
+	if token == "" {
+		return status.Error(codes.Unauthenticated, "operate requires the device's peer-session token")
+	}
+	claims, err := auth.VerifyPeerSessionToken(h.auth.sessionSec, token)
+	if err != nil {
+		return status.Error(codes.PermissionDenied, "operate requires the device's peer-session token")
+	}
+	if claims.PeerID.String() != peerID {
+		return status.Error(codes.PermissionDenied, "peer-session token is not bound to the requested peer")
+	}
+	return nil
 }
 
 func (h *CoordinatorHandler) applyDeviceFrame(peerID string, frame *bamboov1.DeviceOperateFrame) {
