@@ -46,7 +46,9 @@ function peer(id: string, hostname: string, status: Peer['status'], tags: string
     txBytes: 0,
     createdAt: '2026-01-01T00:00:00Z',
     approvalStatus: 'approved',
-  } as Peer;
+    // The view only reads the fields above; the route and exit-node
+    // fields are not needed for the toolbar.
+  } as unknown as Peer;
 }
 
 const peers = [
