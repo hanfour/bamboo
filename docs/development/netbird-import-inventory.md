@@ -65,7 +65,7 @@ plan for [Issue #2 — NetBird fork: sandbox clone and inventory](https://github
 | `tools/`                 | REFERENCE  | adapt selectively into `tools/`               | Apache 2.0 (clean) | Dev tools; rewrite the bits we use. |
 | `stun/`                  | KEEP       | `apps/relay/internal/stun/`                   | AGPLv3           | STUN server, paired with relay. |
 | `proxy/`                 | STRIP      | —                                             | —                | TCP/HTTP proxy feature; not in Phase 1 scope. |
-| `base62/`                | KEEP       | `pkg/base62/`                                 | AGPLv3 (interim) | Tiny encoding helper. |
+| `base62/`                | REMOVED    | (was `pkg/base62/`)                           | —                | Imported 2026-05-08, never used; deleted 2026-10-24. |
 | `sharedsock/`            | KEEP       | `clients/core/sharedsock/`           | AGPLv3 (interim) | Shared raw-socket abstraction (NAT traversal helper). |
 | `upload-server/`         | STRIP      | —                                             | —                | Log / file upload server; not in Phase 1 scope. |
 | `combined/`              | STRIP      | —                                             | —                | Combined-binary build target. We package per-app. |

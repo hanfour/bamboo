@@ -14,6 +14,21 @@ Used for components designed for **broad embedding and integration**:
 
 Full text: [LICENSE-APACHE](./LICENSE-APACHE)
 
+### Interim exception: `clients/core` is AGPLv3
+
+`clients/core/**` is licensed **AGPLv3** for now, because parts of it
+were bootstrapped from NetBird
+([ADR 0011](./docs/adr/0011-client-core-relicensing-path.md)). The
+target is Apache 2.0 once the clean-room rewrite finishes.
+
+The `bamboo` CLI's own source in `clients/cli/**` is Apache 2.0, but the
+CLI binary links `clients/core`. **A distributed `bamboo` binary is
+therefore subject to AGPLv3 terms** until `clients/core` is relicensed.
+The Apple apps do not link `clients/core`.
+
+`scripts/check-license-boundary.py` runs in CI and fails if any other
+Apache 2.0 package starts depending on AGPL code.
+
 ## GNU Affero General Public License v3.0 (AGPLv3)
 
 Used for **server-side components** to prevent unauthorized commercial SaaS forks:

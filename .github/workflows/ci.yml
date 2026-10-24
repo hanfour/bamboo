@@ -32,7 +32,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
       - run: bash scripts/check-license-headers.sh
+      # ADR 0011 Phase B: Apache-2.0 packages must not depend on AGPL ones.
+      - run: python3 -I scripts/check-license-boundary.py
 
   proto:
     name: Proto lint + drift

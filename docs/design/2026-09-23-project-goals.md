@@ -113,6 +113,12 @@ desk (not on this list). AI Tier 2 delivery is decided in ADR 0015.
   existing single-VPS and demo docs.
 - **`clients/core` clean-room** (ADR 0011). NetBird `encryption` and
   `pkg/base62` are imported; the rewrite has not started.
+  Update 2026-10-24: `pkg/base62` had no importers and is deleted.
+  `clients/core/encryption` is the only NetBird-derived package left;
+  the device desk uses it. CI now fails if Apache code starts depending
+  on AGPL code, and `LICENSING.md` states that the CLI binary is under
+  AGPL terms. The rewrite itself needs someone who can attest they have
+  not read NetBird's source, per ADR 0011.
 
 ## Explicitly out of this cycle
 

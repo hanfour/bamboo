@@ -2,7 +2,9 @@
 
 `bamboo` — the command-line client for the bamboo mesh VPN.
 
-**License:** Apache 2.0 — see [LICENSE-APACHE](../../LICENSE-APACHE).
+**License:** source is Apache 2.0 — see [LICENSE-APACHE](../../LICENSE-APACHE).
+The binary links `clients/core`, which is AGPLv3 for now, so a distributed
+`bamboo` binary is subject to AGPLv3 terms. See [LICENSING.md](../../LICENSING.md).
 
 ## Status
 
