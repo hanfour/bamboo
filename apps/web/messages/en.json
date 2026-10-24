@@ -51,7 +51,12 @@
         "peer_register": "Registered",
         "peer_update": "Updated",
         "peer_delete": "Deleted",
-        "policy_update": "Policy updated"
+        "policy_update": "Policy updated",
+        "peer_desk_msg": "Sent a message",
+        "peer_desk_put": "Uploaded a file",
+        "peer_desk_get": "Downloaded a file",
+        "peer_desk_term": "Opened a terminal",
+        "peer_desk_term_close": "Closed a terminal"
       }
     }
   },
@@ -148,6 +153,30 @@
         "connectionTimeline": "Connection path",
         "timeline": "Activity"
       },
+      "desk": {
+        "title": "Device",
+        "hint": "The device opens this channel itself while bamboo up is running. The controller does not dial the mesh address.",
+        "execHint": "The terminal needs bamboo up --session-exec. Messages and files are available without it.",
+        "checking": "Checking the device…",
+        "offline": "The device is not connected to the controller.",
+        "execOn": "Connected. Terminal is enabled.",
+        "execOff": "Connected. Terminal is off on this device.",
+        "refresh": "Refresh",
+        "mesh": "From another peer on the mesh:",
+        "message": "Message",
+        "send": "Send",
+        "path": "Path inside the device session directory",
+        "upload": "Upload",
+        "download": "Download",
+        "fileCap": "Files stay inside the device session directory. The limit is 4MiB.",
+        "terminal": "Terminal",
+        "start": "Start terminal",
+        "close": "Close terminal",
+        "input": "Terminal input",
+        "noOutput": "No output yet.",
+        "closed": "session closed",
+        "streamClosed": "The terminal stream closed."
+      },
       "bandwidth": {
         "window": "Last {window}",
         "peak": "peak {rate}",
@@ -232,7 +261,12 @@
         "action": {
           "peer_register": "Registered",
           "peer_update": "Updated",
-          "peer_delete": "Deleted"
+          "peer_delete": "Deleted",
+          "peer_desk_msg": "Sent a message",
+          "peer_desk_put": "Uploaded a file",
+          "peer_desk_get": "Downloaded a file",
+          "peer_desk_term": "Opened a terminal",
+          "peer_desk_term_close": "Closed a terminal"
         }
       }
     }

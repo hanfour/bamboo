@@ -22,21 +22,14 @@ import (
 
 // peerSession holds the controller-issued peer-bound bearer token for
 // the lifetime of the running CLI process. The token is minted on
-// Register and on every re-register (idempotent on pubkey, so the
-// controller refreshes it without allocating a new IP). The CLI
-// presents it on:
-//
-//   - REST POST /api/v1/relay-token   — replaces the X-Tenant-Slug
-//     header fallback. Once the controller's prod-mode gate (#1 / #3
-//     follow-up) lands, this is the only credential channel that
-//     keeps relay fallback working.
-//   - gRPC Heartbeat / WatchPeers      — the Bearer is informational
-//     today (the interceptor whitelists those methods), and becomes
-//     load-bearing once the gate lands.
+// Register and replaced when Heartbeat returns a renewal, or when a
+// re-register runs. The CLI presents it on relay-token, Heartbeat,
+// WatchPeers, and the Operate desk stream. With require_auth on,
+// those calls reject an expired token.
 //
 // Reads and writes are guarded with a RWMutex. The CLI is single-
 // process so contention is minimal; the lock exists to make the
-// happens-before relationship explicit when refresh() rotates the
+// happens-before relationship explicit when a renewal rotates the
 // token mid-watch.
 type peerSession struct {
 	mu        sync.RWMutex
@@ -57,6 +50,18 @@ func (s *peerSession) Token() string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.token
+}
+
+// live reports whether the bearer is present and still before its
+// expiry. A zero expiry is not live: the controller treats exp 0 as
+// already expired.
+func (s *peerSession) live(now time.Time) bool {
+	if s == nil {
+		return false
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.token != "" && !s.expiresAt.IsZero() && now.Before(s.expiresAt)
 }
 
 // restRegisterResponse is the JSON shape of the controller's
@@ -99,7 +104,7 @@ type restPeer struct {
 // getters without a refactor. Idempotent on wireguard_public_key on
 // the controller, so refresh() can call this repeatedly to rotate
 // the bearer without provisioning a new IP.
-func restRegister(ctx context.Context, hostname, wgPublicKey, osName, version, preAuthKey, tenantSlug string, endpoints, advertisedRoutes []string, advertiseExitNode, advertiseNat64Egress bool) (*bamboov1.RegisterResponse, string, time.Time, error) {
+func restRegister(ctx context.Context, hostname, wgPublicKey, osName, version, preAuthKey, tenantSlug, sessionBearer string, endpoints, advertisedRoutes []string, advertiseExitNode, advertiseNat64Egress bool) (*bamboov1.RegisterResponse, string, time.Time, error) {
 	base := controllerHTTPBase()
 	reqBody := map[string]any{
 		"hostname":           hostname,
@@ -135,6 +140,12 @@ func restRegister(ctx context.Context, hostname, wgPublicKey, osName, version, p
 		return nil, "", time.Time{}, err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	// A live peer session lets the controller re-register this peer
+	// without redeeming a single-use pre-auth key. The key stays in
+	// the body so an older controller can still authenticate.
+	if sessionBearer != "" {
+		req.Header.Set("Authorization", "Bearer "+sessionBearer)
+	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return nil, "", time.Time{}, err

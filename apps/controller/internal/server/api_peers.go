@@ -25,11 +25,17 @@ import (
 )
 
 // peerSessionTokenTTL is how long a Register-issued peer session
-// token is valid before the client must re-register (or, once renewal
-// is wired, refresh via Heartbeat). 24h matches the OIDC session TTL
-// and gives long-running clients a predictable rotation cadence
-// without forcing churn on every heartbeat.
+// token is valid. 24h matches the OIDC session TTL. Heartbeat renews
+// a token that is inside peerSessionRenewWithin, so a long-running
+// agent does not have to re-register on a timer.
 const peerSessionTokenTTL = 24 * time.Hour
+
+// peerSessionRenewWithin is how close to expiry a presented peer
+// session must be before Heartbeat mints a replacement. The CLI
+// heartbeat interval is 30s, so a multi-hour window still arrives
+// while the current token verifies. Renewing only inside the window
+// keeps a quiet agent from rotating a token on every tick.
+const peerSessionRenewWithin = 6 * time.Hour
 
 // REST adapters for the Coordinator service. The Apple clients (and
 // any future REST-only consumer) use these instead of speaking gRPC,
@@ -171,12 +177,11 @@ func (h *HTTPServer) apiPeersRegister(w http.ResponseWriter, r *http.Request) {
 
 	// Prod-mode gate. A register call must carry at least one of:
 	//   - a pre-auth-key secret in the body
-	//   - a peer-session bearer (re-register from a CLI that already
-	//     holds a token; the coordinator handler re-validates against
-	//     the peer row)
+	//   - a peer-session bearer (re-register of the same peer; the
+	//     coordinator accepts it without redeeming the pre-auth key)
 	//   - a user-session JWT (admin minting a peer through the API)
 	// Pure X-Tenant-Slug fallback is rejected. The CoordinatorHandler's
-	// resolveTenant applies the same gate when called over gRPC.
+	// resolveCredential applies the same gate when called over gRPC.
 	if h.requireAuth {
 		if body.PreAuthKeySecret == "" && h.peerSessionFromRequest(r) == nil {
 			authn, err := h.authenticate(r)
@@ -198,11 +203,22 @@ func (h *HTTPServer) apiPeersRegister(w http.ResponseWriter, r *http.Request) {
 		slug = r.Header.Get("X-Tenant-Slug")
 	}
 	ctx := r.Context()
+	// Incoming metadata is what the coordinator reads. A live
+	// peer-session bearer rides along so a re-register can renew that
+	// peer without redeeming a single-use pre-auth key that the body
+	// still carries for older controllers.
+	md := make([]string, 0, 4)
 	if slug != "" {
 		ctx = metadata.AppendToOutgoingContext(ctx, "x-tenant-slug", slug)
-		// AppendToOutgoingContext does not set incoming metadata, which
-		// is what the handler reads. Wrap it explicitly.
-		ctx = metadata.NewIncomingContext(ctx, metadata.Pairs("x-tenant-slug", slug))
+		md = append(md, "x-tenant-slug", slug)
+	}
+	if h.peerSessionFromRequest(r) != nil {
+		if tok := bearerToken(r); tok != "" {
+			md = append(md, "authorization", "Bearer "+tok)
+		}
+	}
+	if len(md) > 0 {
+		ctx = metadata.NewIncomingContext(ctx, metadata.Pairs(md...))
 	}
 
 	req := &bamboov1.RegisterRequest{
@@ -216,18 +232,10 @@ func (h *HTTPServer) apiPeersRegister(w http.ResponseWriter, r *http.Request) {
 		req.Credential = &bamboov1.RegisterRequest_PreAuthKeySecret{
 			PreAuthKeySecret: body.PreAuthKeySecret,
 		}
-	} else if tok := bearerToken(r); tok != "" && h.peerSessionFromRequest(r) == nil {
-		// User-session JWT (OIDC sign-in) is present and the bearer
-		// isn't a peer-session token. Propagate it into the gRPC
-		// RegisterRequest so coord.resolveCredential can resolve the
-		// tenant from the JWT claims; otherwise the coordinator's
-		// own require_auth gate rejects with "Register requires a
-		// pre-auth key or bearer credential" even though the REST
-		// gate above already authenticated the user. Peer-session
-		// bearers (heartbeat / watch / relay-token) have a
-		// different claim shape that resolveBearerToken would
-		// reject — skip those so we don't trade a clean error
-		// ("require auth") for a confusing one ("invalid bearer").
+	} else if tok := bearerToken(r); tok != "" {
+		// User-session JWT or peer-session bearer, and no pre-auth
+		// key. The coordinator distinguishes the two claim shapes.
+		// A peer-session token may only re-register its own peer.
 		req.Credential = &bamboov1.RegisterRequest_BearerToken{
 			BearerToken: tok,
 		}
@@ -482,6 +490,11 @@ type peerHeartbeatResponse struct {
 	PeersChanged          bool  `json:"peersChanged"`
 	PolicyChanged         bool  `json:"policyChanged"`
 	CurrentPolicyRevision int64 `json:"currentPolicyRevision"`
+	// Set only when the presented peer session is inside the renewal
+	// window. Absent otherwise, so a client that does not know the
+	// fields keeps its current token.
+	PeerSessionToken     string `json:"peerSessionToken,omitempty"`
+	PeerSessionExpiresAt int64  `json:"peerSessionExpiresAt,omitempty"`
 }
 
 func (h *HTTPServer) apiPeersHeartbeat(w http.ResponseWriter, r *http.Request) {
@@ -535,11 +548,41 @@ func (h *HTTPServer) apiPeersHeartbeat(w http.ResponseWriter, r *http.Request) {
 	if peerID, perr := uuid.Parse(body.PeerID); perr == nil {
 		h.recordHeartbeatSideChannel(r, peerID, body)
 	}
-	writeJSON(w, http.StatusOK, peerHeartbeatResponse{
+	out := peerHeartbeatResponse{
 		PeersChanged:          resp.GetPeersChanged(),
 		PolicyChanged:         resp.GetPolicyChanged(),
 		CurrentPolicyRevision: resp.GetCurrentPolicyRevision(),
-	})
+	}
+	if tok, exp, ok := h.renewPeerSession(h.peerSessionFromRequest(r), time.Now()); ok {
+		out.PeerSessionToken = tok
+		out.PeerSessionExpiresAt = exp.Unix()
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// renewPeerSession mints a replacement peer session when the presented
+// token is inside the renewal window. The caller still has to present
+// a token that verifies, so an already-expired bearer cannot renew
+// itself here. ok is false when no renewal is due.
+func (h *HTTPServer) renewPeerSession(claims *auth.PeerSessionClaims, now time.Time) (string, time.Time, bool) {
+	if h == nil || claims == nil || len(h.secret) == 0 || claims.ExpiresAt == 0 {
+		return "", time.Time{}, false
+	}
+	if time.Unix(claims.ExpiresAt, 0).After(now.Add(peerSessionRenewWithin)) {
+		return "", time.Time{}, false
+	}
+	exp := now.Add(peerSessionTokenTTL)
+	tok, err := auth.IssuePeerSessionToken(h.secret, auth.PeerSessionClaims{
+		TenantID:    claims.TenantID,
+		PeerID:      claims.PeerID,
+		WGPublicKey: claims.WGPublicKey,
+		ExpiresAt:   exp.Unix(),
+	}, peerSessionTokenTTL)
+	if err != nil {
+		slog.Warn("renew peer session token", "peer_id", claims.PeerID, "err", err)
+		return "", time.Time{}, false
+	}
+	return tok, exp, true
 }
 
 // contextWithKnownTenant stamps a tenant the HTTP layer already

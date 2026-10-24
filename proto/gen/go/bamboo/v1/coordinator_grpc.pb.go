@@ -25,6 +25,7 @@ const (
 	CoordinatorService_WatchPeers_FullMethodName = "/bamboo.v1.CoordinatorService/WatchPeers"
 	CoordinatorService_GetPeer_FullMethodName    = "/bamboo.v1.CoordinatorService/GetPeer"
 	CoordinatorService_ListPeers_FullMethodName  = "/bamboo.v1.CoordinatorService/ListPeers"
+	CoordinatorService_Operate_FullMethodName    = "/bamboo.v1.CoordinatorService/Operate"
 )
 
 // CoordinatorServiceClient is the client API for CoordinatorService service.
@@ -48,6 +49,10 @@ type CoordinatorServiceClient interface {
 	GetPeer(ctx context.Context, in *GetPeerRequest, opts ...grpc.CallOption) (*GetPeerResponse, error)
 	// ListPeers returns all peers visible to the caller (admin view).
 	ListPeers(ctx context.Context, in *ListPeersRequest, opts ...grpc.CallOption) (*ListPeersResponse, error)
+	// Operate is the admin desk. The device opens the stream; the
+	// controller sends messages, files, and terminal input back down
+	// it. The controller never dials a mesh address.
+	Operate(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[DeviceOperateFrame, AdminOperateFrame], error)
 }
 
 type coordinatorServiceClient struct {
@@ -127,6 +132,19 @@ func (c *coordinatorServiceClient) ListPeers(ctx context.Context, in *ListPeersR
 	return out, nil
 }
 
+func (c *coordinatorServiceClient) Operate(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[DeviceOperateFrame, AdminOperateFrame], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &CoordinatorService_ServiceDesc.Streams[1], CoordinatorService_Operate_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[DeviceOperateFrame, AdminOperateFrame]{ClientStream: stream}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type CoordinatorService_OperateClient = grpc.BidiStreamingClient[DeviceOperateFrame, AdminOperateFrame]
+
 // CoordinatorServiceServer is the server API for CoordinatorService service.
 // All implementations must embed UnimplementedCoordinatorServiceServer
 // for forward compatibility.
@@ -148,6 +166,10 @@ type CoordinatorServiceServer interface {
 	GetPeer(context.Context, *GetPeerRequest) (*GetPeerResponse, error)
 	// ListPeers returns all peers visible to the caller (admin view).
 	ListPeers(context.Context, *ListPeersRequest) (*ListPeersResponse, error)
+	// Operate is the admin desk. The device opens the stream; the
+	// controller sends messages, files, and terminal input back down
+	// it. The controller never dials a mesh address.
+	Operate(grpc.BidiStreamingServer[DeviceOperateFrame, AdminOperateFrame]) error
 	mustEmbedUnimplementedCoordinatorServiceServer()
 }
 
@@ -175,6 +197,9 @@ func (UnimplementedCoordinatorServiceServer) GetPeer(context.Context, *GetPeerRe
 }
 func (UnimplementedCoordinatorServiceServer) ListPeers(context.Context, *ListPeersRequest) (*ListPeersResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListPeers not implemented")
+}
+func (UnimplementedCoordinatorServiceServer) Operate(grpc.BidiStreamingServer[DeviceOperateFrame, AdminOperateFrame]) error {
+	return status.Error(codes.Unimplemented, "method Operate not implemented")
 }
 func (UnimplementedCoordinatorServiceServer) mustEmbedUnimplementedCoordinatorServiceServer() {}
 func (UnimplementedCoordinatorServiceServer) testEmbeddedByValue()                            {}
@@ -298,6 +323,13 @@ func _CoordinatorService_ListPeers_Handler(srv interface{}, ctx context.Context,
 	return interceptor(ctx, in, info, handler)
 }
 
+func _CoordinatorService_Operate_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(CoordinatorServiceServer).Operate(&grpc.GenericServerStream[DeviceOperateFrame, AdminOperateFrame]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type CoordinatorService_OperateServer = grpc.BidiStreamingServer[DeviceOperateFrame, AdminOperateFrame]
+
 // CoordinatorService_ServiceDesc is the grpc.ServiceDesc for CoordinatorService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -331,6 +363,12 @@ var CoordinatorService_ServiceDesc = grpc.ServiceDesc{
 			StreamName:    "WatchPeers",
 			Handler:       _CoordinatorService_WatchPeers_Handler,
 			ServerStreams: true,
+		},
+		{
+			StreamName:    "Operate",
+			Handler:       _CoordinatorService_Operate_Handler,
+			ServerStreams: true,
+			ClientStreams: true,
 		},
 	},
 	Metadata: "bamboo/v1/coordinator.proto",

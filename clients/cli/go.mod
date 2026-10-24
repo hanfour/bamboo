@@ -7,12 +7,14 @@ require (
 	github.com/hanfour/bamboo/clients/core v0.0.0-00010101000000-000000000000
 	github.com/hanfour/bamboo/proto v0.0.0-00010101000000-000000000000
 	github.com/spf13/cobra v1.8.1
+	golang.org/x/term v0.42.0
 	golang.zx2c4.com/wireguard/wgctrl v0.0.0-20241231184526-a9ab2273dd10
 	google.golang.org/grpc v1.80.0
 )
 
 require (
 	github.com/google/go-cmp v0.7.0 // indirect
+	github.com/hanfour/bamboo/apps/relay v0.0.0-00010101000000-000000000000 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/josharian/native v1.1.0 // indirect
 	github.com/mdlayher/genetlink v1.3.2 // indirect
@@ -34,6 +36,7 @@ require (
 // In-tree dependencies. go.work covers `go build`; these replaces let
 // `go mod tidy` resolve local modules without hitting the GitHub remote.
 replace (
+	github.com/hanfour/bamboo/apps/relay => ../../apps/relay
 	github.com/hanfour/bamboo/clients/core => ../core
 	github.com/hanfour/bamboo/proto => ../../proto
 )

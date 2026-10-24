@@ -59,6 +59,14 @@ func TestRouterContract_AllRoutes(t *testing.T) {
 		{http.MethodPost, "/api/v1/peers/" + id + "/exit-node", true},
 		{http.MethodPost, "/api/v1/peers/" + id + "/use-exit-node", true},
 		{http.MethodPost, "/api/v1/peers/" + id + "/nat64-egress", true},
+		{http.MethodGet, "/api/v1/peers/" + id + "/desk/term/out", false},
+		{http.MethodPost, "/api/v1/peers/" + id + "/desk/term/in", true},
+		{http.MethodPost, "/api/v1/peers/" + id + "/desk/term", true},
+		{http.MethodDelete, "/api/v1/peers/" + id + "/desk/term", false},
+		{http.MethodPost, "/api/v1/peers/" + id + "/desk/msg", true},
+		{http.MethodPost, "/api/v1/peers/" + id + "/desk/put", true},
+		{http.MethodGet, "/api/v1/peers/" + id + "/desk/get", false},
+		{http.MethodGet, "/api/v1/peers/" + id + "/desk", false},
 		{http.MethodGet, "/api/v1/peers/" + id, false},
 		{http.MethodPatch, "/api/v1/peers/" + id, true},
 		{http.MethodDelete, "/api/v1/peers/" + id, false},
@@ -112,6 +120,8 @@ func TestRouterContract_AllRoutes(t *testing.T) {
 	// Wrong method on a KNOWN path must be 405 (not a dispatch, not a
 	// no-route 404). Covers the method-dispatch arms.
 	wrongMethod := []route{
+		{http.MethodGet, "/api/v1/peers/" + id + "/desk/msg", false},      // POST-only
+		{http.MethodPut, "/api/v1/peers/" + id + "/desk/term", false},     // POST/DELETE
 		{http.MethodGet, "/api/v1/peers/" + id + "/approve", false},       // POST-only
 		{http.MethodDelete, "/api/v1/peers/" + id + "/routes", false},     // POST-only
 		{http.MethodGet, "/api/v1/preauth-keys/" + id + "/revoke", false}, // POST-only

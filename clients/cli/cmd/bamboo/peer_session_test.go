@@ -4,6 +4,8 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -39,7 +41,7 @@ func TestRestRegister_ParsesNAT64Fields(t *testing.T) {
 	t.Setenv("BAMBOO_CONTROLLER_HTTP_URL", srv.URL)
 
 	resp, _, _, err := restRegister(context.Background(),
-		"egress", "k", "linux", "vtest", "bka_test", "default",
+		"egress", "k", "linux", "vtest", "bka_test", "default", "",
 		nil, nil, false, true)
 	if err != nil {
 		t.Fatalf("restRegister: %v", err)
@@ -52,6 +54,58 @@ func TestRestRegister_ParsesNAT64Fields(t *testing.T) {
 	}
 	if !resp.GetNat64EgressActive() {
 		t.Errorf("Nat64EgressActive = false, want true (egress would never build Tayga)")
+	}
+}
+
+func TestRestRegister_SendsLiveBearerAndKeepsAuthKey(t *testing.T) {
+	var gotAuth string
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		raw, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(raw, &gotBody)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"self":{"id":"p1","tenantId":"t1","hostname":"h","ip":"100.64.0.2","wireguardPublicKey":"k"},"peerSessionToken":"next","peerSessionExpiresAt":1893456000}`))
+	}))
+	defer srv.Close()
+	t.Setenv("BAMBOO_CONTROLLER_HTTP_URL", srv.URL)
+
+	_, tok, exp, err := restRegister(context.Background(),
+		"h", "k", "linux", "vtest", "bka_once", "default", "live-token",
+		nil, nil, false, false)
+	if err != nil {
+		t.Fatalf("restRegister: %v", err)
+	}
+	if gotAuth != "Bearer live-token" {
+		t.Errorf("Authorization = %q, want Bearer live-token", gotAuth)
+	}
+	if gotBody["preAuthKeySecret"] != "bka_once" {
+		t.Errorf("preAuthKeySecret = %v, want the original key kept for older controllers", gotBody["preAuthKeySecret"])
+	}
+	if tok != "next" || exp.Unix() != 1893456000 {
+		t.Errorf("token/exp = (%q, %d)", tok, exp.Unix())
+	}
+}
+
+func TestPeerSessionLive(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	sess := &peerSession{}
+	if sess.live(now) {
+		t.Fatal("empty session is live")
+	}
+	sess.set("tok", now.Add(time.Hour))
+	if !sess.live(now) {
+		t.Fatal("token an hour out is not live")
+	}
+	if sess.live(now.Add(time.Hour)) {
+		t.Fatal("token at its expiry is still live")
+	}
+	sess.set("tok", time.Time{})
+	if sess.live(now) {
+		t.Fatal("zero expiry is live")
+	}
+	if (*peerSession)(nil).live(now) {
+		t.Fatal("nil session is live")
 	}
 }
 

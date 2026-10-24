@@ -863,3 +863,80 @@ export async function revokeAPITokenAction(id: string): Promise<ActionResult> {
     return { ok: false, error: (e as Error).message };
   }
 }
+
+export type DeskStatusResult =
+  | { ok: true; online: boolean; execEnabled: boolean }
+  | { ok: false; error: string };
+
+export type DeskTermResult = { ok: true; opId: string } | { ok: false; error: string };
+
+async function deskFetch(id: string, suffix: string, method: string, body?: unknown): Promise<Response> {
+  return fetch(`${BASE}/api/v1/peers/${encodeURIComponent(id)}/desk${suffix}`, {
+    method,
+    headers: await buildHeaders(),
+    body: body === undefined ? undefined : JSON.stringify(body),
+    cache: 'no-store',
+  });
+}
+
+async function deskError(res: Response): Promise<string> {
+  const text = await res.text().catch(() => '');
+  return `${res.status} ${text || res.statusText}`;
+}
+
+// deskStatusAction reports whether this device has opened its desk
+// stream and whether it accepted a terminal.
+export async function deskStatusAction(id: string): Promise<DeskStatusResult> {
+  try {
+    const res = await deskFetch(id, '', 'GET');
+    if (!res.ok) return { ok: false, error: await deskError(res) };
+    const body = (await res.json()) as { online?: boolean; execEnabled?: boolean };
+    return { ok: true, online: Boolean(body.online), execEnabled: Boolean(body.execEnabled) };
+  } catch (e) {
+    return { ok: false, error: (e as Error).message };
+  }
+}
+
+export async function deskMsgAction(id: string, text: string): Promise<ActionResult> {
+  const trimmed = text.trim();
+  if (trimmed === '') return { ok: false, error: 'message is empty' };
+  try {
+    const res = await deskFetch(id, '/msg', 'POST', { text: trimmed });
+    if (!res.ok) return { ok: false, error: await deskError(res) };
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: (e as Error).message };
+  }
+}
+
+export async function deskStartTermAction(id: string): Promise<DeskTermResult> {
+  try {
+    const res = await deskFetch(id, '/term', 'POST', { rows: 24, cols: 80 });
+    if (!res.ok) return { ok: false, error: await deskError(res) };
+    const body = (await res.json()) as { opId?: string };
+    if (!body.opId) return { ok: false, error: 'controller did not return a terminal id' };
+    return { ok: true, opId: body.opId };
+  } catch (e) {
+    return { ok: false, error: (e as Error).message };
+  }
+}
+
+export async function deskTermInAction(id: string, opId: string, data: string): Promise<ActionResult> {
+  try {
+    const res = await deskFetch(id, '/term/in', 'POST', { opId, data });
+    if (!res.ok) return { ok: false, error: await deskError(res) };
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: (e as Error).message };
+  }
+}
+
+export async function deskCloseTermAction(id: string): Promise<ActionResult> {
+  try {
+    const res = await deskFetch(id, '/term', 'DELETE');
+    if (!res.ok) return { ok: false, error: await deskError(res) };
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: (e as Error).message };
+  }
+}

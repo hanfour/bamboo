@@ -111,6 +111,8 @@ func buildGRPCWithAuth(pool *db.Pool, ch *clickhouse.Conn, requireAuth bool, ses
 	s := grpc.NewServer(
 		grpc.UnaryInterceptor(requireAuthUnaryInterceptor(requireAuth, sessionSec, revoked, users)),
 		grpc.StreamInterceptor(requireAuthStreamInterceptor(requireAuth, sessionSec, revoked, users)),
+		grpc.MaxRecvMsgSize(deskMaxGRPC),
+		grpc.MaxSendMsgSize(deskMaxGRPC),
 	)
 
 	authHandler := handlers.NewAuthHandler(pool)
@@ -134,7 +136,10 @@ func buildGRPCWithAuth(pool *db.Pool, ch *clickhouse.Conn, requireAuth bool, ses
 // Used by tests; they typically pass ch=nil for degraded telemetry.
 func BuildGRPCServer(pool *db.Pool) *grpc.Server {
 	bus := events.NewBus()
-	s := grpc.NewServer()
+	s := grpc.NewServer(
+		grpc.MaxRecvMsgSize(deskMaxGRPC),
+		grpc.MaxSendMsgSize(deskMaxGRPC),
+	)
 
 	authHandler := handlers.NewAuthHandler(pool)
 	bamboov1.RegisterAuthServiceServer(s, authHandler)

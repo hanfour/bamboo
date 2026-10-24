@@ -55,13 +55,24 @@ type relaySession struct {
 	fallbackCancel context.CancelFunc
 }
 
+var flagUpSessionExec bool
+
+func init() {
+	upCmd.Flags().BoolVar(&flagUpSessionExec, "session-exec", false, "let mesh peers run commands on this device; file transfer and messages listen either way")
+}
+
 var upCmd = &cobra.Command{
 	Use:   "up",
 	Short: "Register with the controller and bring up the WireGuard tunnel",
 	Long: `Register with the controller, generate (or reuse) a stable Curve25519
 key pair, build the WireGuard configuration, and bring up the local
 interface. The command runs in the foreground until interrupted with
-Ctrl-C, at which point the interface is removed.`,
+Ctrl-C, at which point the interface is removed.
+
+While the tunnel is up, this device also listens for session requests
+on its mesh IP at port 54110. The allowlist is the controller's peer
+set, and it follows peer join and leave. File transfer and messages
+are accepted from those peers. Commands run only with --session-exec.`,
 	RunE: runUp,
 }
 
@@ -200,19 +211,18 @@ func runUp(cmd *cobra.Command, _ []string) error {
 	// and is the canonical liveness signal for our own peer row.
 	cache := clientsync.New(resp.GetSelf(), resp.GetPeers())
 	cache.SetPolicyRevision(resp.GetPolicyRevision())
-	// Wrap the gRPC adapter so the WatchPeers call context carries
-	// the current peer-session bearer as outgoing metadata. The
-	// controller's interceptor whitelist ignores it today; the
-	// prod-mode gate follow-up flips that. Heartbeat moved to REST
-	// (see restHeartbeater) so the §4 P2 bandwidth-sample side-
-	// channel fires — gRPC's HeartbeatRequest doesn't model the
-	// byte counters today.
+	// WatchPeers carries the peer-session bearer. Heartbeat is REST so
+	// the bandwidth counters ride along. A 401 refreshes the bearer
+	// once, which recovers a token that expired during an outage when
+	// --auth-key is still accepted.
 	adapter := newAuthedAdapter(clientsync.AdaptClient(cli.Coordinator), session)
-	heartbeater := newRESTHeartbeater(session, flagTenant)
-
 	refresh := func(refreshCtx context.Context) (*bamboov1.RegisterResponse, error) {
 		return registerWithController(refreshCtx, priv, session, wgPort)
 	}
+	heartbeater := newRefreshingHeartbeater(newRESTHeartbeater(session, flagTenant), func(refreshCtx context.Context) error {
+		_, err := refresh(refreshCtx)
+		return err
+	})
 	discover := func() []string { return discoverEndpoints(wgPort) }
 
 	// daemonCtx is the parent of every background goroutine
@@ -225,6 +235,8 @@ func runUp(cmd *cobra.Command, _ []string) error {
 	// the whole daemon.
 	daemonCtx, daemonCancel := context.WithCancel(cmd.Context())
 	defer daemonCancel()
+	startMeshSession(daemonCtx, priv, resp.GetSelf().GetIp(), cache)
+	startOperateDesk(daemonCtx, cli.Coordinator, session, resp.GetSelf().GetId())
 
 	// onRelaysChanged is the §4 P2 multi-relay stage 4b-2 swap
 	// handler. When the controller pushes a fresh eligible-relay
@@ -389,6 +401,10 @@ func reconcileEgress(r *nat64egress.Reconciler, resp *bamboov1.RegisterResponse)
 // PR A), session.Token() stays whatever it was, and the slug-only
 // fallback path keeps working for relay-token mint.
 func registerWithController(ctx context.Context, priv wg.PrivateKey, session *peerSession, wgPort uint16) (*bamboov1.RegisterResponse, error) {
+	bearer := ""
+	if session != nil && session.live(time.Now()) {
+		bearer = session.Token()
+	}
 	resp, token, exp, err := restRegister(
 		ctx,
 		flagHostname,
@@ -397,6 +413,7 @@ func registerWithController(ctx context.Context, priv wg.PrivateKey, session *pe
 		Version,
 		flagAuthKey,
 		flagTenant,
+		bearer,
 		discoverEndpoints(wgPort),
 		flagAdvertiseRoutes,
 		flagAdvertiseExitNode,
@@ -412,11 +429,48 @@ func registerWithController(ctx context.Context, priv wg.PrivateKey, session *pe
 	return resp, nil
 }
 
+// stunEndpoints remembers the last STUN result. After WireGuard binds
+// the listen port, a later discovery cannot bind that port again.
+// Heartbeat and policy refresh keep reporting the last result instead
+// of warning on every tick.
+var stunEndpoints endpointCache
+
+// endpointCache stores one discovery result. observe is safe for the
+// heartbeat goroutine and the register path to call together.
+type endpointCache struct {
+	mu        sync.Mutex
+	last      []string
+	heldNoted bool
+}
+
+// observe records a successful discovery. When err is EADDRINUSE, the
+// listen port is already taken by the tunnel, so the previous result
+// is returned. Any other error drops this sample and leaves the
+// previous result stored for the next held-port refresh.
+func (c *endpointCache) observe(found []string, err error) []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if err == nil {
+		c.last = append([]string(nil), found...)
+		c.heldNoted = false
+		return append([]string(nil), c.last...)
+	}
+	if errors.Is(err, syscall.EADDRINUSE) {
+		if !c.heldNoted {
+			c.heldNoted = true
+			slog.Info("stun refresh skipped; wireguard holds the listen port")
+		}
+		if len(c.last) == 0 {
+			return nil
+		}
+		return append([]string(nil), c.last...)
+	}
+	return nil
+}
+
 // discoverEndpoints returns the STUN-observed public host:port for
-// this peer, or nil if discovery fails. We deliberately swallow
-// errors here: failure to discover an endpoint should not block
-// tunnel bring-up. Callers that want stricter behavior can look at
-// the log.
+// this peer, or nil if discovery fails and no earlier result exists.
+// A failure does not block tunnel bring-up.
 //
 // The bind uses 0.0.0.0:<wgPort> so the STUN socket and the
 // eventual WireGuard socket share the same internal source port.
@@ -427,12 +481,15 @@ func discoverEndpoints(wgPort uint16) []string {
 	local := fmt.Sprintf("0.0.0.0:%d", wgPort)
 	addr, err := stun.DiscoverFrom(local, stun.DefaultServer, 2*time.Second)
 	if err != nil {
+		if errors.Is(err, syscall.EADDRINUSE) {
+			return stunEndpoints.observe(nil, err)
+		}
 		slog.Warn("stun discovery failed; tunnel will rely on peer-initiated handshake",
 			"server", stun.DefaultServer, "wg_port", wgPort, "err", err)
-		return nil
+		return stunEndpoints.observe(nil, err)
 	}
 	slog.Info("stun discovered endpoint", "endpoint", addr.String(), "wg_port", wgPort)
-	return []string{addr.String()}
+	return stunEndpoints.observe([]string{addr.String()}, nil)
 }
 
 // pickFreeUDPPort opens an ephemeral UDP socket, reads back the port

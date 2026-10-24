@@ -51,7 +51,12 @@
         "peer_register": "註冊節點",
         "peer_update": "更新節點",
         "peer_delete": "刪除節點",
-        "policy_update": "更新政策"
+        "policy_update": "更新政策",
+        "peer_desk_msg": "送出訊息",
+        "peer_desk_put": "上傳檔案",
+        "peer_desk_get": "下載檔案",
+        "peer_desk_term": "開啟終端機",
+        "peer_desk_term_close": "關閉終端機"
       }
     }
   },
@@ -148,6 +153,30 @@
         "connectionTimeline": "連線路徑變化",
         "timeline": "活動時間軸"
       },
+      "desk": {
+        "title": "裝置",
+        "hint": "裝置在執行 bamboo up 時自己連上這條通道。控制器不會撥 mesh 位址。",
+        "execHint": "終端機需要 bamboo up --session-exec。訊息與檔案不需要這個選項。",
+        "checking": "正在確認裝置…",
+        "offline": "裝置沒有連上控制器。",
+        "execOn": "已連線。終端機已開啟。",
+        "execOff": "已連線。這台裝置的終端機是關閉的。",
+        "refresh": "重新整理",
+        "mesh": "從 mesh 上的另一台裝置：",
+        "message": "訊息",
+        "send": "送出",
+        "path": "裝置工作階段目錄內的路徑",
+        "upload": "上傳",
+        "download": "下載",
+        "fileCap": "檔案只會放在裝置的工作階段目錄裡，上限 4MiB。",
+        "terminal": "終端機",
+        "start": "開啟終端機",
+        "close": "關閉終端機",
+        "input": "終端機輸入",
+        "noOutput": "尚無輸出。",
+        "closed": "工作階段已結束",
+        "streamClosed": "終端機串流已中斷。"
+      },
       "bandwidth": {
         "window": "最近 {window}",
         "peak": "尖峰 {rate}",
@@ -232,7 +261,12 @@
         "action": {
           "peer_register": "註冊節點",
           "peer_update": "更新節點",
-          "peer_delete": "刪除節點"
+          "peer_delete": "刪除節點",
+          "peer_desk_msg": "送出訊息",
+          "peer_desk_put": "上傳檔案",
+          "peer_desk_get": "下載檔案",
+          "peer_desk_term": "開啟終端機",
+          "peer_desk_term_close": "關閉終端機"
         }
       }
     }
