@@ -76,8 +76,9 @@ fmt: ## gofmt all Go code
 	  (cd $$m && gofmt -w .); \
 	done
 
-license-check: ## Verify every hand-written .go file has an SPDX header
+license-check: ## Verify SPDX headers and that Apache Go code does not depend on AGPL code
 	@bash scripts/check-license-headers.sh
+	@python3 -I scripts/check-license-boundary.py
 
 proto-check: ## Verify generated protobuf code is up to date with proto/
 	@command -v buf >/dev/null || { echo "buf not installed; run 'make bootstrap'"; exit 1; }
