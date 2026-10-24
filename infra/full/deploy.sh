@@ -48,7 +48,15 @@ log "deploying tag: ${TARGET:-latest (BAMBOO_IMAGE_TAG unset)}"
 # same way the nightly timer's are.
 if [ -x ./backup.sh ]; then
     log "taking a pre-deploy backup"
-    ./backup.sh
+    # The nightly timer's backup dir is root-only (0700), so a deploy run
+    # as a normal user cannot write there. Use sudo in that case instead of
+    # skipping the backup. sudo keeps the dumps in one place with the same
+    # ownership. A BACKUP_DIR the caller can write to is used as is.
+    if [ "$(id -u)" -ne 0 ] && [ ! -w "${BACKUP_DIR:-/var/backups/bamboo}" ]; then
+        sudo ./backup.sh
+    else
+        ./backup.sh
+    fi
 else
     log "backup.sh not found/executable — skipping pre-deploy backup (NOT recommended)"
 fi
