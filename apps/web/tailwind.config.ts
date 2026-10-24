@@ -5,18 +5,16 @@ import type { Config } from 'tailwindcss';
 const config: Config = {
   content: ['./src/**/*.{ts,tsx}'],
   // `class`-opt-in dark mode. The `<html>` element in
-  // src/app/[locale]/layout.tsx always carries `dark`, so the
-  // brand voice (warm-dark) is OS-independent — a user toggling
-  // their system into Light won't flip the bamboo theme out.
+  // src/app/[locale]/layout.tsx always carries `dark`, so the theme
+  // is OS-independent. A user switching the system to Light does not
+  // flip it.
   darkMode: 'class',
   theme: {
     extend: {
       fontFamily: {
-        // Sora as the primary humanist sans — wired via
-        // next/font/google in layout.tsx, exposed through
-        // --font-sans. CJK fallback chain keeps Traditional
-        // Chinese legible on macOS / Windows / Linux before Sora
-        // finishes loading.
+        // One neutral sans for everything, wired via next/font in
+        // layout.tsx as --font-sans. The CJK chain keeps Traditional
+        // Chinese legible before the web font loads.
         sans: [
           'var(--font-sans)',
           'ui-sans-serif',
@@ -29,58 +27,46 @@ const config: Config = {
           '"Microsoft JhengHei"',
           'sans-serif',
         ],
-        // Lora italic — scoped to emphasis-on-key-noun spans
-        // (a la Resend's `developers`). Body text never uses
-        // serif; pulling Lora onto paragraphs reverts to the
-        // editorial look rejected 2026-05-12.
-        serif: ['var(--font-serif)', 'ui-serif', 'Georgia', 'serif'],
         mono: ['var(--font-mono)', 'ui-monospace', 'monospace'],
-        // Saira Stencil One — wordmark-only. Display fonts on
-        // body text push the page back toward editorial.
-        wordmark: ['var(--font-wordmark)', 'sans-serif'],
       },
       colors: {
-        // bamboo as weathered / aged bamboo — wabi-sabi taupe.
-        // 700+ are the warm-dark surfaces the redesigned theme
-        // leans on; 50-200 act as cream highlights / body text
-        // in the inverted dark palette.
-        bamboo: {
-          50: '#FDF6EC',
-          100: '#F3EFE0',
-          200: '#EADBC8',
-          300: '#D9CBB0',
-          400: '#C5B091',
-          500: '#B59A7E',
-          600: '#9D8467',
-          700: '#806A52',
-          800: '#5F4F3D',
-          900: '#3D3327',
-        },
-        // ink — warm-tinted charcoal for the dark surfaces.
-        // Pure zinc would clash with the warm bamboo accent;
-        // these intentionally share a hue family so the
-        // background and the accent feel like the same brand.
-        //   950: page bg
-        //   900 / 800: raised surfaces (cards, hover)
-        //   700: hairlines
-        //   400-500: secondary text on dark
-        //   100-200: rare highlight text on a 700 surface
+        // Neutral greys, set 2026-10-24 to follow the Cursor dashboard
+        // (page #141414, surfaces #111, text #f3f3f3 / #959595 / #777).
+        // The scale names stay `ink` and `bamboo` so every component
+        // picks the new look up without a class rename. Use `ink` for
+        // surfaces and hairlines, `bamboo` for text and controls.
+        //
+        // ink: 950 page, 900 raised surface (darker than the page, as
+        // in Cursor), 800 hairline and hover fill, 700 stronger rule.
         ink: {
-          50: '#F5F2EC',
-          100: '#E8E3D8',
-          200: '#C7BFAE',
-          300: '#9A9183',
-          400: '#6E665B',
-          500: '#4E483F',
-          600: '#363128',
-          700: '#27221C',
-          800: '#1C1814',
-          900: '#13110E',
-          950: '#0C0A07',
+          50: '#F3F3F3',
+          100: '#E4E4E4',
+          200: '#C4C4C4',
+          300: '#959595',
+          400: '#777777',
+          500: '#555555',
+          600: '#3A3A3A',
+          700: '#2E2E2E',
+          800: '#222222',
+          900: '#111111',
+          950: '#141414',
         },
-        // Back-compat — older components still reference
-        // stone-300 for hairlines. New code should prefer the
-        // `ink` scale.
+        // bamboo: 50 primary text and the light pill button, 100-200
+        // secondary text (used with /60 to /80 opacity), 300-500 focus
+        // rings and quiet icons, 600+ rarely used.
+        bamboo: {
+          50: '#F3F3F3',
+          100: '#E4E4E4',
+          200: '#C4C4C4',
+          300: '#A8A8A8',
+          400: '#8A8A8A',
+          500: '#707070',
+          600: '#585858',
+          700: '#444444',
+          800: '#333333',
+          900: '#262626',
+        },
+        // Back-compat for older hairlines that name stone-300.
         stone: {
           300: '#D3D3D3',
         },

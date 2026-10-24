@@ -47,7 +47,7 @@ function DownloadButton({ onClick, label }: { onClick: () => void; label: string
     <button
       type="button"
       onClick={onClick}
-      className="inline-flex items-center rounded-md border border-bamboo-300/40 bg-bamboo-50 px-3 py-1.5 text-sm font-medium text-ink-950 transition-colors hover:bg-bamboo-100"
+      className="inline-flex items-center rounded-full bg-bamboo-50 px-4 py-1.5 text-[13px] font-medium text-ink-950 transition-colors hover:bg-bamboo-100"
     >
       {label}
     </button>

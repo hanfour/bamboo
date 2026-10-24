@@ -16,11 +16,10 @@ const CONTROLLER_BASE = process.env.BAMBOO_API_URL ?? 'http://localhost:8081';
 // sidebar (Sidebar.tsx) below. Differentiates from Tailscale's
 // horizontal-tab top bar so we don't read as a clone.
 //
-// Brand stays the Saira Stencil"bamboo" wordmark scoped via the
-// --font-wordmark CSS variable. The user slot is just the avatar
+// Brand is the plain "bamboo" wordmark in the UI sans. The user slot is just the avatar
 // circle — clicking opens a popover with identity + Settings +
-// Sign out (see UserMenu). Unauthenticated users see an outlined
-// Sign-in link to the controller's Google OIDC flow.
+// Sign out (see UserMenu). Unauthenticated users see a
+// pill-shaped Sign-in link to the controller's Google OIDC flow.
 export async function TopBar() {
  const t = await getTranslations();
 
@@ -49,7 +48,7 @@ export async function TopBar() {
  ) : (
  <a
  href={`${CONTROLLER_BASE}/auth/google/login`}
- className="inline-flex items-center rounded-md border border-bamboo-200/30 px-3 py-1.5 text-sm font-light text-bamboo-100 transition-colors hover:border-bamboo-200/60 hover:text-bamboo-50"
+ className="inline-flex h-8 items-center rounded-full bg-bamboo-50 px-4 text-[13px] font-medium text-ink-950 transition-colors hover:bg-bamboo-100"
  >
  {t('auth.signIn')}
  </a>
@@ -64,8 +63,7 @@ function Brand() {
  return (
  <Link
  href="/"
- className="text-[20px] leading-none tracking-tight text-bamboo-50 transition-colors hover:text-bamboo-300"
- style={{ fontFamily: 'var(--font-wordmark), system-ui, sans-serif' }}
+ className="text-[17px] font-semibold leading-none tracking-tight text-bamboo-50 transition-colors hover:text-bamboo-200"
  >
  bamboo
  </Link>

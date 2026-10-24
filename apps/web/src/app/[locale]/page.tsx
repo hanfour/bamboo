@@ -44,22 +44,19 @@ function Dashboard({
  return (
  <div className="space-y-12 pt-2">
  <header className="space-y-2">
- <h1 className="text-4xl font-light tracking-tight text-bamboo-50 sm:text-5xl">
+ <h1 className="text-2xl font-medium tracking-tight text-bamboo-50">
  {t('title')}
- <span className="ml-3 font-serif italic font-normal text-bamboo-300/80">
- mesh
- </span>
  </h1>
  <p className="text-sm text-bamboo-200/60">{t('subtitle')}</p>
  </header>
 
- <section className="grid gap-x-10 gap-y-8 sm:grid-cols-3">
+ <section className="grid gap-3 sm:grid-cols-3">
  <Stat label={t('totalPeers')} value={overview.totalPeers} />
- <Stat label={t('online')} value={overview.onlinePeers} tone="bamboo" />
+ <Stat label={t('online')} value={overview.onlinePeers} tone="online" />
  <Stat label={t('offline')} value={overview.offlinePeers} />
  </section>
 
- <section className="grid gap-x-10 gap-y-8 sm:grid-cols-2">
+ <section className="grid gap-3 sm:grid-cols-2">
  <Stat label={t('policyRevision')} value={overview.policyRevision} />
  <Stat
  label={t('openRecommendations')}
@@ -85,24 +82,23 @@ function Stat({
 }: {
  label: string;
  value: number;
- // tone='bamboo' brightens the number to the bamboo-300 accent for
- // the"online" stat; 'accent' shifts to a warmer ochre when the
- // recommendation count is non-zero (a soft warning, not red).
- // Plain values stay in the default bamboo-50 cream.
- tone?: 'bamboo' | 'accent';
+ // tone='online' tints the number green for the online stat;
+ // 'accent' tints it amber when recommendations are waiting (a soft
+ // warning, not red). Plain values stay the primary text color.
+ tone?: 'online' | 'accent';
 }) {
  const valueClass = [
- 'block text-5xl font-light tabular-nums tracking-tight',
- tone === 'bamboo' ? 'text-bamboo-300' : '',
- tone === 'accent' ? 'text-bamboo-400' : '',
+ 'block text-4xl font-medium tabular-nums tracking-tight',
+ tone === 'online' ? 'text-emerald-400' : '',
+ tone === 'accent' ? 'text-amber-300' : '',
  !tone ? 'text-bamboo-50' : '',
  ]
  .filter(Boolean)
  .join(' ');
 
  return (
- <div className="space-y-2">
- <span className="block text-xs font-medium tracking-wide text-bamboo-200/60">
+ <div className="space-y-3 rounded-2xl bg-ink-900 p-5">
+ <span className="block text-xs text-bamboo-200/60">
  {label}
  </span>
  <span className={valueClass}>{value}</span>

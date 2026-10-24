@@ -136,7 +136,7 @@ function ErrorCard({
 }
 
 const OUTLINED_BUTTON =
- 'inline-flex items-center rounded-md border border-bamboo-200/30 px-3 py-1.5 text-sm font-light text-bamboo-100 transition-colors hover:border-bamboo-200/60 hover:text-bamboo-50';
+ 'inline-flex items-center rounded-full bg-[#777]/20 px-4 py-1.5 text-[13px] font-light text-bamboo-100 transition-colors hover:bg-[#777]/30 hover:text-bamboo-50';
 
 function SignInLinks({
  base,

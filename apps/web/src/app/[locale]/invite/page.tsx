@@ -43,7 +43,7 @@ function InviteCard({ token }: { token: string }) {
  return (
  <div className="mx-auto max-w-xl space-y-6">
  <header className="space-y-2">
- <h1 className="text-4xl font-light tracking-tight text-bamboo-50 sm:text-5xl">{t("title")}<span className="ml-3 font-serif italic font-normal text-bamboo-300/80">{t("titleAccent")}</span></h1>
+ <h1 className="text-2xl font-medium tracking-tight text-bamboo-50">{t("title")}</h1>
  <p className="text-sm leading-relaxed text-bamboo-200/70">
  {t('subtitle')}
  </p>
@@ -52,7 +52,7 @@ function InviteCard({ token }: { token: string }) {
  <div className="rounded-lg border border-ink-800 bg-ink-950 p-6 dark:bg-ink-950">
  <a
  href={loginUrl}
- className="inline-flex w-full items-center justify-center rounded-md bg-bamboo-50 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-ink-800 hover:bg-ink-800 dark:text-bamboo-50"
+ className="inline-flex w-full items-center justify-center rounded-full bg-bamboo-50 px-4 py-2.5 text-[13px] font-medium text-ink-950 transition-colors hover:bg-bamboo-100"
  >
  {t('signInWithGoogle')}
  </a>

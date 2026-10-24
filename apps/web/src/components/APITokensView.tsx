@@ -44,7 +44,7 @@ export function APITokensView({ tokens }: { tokens: APIToken[] }) {
             setFormOpen((v) => !v);
             setError(null);
           }}
-          className="rounded-md border border-bamboo-300/40 bg-bamboo-50 px-3 py-1.5 text-sm font-medium text-ink-950 transition-colors hover:bg-bamboo-100"
+          className="rounded-full bg-bamboo-50 px-4 py-1.5 text-[13px] font-medium text-ink-950 transition-colors hover:bg-bamboo-100"
         >
           {formOpen ? t('form.cancel') : t('form.openButton')}
         </button>
@@ -168,7 +168,7 @@ function MintForm({
           type="button"
           onClick={submit}
           disabled={pending || name.trim() === ''}
-          className="rounded-md border border-bamboo-300/40 bg-bamboo-50 px-3 py-1.5 text-sm font-medium text-ink-950 transition-colors hover:bg-bamboo-100 disabled:cursor-not-allowed disabled:opacity-50"
+          className="rounded-full bg-bamboo-50 px-4 py-1.5 text-[13px] font-medium text-ink-950 transition-colors hover:bg-bamboo-100 disabled:cursor-not-allowed disabled:opacity-50"
         >
           {pending ? t('working') : t('submit')}
         </button>
@@ -378,14 +378,14 @@ function TokenRevealModal({ minted, onClose }: { minted: MintedToken; onClose: (
           <button
             type="button"
             onClick={copy}
-            className="rounded-md border border-bamboo-200/30 px-3 py-1.5 text-sm text-bamboo-100 transition-colors hover:border-bamboo-200/60 hover:text-bamboo-50"
+            className="rounded-full bg-[#777]/20 px-4 py-1.5 text-[13px] text-bamboo-100 transition-colors hover:bg-[#777]/30 hover:text-bamboo-50"
           >
             {copied ? t('copied') : t('copy')}
           </button>
           <button
             type="button"
             onClick={onClose}
-            className="rounded-md border border-bamboo-300/40 bg-bamboo-50 px-3 py-1.5 text-sm font-medium text-ink-950 transition-colors hover:bg-bamboo-100"
+            className="rounded-full bg-bamboo-50 px-4 py-1.5 text-[13px] font-medium text-ink-950 transition-colors hover:bg-bamboo-100"
           >
             {t('done')}
           </button>

@@ -2,17 +2,11 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Warm-dark theme committed 2026-05-17. The site renders ink-950
- * background + bamboo-50 foreground at all times — `<html>` in
- * src/app/[locale]/layout.tsx always carries the `dark` class.
- * Light mode is intentionally absent for now; brand voice
- * follows Linear's dark-first app rather than Tailscale's
- * cream-bright marketing palette.
- *
- * Body sans is Sora (humanist geometric, light weights ready);
- * italic emphasis on key nouns reaches for Lora via the
- * `font-serif italic` utilities. Both fonts wire through
- * next/font in layout.tsx → CSS variables consumed here. */
+/* Neutral dark theme, set 2026-10-24 to follow the Cursor dashboard.
+ * `<html>` in src/app/[locale]/layout.tsx always carries the `dark`
+ * class, so there is no light mode. Colors are the `ink` and `bamboo`
+ * grey scales in tailwind.config.ts. One sans (Inter) is wired through
+ * next/font in layout.tsx as --font-sans. */
 
 :root {
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
@@ -21,9 +15,9 @@
 
 html,
 body {
-  /* ink-950 is the warm-dark page surface; bamboo-50 is the
-   * cream foreground. Tailwind's `dark:` variants light up
-   * across the tree because <html> carries the `dark` class. */
+  /* ink-950 is the page surface and bamboo-50 the primary text.
+   * Tailwind's `dark:` variants light up across the tree because
+   * <html> carries the `dark` class. */
   @apply bg-ink-950 text-bamboo-50;
 }
 

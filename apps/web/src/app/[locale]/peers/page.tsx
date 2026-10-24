@@ -96,11 +96,8 @@ function Peers({
  <div className="space-y-8 pt-2">
  <header className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between sm:gap-6">
  <div className="space-y-2">
- <h1 className="text-4xl font-light tracking-tight text-bamboo-50 sm:text-5xl">
+ <h1 className="text-2xl font-medium tracking-tight text-bamboo-50">
  {t('title')}
- <span className="ml-3 font-serif italic font-normal text-bamboo-300/80">
- {t('titleAccent')}
- </span>
  </h1>
  <p className="text-sm text-bamboo-200/60">{t('subtitle')}</p>
  </div>

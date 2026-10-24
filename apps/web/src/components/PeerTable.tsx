@@ -311,7 +311,7 @@ function StatusBadge({
  // as"alive" against the warm-dark surface); softer bamboo-200/40
  // for offline; hollow ink-700 ring for admin-disabled.
  const dot = {
- online: 'bg-bamboo-400',
+ online: 'bg-emerald-400',
  offline: 'bg-bamboo-200/30',
  disabled: 'border border-bamboo-200/40 bg-transparent',
  }[status];
