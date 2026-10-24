@@ -133,6 +133,26 @@ services:
     command: ["--addr=:8443", "--dev-plaintext"]
     # Plaintext inside the docker network; Caddy adds TLS in front.
 
+  # Nightly AI Tier 2 job (ADR 0015). Not a long-running service: the
+  # "jobs" profile keeps `docker compose up` from starting it, and
+  # bamboo-ai.timer runs it with `docker compose --profile jobs run --rm ai`.
+  # It trains every tenant with enough recent connection_events and
+  # writes anomaly_findings, which the controller shows as
+  # FLAG_ANOMALOUS recommendations.
+  ai:
+    image: ghcr.io/hanfour/bamboo-ai:${BAMBOO_IMAGE_TAG:-latest}
+    profiles: ["jobs"]
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    environment:
+      # Same HTTP interface the controller uses; clickhouse-connect
+      # does not speak the native protocol on 9000.
+      CLICKHOUSE_URL: "http://bamboo:${CLICKHOUSE_PASSWORD}@clickhouse:8123/bamboo"
+    volumes:
+      - ai-models:/var/lib/bamboo-ai/models
+    command: ["run-all", "--since", "${BAMBOO_AI_SINCE:-7d}", "--min-events", "${BAMBOO_AI_MIN_EVENTS:-50}"]
+
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped
@@ -159,3 +179,4 @@ volumes:
   clickhouse-data:
   caddy-data:
   caddy-config:
+  ai-models:

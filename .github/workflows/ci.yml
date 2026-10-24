@@ -192,6 +192,25 @@ jobs:
   ai:
     name: AI (Python lint + tests)
     runs-on: ubuntu-latest
+    services:
+      # Real ClickHouse for tests/test_run_all_clickhouse.py. Each test
+      # creates and drops its own database. The client speaks HTTP (8123).
+      clickhouse:
+        image: clickhouse/clickhouse-server:24.8-alpine
+        env:
+          CLICKHOUSE_DB: bamboo
+          CLICKHOUSE_USER: bamboo
+          CLICKHOUSE_PASSWORD: dev
+        ports:
+          - 8123:8123
+        options: >-
+          --health-cmd "clickhouse-client --user bamboo --password dev --query 'SELECT 1'"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 30
+          --health-start-period 30s
+    env:
+      CLICKHOUSE_URL_TEST: http://bamboo:dev@localhost:8123/bamboo
     defaults:
       run:
         working-directory: apps/ai
