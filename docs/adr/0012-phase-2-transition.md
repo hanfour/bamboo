@@ -34,14 +34,19 @@ only blockers; everything else is already met):
 - ✅ Web UI renders live data from the REST bridge (Dashboard, Peers,
   ACL with AI suggestions).
 - ✅ CI ruleset enforces six required checks on every PR.
-- ⏳ **One end-to-end demo**: minted PreAuthKey, two Linux peers
+- ✅ **One end-to-end demo**: minted PreAuthKey, two Linux peers
   register and ping each other across the tunnel, ACL update is
   reflected, an AI recommendation surfaces in the Web UI.
-- ⏳ **Phase 1 announcement**: a written demo recording or
+  Delivered as `scripts/demo.sh` (see `docs/demo.md`).
+- ✅ **Phase 1 announcement**: a written demo recording or
   walkthrough document operators can hand to evaluators.
+  Delivered as `docs/development/phase-1-demo-walkthrough.md`.
 
 We declare Phase 1 closed when the two outstanding items land. They
 are tracked as separate issues; this ADR does not block them.
+
+> Update 2026-10-24: both items have landed, so Phase 1 is closed.
+> The decision above is unchanged; only the checklist state moved.
 
 ### Phase 2 begins with the following themes
 
