@@ -12,6 +12,7 @@ We record significant architecture decisions here using the format from
 - [0012 — Phase 1 → Phase 2 Transition](./0012-phase-2-transition.md)
 - [0013 — Relay Protocol](./0013-relay-protocol.md)
 - [0014 — Tenant isolation RLS backstop](./0014-tenant-isolation-rls-backstop.md)
+- [0015 — AI Tier 2 scheduled run](./0015-ai-tier2-scheduled-run.md)
 
 > ADR numbers 0002–0008 are reserved for future decisions (monorepo tooling,
 > Go version, database, gRPC, multi-tenancy, region strategy, CI platform).

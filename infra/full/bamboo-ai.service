@@ -1,0 +1,17 @@
+[Unit]
+Description=bamboo AI Tier 2 run (train each tenant, write anomaly_findings)
+After=docker.service
+Wants=docker.service
+
+[Service]
+Type=oneshot
+# bootstrap.sh adds a drop-in that points WorkingDirectory at the compose
+# dir it ran from. This default matches the documented layout.
+WorkingDirectory=/opt/bamboo/infra/full
+ExecStart=/usr/bin/env docker compose --profile jobs run --rm ai
+# Training is CPU-bound and can wait; keep it out of the way of the
+# controller and relay on a small box.
+Nice=10
+IOSchedulingClass=idle
+# Root: needs the docker socket.
+User=root

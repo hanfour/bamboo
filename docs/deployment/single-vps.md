@@ -261,6 +261,23 @@ docker compose run --rm controller migrate status   # should be all Applied
 If the dump predates the running image's schema, run `migrate up` after
 step 3 to re-apply any newer migrations on top of the restored data.
 
+### Nightly anomaly detection
+
+`bootstrap.sh` also installs `bamboo-ai.timer` (04:15 UTC). It runs the
+compose `ai` job, which trains a model for every tenant with at least 50
+connection events in the last 7 days and writes findings the admin UI
+shows as **Flag anomalous** recommendations. Findings are advisory; the
+job never changes policy. See [ADR 0015](../adr/0015-ai-tier2-scheduled-run.md).
+
+```bash
+systemctl list-timers bamboo-ai.timer                # next fire time
+sudo systemctl start bamboo-ai.service               # run it now
+journalctl -u bamboo-ai.service -n 50                # what it trained
+```
+
+Set `BAMBOO_AI_SINCE` (default `7d`) or `BAMBOO_AI_MIN_EVENTS` (default
+`50`) in `.env` to change the window or the floor.
+
 ### Adding OIDC sign-in
 
 Once you've registered an OAuth client in

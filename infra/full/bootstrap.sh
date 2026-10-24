@@ -97,6 +97,23 @@ else
     echo "==> systemctl not found; skipping bamboo-backup install"
 fi
 
+# 1d) Install the nightly AI Tier 2 timer (ADR 0015). It runs the
+# compose "ai" job, which trains every tenant with enough recent
+# connection_events and writes anomaly_findings for the controller.
+# Same compose-dir drop-in as the backup timer. Idempotent.
+if command -v systemctl >/dev/null 2>&1; then
+    echo "==> installing bamboo-ai systemd timer (nightly anomaly detection)"
+    sudo install -m 0644 bamboo-ai.service /etc/systemd/system/bamboo-ai.service
+    sudo install -m 0644 bamboo-ai.timer   /etc/systemd/system/bamboo-ai.timer
+    sudo mkdir -p /etc/systemd/system/bamboo-ai.service.d
+    printf '[Service]\nWorkingDirectory=%s\n' "$PWD" \
+        | sudo tee /etc/systemd/system/bamboo-ai.service.d/compose-dir.conf >/dev/null
+    sudo systemctl daemon-reload
+    sudo systemctl enable --now bamboo-ai.timer
+else
+    echo "==> systemctl not found; skipping bamboo-ai install"
+fi
+
 # 2) Run migrations via the controller container itself. We need the
 # embedded migration files which live in the image; running migrate
 # in a one-shot container is the simplest path.

@@ -58,3 +58,31 @@ def fetch_connection_events(
         }
         for (occurred_at, event_type, path, bytes_sent, bytes_received, rtt_ms) in rows
     ]
+
+
+def fetch_active_tenants(
+    client: Client,
+    since: datetime,
+    *,
+    min_events: int,
+) -> list[str]:
+    """Tenants with at least `min_events` connection events since `since`.
+
+    A scheduled run trains every tenant this returns. The floor keeps a
+    tenant with a handful of events from getting a model fitted to noise.
+    ClickHouse is the source because it is where the training data lives;
+    a tenant with no events has nothing to train on anyway.
+    """
+
+    rows = client.query(
+        """
+        SELECT toString(tenant_id) AS tenant
+        FROM connection_events
+        WHERE occurred_at >= %(since)s
+        GROUP BY tenant_id
+        HAVING count() >= %(min_events)s
+        ORDER BY tenant
+        """,
+        parameters={"since": since, "min_events": min_events},
+    ).result_rows
+    return [tenant for (tenant,) in rows]

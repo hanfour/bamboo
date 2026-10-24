@@ -1,0 +1,13 @@
+[Unit]
+Description=Run the bamboo AI Tier 2 job nightly
+
+[Timer]
+# 04:15 UTC daily, after the 03:30 backup. The controller shows findings
+# from the last 24 hours, so a daily run keeps the list current.
+# Persistent=true runs a missed job on the next boot.
+OnCalendar=*-*-* 04:15:00
+Persistent=true
+RandomizedDelaySec=600
+
+[Install]
+WantedBy=timers.target

@@ -97,10 +97,15 @@ run; redeeming a pre-auth key and calling an API token still work.
 
 ## P2 — Specified, not started (do not pull into P0)
 
-- **AI Tier 2 delivery.** `apps/ai` trains and scores Isolation Forest
-  on synthetic data. Nothing schedules training, stores the model, or
-  turns a score into the existing `FLAG_ANOMALOUS` recommendation.
-  Needs the deployment ADR the module README already calls for.
+Update 2026-10-24: P0 and P1 are closed. PR #271 landed the RLS
+backstop, PR #273 cleared the stale docs, and PR #272 added the device
+desk (not on this list). AI Tier 2 delivery is decided in ADR 0015.
+
+- **AI Tier 2 delivery.** Decided in
+  [ADR 0015](../adr/0015-ai-tier2-scheduled-run.md): `bamboo-ai run-all`
+  trains every tenant with enough events, a nightly systemd timer runs
+  it in the single-VPS stack, and the `bamboo-ai` image ships with the
+  other three. Helm is not covered.
 - **Apple release signing.** Connect / tunnel / relay / DNS64 are
   implemented. `clients/apple/README.md` still has code-signed
   installer and OIDC `ASWebAuthenticationSession` paused.

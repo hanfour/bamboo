@@ -56,6 +56,10 @@ fi
 # --- 2. Pull the new app images ----------------------------------------
 log "pulling images (controller, web, relay)"
 docker compose pull controller web relay
+# The nightly AI job's image. Tags published before the ai image existed
+# have none, so a miss only logs: the timer keeps the image it has.
+docker compose --profile jobs pull ai \
+    || log "no bamboo-ai image for ${BAMBOO_IMAGE_TAG:-latest}; the nightly AI job keeps its current image"
 
 # --- 3. Migrations ------------------------------------------------------
 # serve does NOT auto-migrate; run it explicitly between pull and

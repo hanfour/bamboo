@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Command-line entry point for the anomaly model.
 
-Two subcommands:
+Subcommands:
 
   bamboo-ai train --tenant <id> [--since 30d] [--out PATH]
       Loads connection_events for the tenant from ClickHouse, fits an
@@ -11,8 +11,12 @@ Two subcommands:
       Loads recent events, scores them, prints the top anomalies as
       JSON for the controller / operator to ingest.
 
-Production deployments will replace this CLI with a long-running
-service; the CLI is the smallest path to a working end-to-end demo.
+  bamboo-ai run --tenant <id>
+      Trains one tenant and writes findings to anomaly_findings.
+
+  bamboo-ai run-all [--since 7d] [--min-events 50]
+      Runs `run` for every tenant with enough recent events. This is
+      what the nightly job calls (see docs/adr/0015-ai-tier2-scheduled-run.md).
 """
 
 from __future__ import annotations
@@ -21,6 +25,8 @@ import argparse
 import json
 import os
 import sys
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -76,6 +82,29 @@ def main(argv: list[str] | None = None) -> int:
     run_p.add_argument("--model-version", default="isolation-forest-v1")
     run_p.set_defaults(func=cmd_run)
 
+    all_p = sub.add_parser(
+        "run-all",
+        help="run `run` for every tenant with enough events in the window",
+    )
+    all_p.add_argument("--since", default="7d", help="lookback window (default 7d)")
+    all_p.add_argument(
+        "--min-events",
+        type=int,
+        default=50,
+        help="skip tenants with fewer events than this in the window",
+    )
+    all_p.add_argument(
+        "--clickhouse-url",
+        default=os.environ.get(
+            "CLICKHOUSE_URL", "http://bamboo:dev@localhost:18123/bamboo"
+        ),
+    )
+    all_p.add_argument("--contamination", type=float, default=0.05)
+    all_p.add_argument("--threshold", type=float, default=0.6, help="min score to record")
+    all_p.add_argument("--limit", type=int, default=20, help="cap on findings per tenant")
+    all_p.add_argument("--model-version", default="isolation-forest-v1")
+    all_p.set_defaults(func=cmd_run_all)
+
     args = parser.parse_args(argv)
     return args.func(args)
 
@@ -90,7 +119,7 @@ def _add_common(p: argparse.ArgumentParser) -> None:
     p.add_argument(
         "--clickhouse-url",
         default=os.environ.get(
-            "CLICKHOUSE_URL", "clickhouse://bamboo:dev@localhost:19000/bamboo"
+            "CLICKHOUSE_URL", "http://bamboo:dev@localhost:18123/bamboo"
         ),
     )
 
@@ -110,6 +139,56 @@ def cmd_run(args: argparse.Namespace) -> int:
     if trained != 0:
         return trained
     return cmd_score_and_write(args)
+
+
+@dataclass
+class RunAllSummary:
+    ok: list[str] = field(default_factory=list)
+    failed: list[str] = field(default_factory=list)
+
+    @property
+    def exit_code(self) -> int:
+        return 1 if self.failed else 0
+
+
+def run_all(tenants: list[str], run_one: Callable[[str], int]) -> RunAllSummary:
+    """Run each tenant in turn. One tenant failing does not stop the rest."""
+    summary = RunAllSummary()
+    for tenant in tenants:
+        try:
+            code = run_one(tenant)
+        except Exception as e:  # noqa: BLE001 - isolate one tenant's failure
+            print(f"tenant {tenant}: {type(e).__name__}: {e}", file=sys.stderr)
+            code = 1
+        (summary.ok if code == 0 else summary.failed).append(tenant)
+    return summary
+
+
+def cmd_run_all(args: argparse.Namespace) -> int:
+    """Nightly entry point: discover tenants, then train and score each."""
+    from clickhouse_connect import get_client  # noqa: PLC0415 - intentional lazy import
+
+    from anomaly.clickhouse_io import fetch_active_tenants
+
+    since = datetime.now(UTC) - _parse_window(args.since)
+    client = get_client(**_parse_url(args.clickhouse_url))
+    try:
+        tenants = fetch_active_tenants(client, since, min_events=args.min_events)
+    finally:
+        client.close()
+    print(f"{len(tenants)} tenant(s) with >= {args.min_events} events since {args.since}")
+
+    def run_one(tenant: str) -> int:
+        per = argparse.Namespace(**vars(args))
+        per.tenant = tenant
+        per.out = None
+        return cmd_run(per)
+
+    summary = run_all(tenants, run_one)
+    print(f"run-all: {len(summary.ok)} ok, {len(summary.failed)} failed")
+    for tenant in summary.failed:
+        print(f"failed tenant: {tenant}", file=sys.stderr)
+    return summary.exit_code
 
 
 def cmd_train(args: argparse.Namespace) -> int:
@@ -228,16 +307,24 @@ def _parse_window(spec: str) -> timedelta:
 
 
 def _parse_url(url: str) -> dict:
-    """Parse a clickhouse:// URL into clickhouse-connect kwargs."""
+    """Parse a ClickHouse URL into clickhouse-connect kwargs.
+
+    clickhouse-connect speaks the HTTP interface only, so the default
+    port is 8123 (8443 for https), never the native-protocol 9000.
+    `clickhouse://` and `http://` are plain HTTP; `https://` is TLS.
+    That lets the job reuse the controller's `http://` DSN as is.
+    """
     from urllib.parse import urlparse
 
     parsed = urlparse(url)
+    secure = parsed.scheme == "https"
     return {
         "host": parsed.hostname or "localhost",
-        "port": parsed.port or 9000,
+        "port": parsed.port or (8443 if secure else 8123),
         "username": parsed.username or "default",
         "password": parsed.password or "",
         "database": parsed.path.lstrip("/") or "default",
+        "secure": secure,
     }
 
 
