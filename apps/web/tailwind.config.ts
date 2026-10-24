@@ -31,13 +31,14 @@ const config: Config = {
       },
       colors: {
         // Neutral greys, set 2026-10-24 to follow the Cursor dashboard
-        // (page #141414, surfaces #111, text #f3f3f3 / #959595 / #777).
+        // (page #000, surfaces #111, text #f3f3f3 / #959595 / #777).
         // The scale names stay `ink` and `bamboo` so every component
         // picks the new look up without a class rename. Use `ink` for
         // surfaces and hairlines, `bamboo` for text and controls.
         //
-        // ink: 950 page, 900 raised surface (darker than the page, as
-        // in Cursor), 800 hairline and hover fill, 700 stronger rule.
+        // ink: 950 page (pure black), 900 sidebar and card surface, 800
+        // hairline and hover fill, 700 stronger rule. Measured on the
+        // Cursor dashboard: main area #000, sidebar and cards #111.
         ink: {
           50: '#F3F3F3',
           100: '#E4E4E4',
@@ -49,7 +50,7 @@ const config: Config = {
           700: '#2E2E2E',
           800: '#222222',
           900: '#111111',
-          950: '#141414',
+          950: '#000000',
         },
         // bamboo: 50 primary text and the light pill button, 100-200
         // secondary text (used with /60 to /80 opacity), 300-500 focus

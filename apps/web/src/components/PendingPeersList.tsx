@@ -33,7 +33,7 @@ export function PendingPeersList({ peers }: { peers: Peer[] }) {
         </h2>
         <span className="text-xs text-bamboo-200/50">{t('subtitle')}</span>
       </header>
-      <div className="overflow-hidden rounded-md border border-ink-700/70">
+      <div className="overflow-hidden rounded-2xl bg-ink-900">
         {peers.map((peer, idx) => (
           <PendingPeerRow
             key={peer.id}
@@ -119,7 +119,7 @@ function PendingPeerRow({ peer, isLast }: { peer: Peer; isLast: boolean }) {
           type="button"
           onClick={() => submit('reject')}
           disabled={isPending}
-          className="rounded border border-ink-700 px-3 py-1.5 text-xs text-bamboo-200/80 transition-colors hover:bg-ink-800 hover:text-bamboo-50 focus:outline-none focus-visible:ring-1 focus-visible:ring-bamboo-400 disabled:cursor-not-allowed disabled:opacity-50"
+          className="rounded-full bg-[#777]/20 px-3 py-1.5 text-xs text-bamboo-200/80 transition-colors hover:bg-[#777]/30 hover:text-bamboo-50 focus:outline-none focus-visible:ring-1 focus-visible:ring-bamboo-400 disabled:cursor-not-allowed disabled:opacity-50"
         >
           {t('reject')}
         </button>

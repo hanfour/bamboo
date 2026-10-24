@@ -8,6 +8,7 @@ import { Inter } from 'next/font/google';
 import { routing } from '@/i18n/routing';
 import { TopBar } from '@/components/TopBar';
 import { Sidebar } from '@/components/Sidebar';
+import { SidebarUser } from '@/components/SidebarUser';
 import { ChromeShell } from '@/components/ChromeShell';
 import '../globals.css';
 
@@ -56,7 +57,7 @@ export default async function LocaleLayout({
  ChromeShell client wrapper holds the drawer open state
  so the HamburgerButton in TopBar can toggle the Sidebar
  even though they're separate component subtrees. */}
- <ChromeShell topBar={<TopBar />} sidebar={<Sidebar />}>
+ <ChromeShell topBar={<TopBar />} sidebar={<Sidebar footer={<SidebarUser />} />}>
  {children}
  </ChromeShell>
  </NextIntlClientProvider>

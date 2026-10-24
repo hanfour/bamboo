@@ -108,7 +108,7 @@ export function PeerDrawer({ peerResult, events, connectionEvents, routeConflict
  role="dialog"
  aria-modal="true"
  aria-labelledby="peer-drawer-title"
- className={`absolute right-0 top-0 flex h-full w-full max-w-md flex-col border-l border-ink-800 bg-ink-950 shadow-xl transition-transform ${
+ className={`absolute right-0 top-0 flex h-full w-full max-w-md flex-col bg-ink-900 shadow-2xl ring-1 ring-white/5 transition-transform ${
  open ? 'translate-x-0' : 'translate-x-full'
  }`}
  >
@@ -209,7 +209,7 @@ function DrawerBody({
  label={t('fields.publicKey')}
  value={
  peer.wireguardPublicKey ? (
- <code className="block break-all rounded border border-ink-800 px-2 py-1 font-mono text-xs text-bamboo-100">
+ <code className="block break-all rounded-lg px-2 py-1 font-mono text-xs text-bamboo-100 bg-ink-900">
  {peer.wireguardPublicKey}
  </code>
  ) : (
@@ -244,7 +244,7 @@ function DrawerBody({
  {peer.endpoints.map((ep) => (
  <li
  key={ep}
- className="rounded border border-ink-800 px-2 py-1 font-mono text-xs text-bamboo-100"
+ className="rounded-lg px-2 py-1 font-mono text-xs text-bamboo-100 bg-ink-900"
  >
  {ep}
  </li>
@@ -353,7 +353,7 @@ function HostnameField({ peer, onError }: { peer: Peer; onError: (msg: string | 
  setDraft(peer.hostname);
  }}
  disabled={pending}
- className="rounded border border-bamboo-200/30 px-2 text-xs text-bamboo-100 transition-colors hover:border-bamboo-200/60 hover:text-bamboo-50"
+ className="rounded-full bg-[#777]/20 px-2 text-xs text-bamboo-100 transition-colors hover:bg-[#777]/30 hover:text-bamboo-50"
  >
  {t('inline.cancel')}
  </button>
@@ -448,7 +448,7 @@ function DnsNameField({ peer, onError }: { peer: Peer; onError: (msg: string | n
  setDraft(peer.peerDnsName ?? '');
  }}
  disabled={pending}
- className="rounded border border-bamboo-200/30 px-2 text-xs text-bamboo-100 transition-colors hover:border-bamboo-200/60 hover:text-bamboo-50"
+ className="rounded-full bg-[#777]/20 px-2 text-xs text-bamboo-100 transition-colors hover:bg-[#777]/30 hover:text-bamboo-50"
  >
  {t('inline.cancel')}
  </button>
@@ -548,7 +548,7 @@ function TagsField({ peer, onError }: { peer: Peer; onError: (msg: string | null
  peer.tags.map((tag) => (
  <span
  key={tag}
- className="rounded border border-ink-800 px-2 py-0.5 text-xs text-bamboo-200/70"
+ className="rounded-lg px-2 py-0.5 text-xs text-bamboo-200/70 bg-ink-900"
  >
  {tag}
  </span>
@@ -1032,7 +1032,7 @@ function ConnectionTimeline({ events }: { events: PeerConnectionEvent[] }) {
  {events.map((e) => (
  <li
  key={e.id}
- className="flex items-baseline justify-between gap-3 rounded-md border border-ink-800 px-3 py-2 text-sm"
+ className="flex items-baseline justify-between gap-3 rounded-2xl px-3 py-2 text-sm bg-ink-900"
  >
  <span className="flex items-baseline gap-2 text-bamboo-50">
  <PathGlyph path={e.path} />
@@ -1100,7 +1100,7 @@ function Timeline({ events }: { events: PeerEvent[] }) {
  {events.map((e) => (
  <li
  key={e.id}
- className="rounded-md border border-ink-800 px-3 py-2"
+ className="rounded-2xl px-3 py-2 bg-ink-900"
  >
  <div className="flex items-baseline justify-between gap-2 text-sm">
  <span className="font-medium text-bamboo-50">
@@ -1174,7 +1174,7 @@ function DiffRender({ action, diff }: { action: string; diff: Record<string, unk
  return (
  <li key={key} className="flex flex-wrap items-baseline gap-1">
  <span className="font-medium text-bamboo-200/70">{key}:</span>
- <code className="rounded border border-ink-800 px-1 font-mono text-bamboo-200/40 line-through decoration-bamboo-200/30">
+ <code className="rounded-lg px-1 font-mono text-bamboo-200/40 line-through decoration-bamboo-200/30 bg-ink-900">
  {formatDiffValue(ft.from)}
  </code>
  <span className="text-bamboo-200/40">→</span>
@@ -1193,7 +1193,7 @@ function DiffRender({ action, diff }: { action: string; diff: Record<string, unk
  {Object.entries(diff).map(([key, val]) => (
  <li key={key} className="flex flex-wrap items-baseline gap-1">
  <span className="text-bamboo-200/60">{key}:</span>
- <code className="rounded border border-ink-800 px-1 font-mono text-bamboo-100">
+ <code className="rounded-lg px-1 font-mono text-bamboo-100 bg-ink-900">
  {formatDiffValue(val)}
  </code>
  </li>

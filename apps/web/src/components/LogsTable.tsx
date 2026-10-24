@@ -18,9 +18,9 @@ export function LogsTable({ events }: { events: LogEvent[] }) {
  return <LogsEmptyState />;
  }
  return (
- <div className="overflow-x-auto rounded-lg border border-ink-800">
- <table className="w-full text-sm">
- <thead className="border-b border-ink-800 text-left text-xs font-medium uppercase tracking-wide text-bamboo-200/60 dark:text-bamboo-200/40">
+ <div className="overflow-x-auto">
+ <table className="w-full text-[13px]">
+ <thead className="border-b border-[#777]/20 text-left text-xs font-medium text-bamboo-200/50">
  <tr>
  <th className="px-4 py-3 font-medium">{t('columns.occurredAt')}</th>
  <th className="px-4 py-3 font-medium">{t('columns.source')}</th>
@@ -30,7 +30,7 @@ export function LogsTable({ events }: { events: LogEvent[] }) {
  <th className="px-4 py-3 font-medium">{t('columns.rule')}</th>
  </tr>
  </thead>
- <tbody className="divide-y divide-ink-800/70">
+ <tbody className="divide-y divide-[#777]/20">
  {events.map((e) => (
  <LogRow key={e.id} e={e} />
  ))}

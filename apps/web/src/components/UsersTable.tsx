@@ -31,9 +31,9 @@ export function UsersTable({
  return <UsersEmptyState />;
  }
  return (
- <div className="overflow-x-auto rounded-lg border border-ink-800">
- <table className="w-full text-sm">
- <thead className="border-b border-ink-800 text-left text-xs font-medium uppercase tracking-wide text-bamboo-200/60 dark:text-bamboo-200/40">
+ <div className="overflow-x-auto">
+ <table className="w-full text-[13px]">
+ <thead className="border-b border-[#777]/20 text-left text-xs font-medium text-bamboo-200/50">
  <tr>
  <th className="px-4 py-3 font-medium">{t('columns.user')}</th>
  <th className="px-4 py-3 font-medium">{t('columns.role')}</th>
@@ -43,7 +43,7 @@ export function UsersTable({
  {meIsAdmin && <th className="px-4 py-3 font-medium">{t('columns.actions')}</th>}
  </tr>
  </thead>
- <tbody className="divide-y divide-ink-800/70">
+ <tbody className="divide-y divide-[#777]/20">
  {users.map((u) => (
  <tr key={u.id} className="text-bamboo-100">
  <td className="px-4 py-3">
@@ -257,7 +257,7 @@ function Avatar({ email }: { email: string }) {
  return (
  <span
  aria-hidden
- className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-ink-800 bg-ink-900 text-xs font-medium text-bamboo-100 dark:bg-ink-900 dark:text-bamboo-100"
+ className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-ink-900 text-xs font-medium text-bamboo-100 dark:bg-ink-900 dark:text-bamboo-100"
  >
  {initial}
  </span>

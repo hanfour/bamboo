@@ -50,18 +50,19 @@ function UsersView({
  meIsAdmin: boolean;
 }) {
  const t = useTranslations('users');
+ const hasInvitations = invitations.length > 0;
  return (
  <div className="space-y-8">
  <header className="flex items-start justify-between gap-4">
- <div>
- <h1 className="text-2xl font-medium tracking-tight text-bamboo-50">{t("title")}</h1>
- <p className="mt-1 max-w-2xl text-sm text-bamboo-200/70">
- {t('subtitle')}
- </p>
+ <div className="space-y-1.5">
+ <h1 className="text-2xl font-medium tracking-tight text-bamboo-50">{t('title')}</h1>
+ <p className="max-w-2xl text-[13px] text-bamboo-200/60">{t('subtitle')}</p>
  </div>
+ {hasInvitations && (
  <div className="shrink-0">
  <InviteUserButton />
  </div>
+ )}
  </header>
 
  <section className="space-y-3">
@@ -69,10 +70,25 @@ function UsersView({
  </section>
 
  <section className="space-y-3">
- <h2 className="text-xs font-medium uppercase tracking-wide text-bamboo-200/60">
- {t('invitations.title')}
- </h2>
+ <h2 className="text-base font-medium text-bamboo-50">{t('invitations.title')}</h2>
+ {hasInvitations ? (
  <InvitationsTable invitations={invitations} />
+ ) : (
+ <div className="flex flex-col items-center rounded-2xl border border-dashed border-[#777]/30 px-6 py-12 text-center">
+ <span className="flex h-14 w-14 items-center justify-center rounded-2xl bg-ink-900 text-bamboo-100">
+ <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="h-6 w-6" aria-hidden>
+ <circle cx="9" cy="8" r="3.5" />
+ <path d="M2.5 20c.6-3.4 3.2-5.5 6.5-5.5s5.9 2.1 6.5 5.5" />
+ <path d="M18 8v6M15 11h6" />
+ </svg>
+ </span>
+ <h3 className="mt-5 text-[15px] font-medium text-bamboo-50">{t('inviteCard.title')}</h3>
+ <p className="mt-2 max-w-md text-[13px] leading-5 text-bamboo-200/60">{t('inviteCard.desc')}</p>
+ <div className="mt-6">
+ <InviteUserButton />
+ </div>
+ </div>
+ )}
  </section>
  </div>
  );

@@ -114,7 +114,7 @@ function ErrorCard({
  // background, identical chrome to Header.
  return (
  <div
- className={`rounded-md border border-ink-800 bg-ink-900/40 p-6 ${className}`}
+ className={`rounded-2xl bg-ink-900 p-6 ${className}`}
  >
  <div className="flex items-start gap-3">
  <span

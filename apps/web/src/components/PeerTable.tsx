@@ -20,13 +20,11 @@ type Props = {
 };
 
 // PeerTable renders the tenant's peer list as a borderless table on
-// the warm-dark surface. Visual rules committed 2026-05-17:
+// the black page, after the Cursor plugins table (2026-10-24):
 //
-// - No outer card border. The table sits flush on the page; the
-// ink-800 hairlines between rows carry the structure.
-// - Selected row gets a 2px bamboo-400 left stripe (same accent
-// the Sidebar uses for the active nav item) plus an ink-900
-// fill to read as raised, without committing to a pill.
+// - No outer card border. Hairlines between rows carry the structure.
+// - 12px grey column heads, 13px rows, an icon tile before each name.
+// - The selected row gets the #111 surface fill.
 // - DNS-name column lives between hostname and IP. The full
 // resolvable form (`<peerDnsName>.bamboo`) renders mono with
 // the `.bamboo` suffix dimmed so the eye lands on the label.
@@ -39,7 +37,7 @@ export function PeerTable({ peers, latestClientVersion, selectedId, onSelect }: 
 
  if (peers.length === 0) {
  return (
- <p className="rounded-md border border-dashed border-ink-700 p-10 text-center text-sm text-bamboo-200/60">
+ <p className="rounded-2xl border border-dashed border-[#777]/30 p-12 text-center text-[13px] text-bamboo-200/60">
  {t('empty')}
  </p>
  );
@@ -51,8 +49,8 @@ export function PeerTable({ peers, latestClientVersion, selectedId, onSelect }: 
  // padding. min-w-[860px] keeps columns at readable widths;
  // pinching/scrolling the table beats fortune-cookie wrapping.
  <div className="-mx-6 overflow-x-auto px-6 sm:mx-0 sm:px-0">
- <table className="w-full min-w-[860px] text-sm">
- <thead className="border-b border-ink-800 text-left text-xs font-medium tracking-wide text-bamboo-200/60">
+ <table className="w-full min-w-[860px] text-[13px]">
+ <thead className="border-b border-[#777]/20 text-left text-xs font-medium text-bamboo-200/50">
  <tr>
  <th className="px-3 py-3 font-medium">{t('columns.hostname')}</th>
  <th className="px-3 py-3 font-medium">{t('columns.dnsName')}</th>
@@ -68,7 +66,7 @@ export function PeerTable({ peers, latestClientVersion, selectedId, onSelect }: 
  <th className="w-10 px-3 py-3 font-medium" aria-label={t('columns.actions')} />
  </tr>
  </thead>
- <tbody className="divide-y divide-ink-800/70">
+ <tbody className="divide-y divide-[#777]/20">
  {peers.map((p) => {
  const isSelected = p.id === selectedId;
  const isExpanded = expandedId === p.id;
@@ -87,18 +85,19 @@ export function PeerTable({ peers, latestClientVersion, selectedId, onSelect }: 
  aria-pressed={isSelected}
  className={[
  'relative cursor-pointer text-bamboo-100/90 transition-colors focus:outline-none focus-visible:ring-1 focus-visible:ring-bamboo-400',
- isSelected
- ? 'bg-ink-900 text-bamboo-50 before:absolute before:inset-y-0 before:left-0 before:w-0.5 before:bg-bamboo-400'
- : 'hover:bg-ink-900/50',
+ isSelected ? 'bg-ink-900 text-bamboo-50' : 'hover:bg-ink-900/60',
  ].join(' ')}
  >
- <td className="px-3 py-3 align-top font-medium text-bamboo-50">
- {p.hostname}
+ <td className="px-3 py-3 align-middle font-medium text-bamboo-50">
+ <span className="flex items-center gap-3">
+ <OsTile os={p.os} />
+ <span className="truncate">{p.hostname}</span>
+ </span>
  </td>
- <td className="px-3 py-3 align-top">
+ <td className="px-3 py-3 align-middle">
  <DnsNameCell name={p.peerDnsName} />
  </td>
- <td className="px-3 py-3 align-top">
+ <td className="px-3 py-3 align-middle">
  <AddressCell
  peer={p}
  expanded={isExpanded}
@@ -108,7 +107,7 @@ export function PeerTable({ peers, latestClientVersion, selectedId, onSelect }: 
  }}
  />
  </td>
- <td className="px-3 py-3 align-top text-xs">
+ <td className="px-3 py-3 align-middle text-xs">
  {p.ownerEmail ? (
  <span title={p.ownerEmail} className="truncate text-bamboo-100/80">
  {p.ownerDisplayName || p.ownerEmail}
@@ -119,7 +118,7 @@ export function PeerTable({ peers, latestClientVersion, selectedId, onSelect }: 
  </span>
  )}
  </td>
- <td className="px-3 py-3 align-top">
+ <td className="px-3 py-3 align-middle">
  <div className="flex flex-wrap gap-1.5">
  {p.tags.map((tag) => (
  <span
@@ -131,25 +130,25 @@ export function PeerTable({ peers, latestClientVersion, selectedId, onSelect }: 
  ))}
  </div>
  </td>
- <td className="px-3 py-3 align-top text-xs text-bamboo-200/60">{p.os}</td>
- <td className="hidden px-3 py-3 align-top lg:table-cell">
+ <td className="px-3 py-3 align-middle text-xs text-bamboo-200/60">{p.os}</td>
+ <td className="hidden px-3 py-3 align-middle lg:table-cell">
  <ClientVersionCell
  version={p.clientVersion}
  latest={latestClientVersion}
  upgradeAvailable={p.upgradeAvailable}
  />
  </td>
- <td className="px-3 py-3 align-top">
+ <td className="px-3 py-3 align-middle">
  <StatusBadge
  status={p.status}
  label={t(`status.${p.status}`)}
  connectionPath={p.connectionPath}
  />
  </td>
- <td className="px-3 py-3 align-top text-xs text-bamboo-200/60">
+ <td className="px-3 py-3 align-middle text-xs text-bamboo-200/60">
  {p.lastSeenAt ? formatRelative(p.lastSeenAt) : '—'}
  </td>
- <td className="px-3 py-3 text-right align-top">
+ <td className="px-3 py-3 text-right align-middle">
  <PeerRowMenu peer={p} />
  </td>
  </tr>
@@ -344,4 +343,49 @@ function formatRelative(iso: string): string {
  if (s < 3600) return `${Math.round(s / 60)}m ago`;
  if (s < 86_400) return `${Math.round(s / 3600)}h ago`;
  return `${Math.round(s / 86_400)}d ago`;
+}
+
+
+// OsTile is the rounded icon square before a hostname, as on the Cursor
+// plugins table. The glyph hints at the operating system.
+function OsTile({ os }: { os: string }) {
+ const kind = os.toLowerCase();
+ const common = {
+ viewBox: '0 0 24 24',
+ fill: 'none',
+ stroke: 'currentColor',
+ strokeWidth: 1.5,
+ strokeLinecap: 'round',
+ strokeLinejoin: 'round',
+ className: 'h-[18px] w-[18px]',
+ 'aria-hidden': true,
+ } as const;
+ let glyph;
+ if (kind === 'darwin' || kind === 'windows') {
+ glyph = (
+ <svg {...common}>
+ <rect x="3" y="4" width="18" height="12" rx="2" />
+ <path d="M8 20h8M12 16v4" />
+ </svg>
+ );
+ } else if (kind === 'linux') {
+ glyph = (
+ <svg {...common}>
+ <rect x="3" y="4" width="18" height="16" rx="2" />
+ <path d="M7 10l3 2.5L7 15M12 15h5" />
+ </svg>
+ );
+ } else {
+ glyph = (
+ <svg {...common}>
+ <rect x="3" y="4" width="18" height="7" rx="2" />
+ <rect x="3" y="13" width="18" height="7" rx="2" />
+ </svg>
+ );
+ }
+ return (
+ <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[#262626] text-bamboo-100">
+ {glyph}
+ </span>
+ );
 }

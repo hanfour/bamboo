@@ -49,7 +49,7 @@ function InviteCard({ token }: { token: string }) {
  </p>
  </header>
 
- <div className="rounded-lg border border-ink-800 bg-ink-950 p-6 dark:bg-ink-950">
+ <div className="rounded-2xl p-6 bg-ink-900">
  <a
  href={loginUrl}
  className="inline-flex w-full items-center justify-center rounded-full bg-bamboo-50 px-4 py-2.5 text-[13px] font-medium text-ink-950 transition-colors hover:bg-bamboo-100"
@@ -70,7 +70,7 @@ function MissingTokenCard() {
  const t = useTranslations('invite.tokenMissing');
  return (
  <div className="mx-auto max-w-xl">
- <div className="rounded-lg border border-ink-800 bg-ink-950 p-6 dark:bg-ink-950">
+ <div className="rounded-2xl p-6 bg-ink-900">
  <div className="flex items-start gap-3">
  <span
  aria-hidden
@@ -94,7 +94,7 @@ function MissingTokenCard() {
  <h2 className="text-base font-semibold tracking-tight text-bamboo-50">
  {t('title')}
  </h2>
- <p className="mt-1 text-sm text-bamboo-200/70">{t('body')}</p>
+ <p className="text-[13px] text-bamboo-200/60">{t('body')}</p>
  </div>
  </div>
  </div>

@@ -41,21 +41,21 @@ export default async function DNSPage() {
 function DNSEmptyState() {
  const t = useTranslations('dns');
  return (
- <div className="space-y-10 pt-2">
+ <div className="space-y-10">
  <header className="space-y-2">
  <h1 className="text-2xl font-medium tracking-tight text-bamboo-50">
  {t('title')}
  </h1>
- <p className="max-w-2xl text-sm text-bamboo-200/60">{t('subtitle')}</p>
+ <p className="max-w-2xl text-[13px] text-bamboo-200/60">{t('subtitle')}</p>
  </header>
- <section className="max-w-2xl space-y-4 rounded-md border border-ink-800 bg-ink-900/40 p-6">
+ <section className="max-w-2xl space-y-4 rounded-2xl p-6 bg-ink-900">
  <h2 className="text-base font-medium tracking-tight text-bamboo-50">
  {t('empty.title')}
  </h2>
  <p className="text-sm leading-relaxed text-bamboo-200/70">
  {t('empty.body')}
  </p>
- <code className="block rounded border border-ink-800 bg-ink-950 px-3 py-2 font-mono text-xs text-bamboo-100">
+ <code className="block rounded-lg px-3 py-2 font-mono text-xs text-bamboo-100 bg-ink-900">
  {t('empty.example')}
  </code>
  <p className="text-xs text-bamboo-200/60">{t('empty.note')}</p>
@@ -68,12 +68,12 @@ function DNSView({ dns }: { dns: DNSConfig }) {
  const t = useTranslations('dns');
  const everUpdated = dns.updatedAt && !dns.updatedAt.startsWith('0001-01-01');
  return (
- <div className="space-y-10 pt-2">
+ <div className="space-y-10">
  <header className="space-y-2">
  <h1 className="text-2xl font-medium tracking-tight text-bamboo-50">
  {t('title')}
  </h1>
- <p className="max-w-2xl text-sm text-bamboo-200/60">{t('subtitle')}</p>
+ <p className="max-w-2xl text-[13px] text-bamboo-200/60">{t('subtitle')}</p>
  </header>
 
  <Section title={t('tenantSection')}>
@@ -90,13 +90,13 @@ function DNSView({ dns }: { dns: DNSConfig }) {
 
  <Section title={t('nameserversSection')}>
  {dns.globalNameservers.length === 0 ? (
- <p className="text-sm text-bamboo-200/60">{t('nameserversEmpty')}</p>
+ <p className="text-[13px] text-bamboo-200/60">{t('nameserversEmpty')}</p>
  ) : (
  <ul className="space-y-1">
  {dns.globalNameservers.map((ns) => (
  <li
  key={ns}
- className="rounded border border-ink-800 bg-ink-900/40 px-3 py-2 font-mono text-xs text-bamboo-100"
+ className="rounded-lg px-3 py-2 font-mono text-xs text-bamboo-100 bg-ink-900"
  >
  {ns}
  </li>
@@ -107,13 +107,13 @@ function DNSView({ dns }: { dns: DNSConfig }) {
 
  <Section title={t('searchDomainsSection')}>
  {dns.searchDomains.length === 0 ? (
- <p className="text-sm text-bamboo-200/60">{t('searchDomainsEmpty')}</p>
+ <p className="text-[13px] text-bamboo-200/60">{t('searchDomainsEmpty')}</p>
  ) : (
  <ul className="flex flex-wrap gap-1">
  {dns.searchDomains.map((d) => (
  <li
  key={d}
- className="rounded border border-ink-800 bg-ink-900/40 px-2 py-0.5 text-xs text-bamboo-200/70"
+ className="rounded-lg px-2 py-0.5 text-xs text-bamboo-200/70 bg-ink-900"
  >
  {d}
  </li>

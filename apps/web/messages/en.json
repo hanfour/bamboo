@@ -6,6 +6,8 @@
   },
   "nav": {
     "dashboard": "Dashboard",
+    "groupNetwork": "Network",
+    "groupSystem": "System",
     "peers": "Peers",
     "users": "Users",
     "dns": "DNS",
@@ -30,6 +32,9 @@
     "subtitle": "Sign in to manage your mesh.",
     "signInWithGoogle": "Continue with Google",
     "selfHosted": "Running self-hosted? Use a pre-auth key in the CLI."
+  },
+  "login": {
+    "title": "Sign in to bamboo"
   },
   "dashboard": {
     "title": "Overview",
@@ -57,6 +62,30 @@
         "peer_desk_get": "Downloaded a file",
         "peer_desk_term": "Opened a terminal",
         "peer_desk_term_close": "Closed a terminal"
+      }
+    },
+    "networkCard": "Network",
+    "managePeers": "Manage peers",
+    "offlineCount": "{count, plural, one {# peer offline} other {# peers offline}}",
+    "policyCard": "Access policy",
+    "editPolicy": "Edit policy",
+    "policyRevisionValue": "Revision {revision}",
+    "tiles": {
+      "peers": {
+        "title": "Peers",
+        "desc": "Devices on your network and their MagicDNS names."
+      },
+      "users": {
+        "title": "Users",
+        "desc": "Invite people and manage who can sign in."
+      },
+      "acl": {
+        "title": "Access policy",
+        "desc": "Write rules and review recommendations."
+      },
+      "dns": {
+        "title": "DNS",
+        "desc": "Resolvers, search domains and DNS64."
       }
     }
   },
@@ -271,6 +300,12 @@
           "peer_desk_term_close": "Closed a terminal"
         }
       }
+    },
+    "toolbar": {
+      "all": "All",
+      "online": "Online",
+      "offline": "Offline",
+      "search": "Search peers"
     }
   },
   "preAuthKeys": {
@@ -387,7 +422,7 @@
   },
   "users": {
     "title": "Users",
-    "subtitle": "People currently in this tenant. New members are created automatically on first OIDC sign-in; invite and role-management flows are planned but not yet shipped.",
+    "subtitle": "People who belong to this tenant. New members are created when they first sign in with OIDC, or when they accept an invitation.",
     "columns": {
       "user": "User",
       "role": "Role",
@@ -470,6 +505,10 @@
         "working": "Working…",
         "noAction": "—"
       }
+    },
+    "inviteCard": {
+      "title": "Invite people",
+      "desc": "Send an invitation by email. They sign in with the address you invited, and you choose whether they are an admin."
     }
   },
   "dns": {
@@ -703,7 +742,8 @@
         "last90d": "Last 90 days"
       },
       "hint": "Capped at 50,000 rows per download. For longer history, chunk by date range via /api/audit-export?since=…&until=…."
-    }
+    },
+    "manageTitle": "Manage"
   },
   "invite": {
     "title": "You've been invited",

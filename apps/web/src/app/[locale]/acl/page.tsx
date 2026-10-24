@@ -50,10 +50,10 @@ function Acl({
  if (!policy.hclSource) {
  return (
  <div className="space-y-6">
- <header>
+ <header className="space-y-1.5">
  <h1 className="text-2xl font-medium tracking-tight text-bamboo-50">{t("title")}</h1>
  </header>
- <p className="rounded-lg border border-dashed border-bamboo-200/30 p-8 text-center text-sm text-bamboo-200/60 dark:text-bamboo-200/40">
+ <p className="rounded-2xl border border-dashed border-[#777]/30 p-10 text-center text-[13px] text-bamboo-200/60">
  {t('empty')}
  </p>
  </div>
@@ -62,9 +62,9 @@ function Acl({
 
  return (
  <div className="space-y-6">
- <header>
+ <header className="space-y-1.5">
  <h1 className="text-2xl font-medium tracking-tight text-bamboo-50">{t("title")}</h1>
- <p className="text-sm text-bamboo-200/60">
+ <p className="text-[13px] text-bamboo-200/60">
  {t('revision')}: <span className="font-mono">{policy.revision}</span>
  {policy.updatedAt && (
  <>
@@ -92,7 +92,7 @@ function Acl({
  {policy.rules.map((r) => (
  <li
  key={r.id}
- className="rounded-lg border border-ink-800 p-4 dark:border-ink-800"
+ className="rounded-2xl p-4 bg-ink-900"
  >
  <div className="flex flex-wrap items-baseline justify-between gap-2">
  <code className="font-mono text-xs text-bamboo-200/60">

@@ -79,12 +79,19 @@ export function ChromeShell({
  };
  }, [open]);
 
+ // The sign-in page stands alone, without the sidebar or the top bar.
+ if (pathname === '/login') {
+ return <main className="min-h-screen px-5">{children}</main>;
+ }
+
  return (
  <DrawerContext.Provider value={{ open, setOpen }}>
+ <div className="flex min-h-screen flex-col lg:flex-row">
  {topBar}
- <div className="flex">
  {sidebar}
- <main className="min-w-0 flex-1 px-6 py-8">{children}</main>
+ <main className="min-w-0 flex-1 px-5 py-8 sm:px-8">
+ <div className="mx-auto w-full max-w-[1200px]">{children}</div>
+ </main>
  </div>
  </DrawerContext.Provider>
  );

@@ -2,77 +2,79 @@
 
 'use client';
 
+import type { ReactNode } from 'react';
 import { useTranslations } from 'next-intl';
 import { Link, usePathname } from '@/i18n/routing';
 import { useDrawer } from './ChromeShell';
 
-// Sidebar is the persistent left navigation rail on lg+ viewports and
-// a slide-in drawer below lg.
+// Sidebar is the persistent left rail on lg+ and a slide-in drawer below.
 //
-// Design (2026-10-24, after the Cursor dashboard): the active row is a
-// rounded 8px fill in translucent grey with bright text, and idle rows
-// are dim text that gain the same fill, lighter, on hover. 13px type.
-//
-// Responsive behavior:
-// - lg+ (≥1024): always-visible static rail inside the flex flow.
-// Takes 256px of main-axis space; transparent bg so it sits on
-// the page surface.
-// - <lg: fixed-position drawer that slides in from the left over
-// an ink-950/80 backdrop. Drawer open state lives in ChromeShell
-// context; the HamburgerButton in TopBar toggles it.
-export function Sidebar() {
+// Layout (2026-10-24, after the Cursor dashboard): a full-height #111
+// column. The brand sits on top, the links come in labelled groups, and
+// the signed-in user sits at the bottom (passed in as `footer`, because
+// it needs the server-side session). The active row is a rounded,
+// translucent grey fill. Below lg the same column is a fixed drawer that
+// the top bar's menu button opens over a dimmed backdrop.
+type Href = '/' | '/peers' | '/users' | '/acl' | '/dns' | '/logs' | '/settings';
+type Item = { href: Href; label: string; icon: ReactNode };
+
+export function Sidebar({ footer }: { footer?: ReactNode }) {
  const t = useTranslations('nav');
  const pathname = usePathname();
  const { open, setOpen } = useDrawer();
 
- const items: Array<{
- href: '/' | '/peers' | '/users' | '/acl' | '/dns' | '/logs' | '/settings';
- label: string;
- icon: React.ReactNode;
- }> = [
- { href: '/', label: t('dashboard'), icon: <HomeIcon /> },
+ const groups: Array<{ label?: string; items: Item[] }> = [
+ { items: [{ href: '/', label: t('dashboard'), icon: <HomeIcon /> }] },
+ {
+ label: t('groupNetwork'),
+ items: [
  { href: '/peers', label: t('peers'), icon: <ServerIcon /> },
  { href: '/users', label: t('users'), icon: <UsersIcon /> },
  { href: '/acl', label: t('acl'), icon: <ShieldIcon /> },
  { href: '/dns', label: t('dns'), icon: <GlobeIcon /> },
+ ],
+ },
+ {
+ label: t('groupSystem'),
+ items: [
  { href: '/logs', label: t('logs'), icon: <LogsIcon /> },
- // Pre-auth keys lives under Settings now (matches Tailscale's IA);
- // /preauth-keys route still exists, just reached via Settings →
- // Pre-auth keys card.
+ // Pre-auth keys, API tokens and webhooks are reached from Settings.
  { href: '/settings', label: t('settings'), icon: <GearIcon /> },
+ ],
+ },
  ];
 
  return (
  <>
- {/* Backdrop — only rendered under lg. fade-in animation rather
- than appear/disappear. Warm-dark scrim, not zinc grey. */}
  <div
  aria-hidden
  onClick={() => setOpen(false)}
  className={[
- 'fixed inset-x-0 bottom-0 top-14 z-20 bg-ink-950/80 transition-opacity lg:hidden',
+ 'fixed inset-0 z-20 bg-black/70 transition-opacity lg:hidden',
  open ? 'opacity-100' : 'pointer-events-none opacity-0',
  ].join(' ')}
  />
  <aside
  id="primary-sidebar"
  className={[
- // Shared chrome: ink-800 hairline on the right, generous
- // vertical breathing room.
- 'h-[calc(100vh-3.5rem)] w-64 shrink-0 overflow-y-auto border-r border-ink-800 px-3 py-4',
- // <lg: fixed drawer that slides in. ink-900 raises it one
- // step above the page surface so the backdrop reads
- // distinctly.
- 'fixed left-0 top-14 z-30 bg-ink-900 transition-transform',
+ 'flex h-screen w-64 shrink-0 flex-col bg-ink-900 px-3 pb-3 pt-4',
+ 'fixed left-0 top-0 z-30 transition-transform',
  open ? 'translate-x-0' : '-translate-x-full',
- // lg+: static rail inside flex flow, transparent so it
- // shares the page surface.
- 'lg:sticky lg:top-14 lg:z-0 lg:translate-x-0 lg:bg-transparent',
+ 'lg:sticky lg:z-0 lg:translate-x-0',
  ].join(' ')}
  >
- <nav>
+ <Link
+ href="/"
+ className="mb-4 px-2.5 text-[17px] font-semibold leading-none tracking-tight text-bamboo-50"
+ >
+ bamboo
+ </Link>
+ <nav className="min-h-0 flex-1 space-y-5 overflow-y-auto">
+ {groups.map((g, i) => (
+ <div key={i}>
+ {g.label && <div className="px-2.5 pb-1.5 text-xs text-bamboo-200/50">{g.label}</div>}
  <ul className="space-y-0.5">
- {items.map((it) => {
+ {g.items.map((it) => {
  const active = isActive(pathname, it.href);
  return (
  <li key={it.href}>
@@ -80,21 +82,13 @@ export function Sidebar() {
  href={it.href}
  aria-current={active ? 'page' : undefined}
  className={[
- // Active state = 2px bamboo-400 left bar via
- // `before:`, no background pill. Inactive
- // rows hover into an ink-900 fill for
- // affordance without committing to the pill
- // look.
- 'relative flex items-center gap-3 rounded-lg px-2.5 py-1.5 text-[13px] leading-[18px] transition-colors',
+ 'flex items-center gap-3 rounded-lg px-2.5 py-1.5 text-[13px] leading-[18px] transition-colors',
  active
  ? 'bg-[#777]/30 font-medium text-bamboo-50'
  : 'text-bamboo-200/80 hover:bg-[#777]/20 hover:text-bamboo-50',
  ].join(' ')}
  >
- <span
- aria-hidden
- className={active ? 'text-bamboo-50' : 'text-bamboo-300/80'}
- >
+ <span aria-hidden className={active ? 'text-bamboo-50' : 'text-bamboo-300/80'}>
  {it.icon}
  </span>
  <span className="truncate">{it.label}</span>
@@ -103,7 +97,10 @@ export function Sidebar() {
  );
  })}
  </ul>
+ </div>
+ ))}
  </nav>
+ {footer && <div className="mt-3 border-t border-[#777]/20 pt-3">{footer}</div>}
  </aside>
  </>
  );

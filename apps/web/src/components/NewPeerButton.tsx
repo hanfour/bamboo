@@ -298,7 +298,7 @@ function ResultView({
  </p>
  )}
 
- <div className="flex flex-col items-center gap-2 rounded-md border border-ink-800 bg-ink-950 px-4 py-4 dark:bg-ink-900">
+ <div className="flex flex-col items-center gap-2 rounded-2xl px-4 py-4 dark:bg-ink-900">
  <div className="rounded-md bg-ink-950 p-2">
  <QRCodeSVG
  value={qrPayload}

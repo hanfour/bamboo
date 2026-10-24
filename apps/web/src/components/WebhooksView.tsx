@@ -68,11 +68,11 @@ export function WebhooksView({ hooks }: { hooks: Webhook[] }) {
       )}
 
       {hooks.length === 0 ? (
-        <p className="rounded-md border border-dashed border-ink-700 p-6 text-center text-sm text-bamboo-200/60">
+        <p className="rounded-2xl border border-dashed border-[#777]/30 p-10 text-center text-[13px] text-bamboo-200/60">
           {t('empty')}
         </p>
       ) : (
-        <ol className="divide-y divide-ink-800 rounded-lg border border-ink-800">
+        <ol className="divide-y divide-[#777]/20 rounded-2xl bg-ink-900">
           {hooks.map((h) => (
             <WebhookRow key={h.id} hook={h} onError={setError} />
           ))}
@@ -124,7 +124,7 @@ function CreateForm({
   }
 
   return (
-    <div className="space-y-3 rounded-md border border-ink-800 p-4">
+    <div className="space-y-3 rounded-2xl p-4 bg-ink-900">
       <FormField label={t('urlLabel')} hint={t('urlHint')}>
         <input
           type="url"
@@ -257,7 +257,7 @@ function WebhookRow({
             type="button"
             onClick={runTest}
             disabled={pending}
-            className="rounded border border-ink-700 px-2.5 py-1 text-xs text-bamboo-200/80 transition-colors hover:bg-ink-800 hover:text-bamboo-50 disabled:cursor-not-allowed disabled:opacity-50"
+            className="rounded-full bg-[#777]/20 px-2.5 py-1 text-xs text-bamboo-200/80 transition-colors hover:bg-[#777]/30 hover:text-bamboo-50 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {t('actions.test')}
           </button>
@@ -265,7 +265,7 @@ function WebhookRow({
             type="button"
             onClick={toggleActive}
             disabled={pending}
-            className="rounded border border-ink-700 px-2.5 py-1 text-xs text-bamboo-200/80 transition-colors hover:bg-ink-800 hover:text-bamboo-50 disabled:cursor-not-allowed disabled:opacity-50"
+            className="rounded-full bg-[#777]/20 px-2.5 py-1 text-xs text-bamboo-200/80 transition-colors hover:bg-[#777]/30 hover:text-bamboo-50 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {hook.active ? t('actions.disable') : t('actions.enable')}
           </button>
@@ -283,7 +283,7 @@ function WebhookRow({
                 type="button"
                 onClick={() => setConfirmDelete(false)}
                 disabled={pending}
-                className="rounded border border-ink-700 px-2.5 py-1 text-xs text-bamboo-200/80 transition-colors hover:bg-ink-800 hover:text-bamboo-50"
+                className="rounded-full bg-[#777]/20 px-2.5 py-1 text-xs text-bamboo-200/80 transition-colors hover:bg-[#777]/30 hover:text-bamboo-50"
               >
                 {t('actions.cancel')}
               </button>
@@ -293,7 +293,7 @@ function WebhookRow({
               type="button"
               onClick={() => setConfirmDelete(true)}
               disabled={pending}
-              className="rounded border border-ink-700 px-2.5 py-1 text-xs text-bamboo-200/70 transition-colors hover:border-red-900/50 hover:text-red-400 disabled:opacity-50"
+              className="rounded-full bg-[#777]/20 px-2.5 py-1 text-xs text-bamboo-200/70 transition-colors hover:bg-red-500/15 hover:text-red-400 disabled:opacity-50"
             >
               {t('actions.delete')}
             </button>
@@ -373,7 +373,7 @@ function SecretRevealModal({ mint, onClose }: { mint: MintedSecret; onClose: () 
           <label className="block text-xs font-medium uppercase tracking-wide text-bamboo-200/60">
             {t('urlLabel')}
           </label>
-          <code className="block break-all rounded border border-ink-800 px-2 py-1.5 font-mono text-xs text-bamboo-100">
+          <code className="block break-all rounded-lg px-2 py-1.5 font-mono text-xs text-bamboo-100 bg-ink-900">
             {mint.url}
           </code>
         </div>

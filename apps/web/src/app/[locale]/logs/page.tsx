@@ -24,9 +24,9 @@ function LogsView({ events }: { events: LogEvent[] }) {
  const t = useTranslations('logs');
  return (
  <div className="space-y-6">
- <header>
+ <header className="space-y-1.5">
  <h1 className="text-2xl font-medium tracking-tight text-bamboo-50">{t("title")}</h1>
- <p className="mt-1 text-sm text-bamboo-200/70">
+ <p className="text-[13px] text-bamboo-200/60">
  {t('subtitle')}
  </p>
  </header>
