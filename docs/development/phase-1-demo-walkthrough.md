@@ -66,9 +66,11 @@ In a second terminal, mint a pre-auth key and run two `bamboo up`
 sessions so the peer set has shape:
 
 ```bash
-# Open a temporary admin session by hitting /auth/google/login in a
-# browser, OR for the dev shortcut use grpcurl to the AuthService —
-# either way you end up with a session JWT for tenant "default".
+# Sign in at /auth/google/login in a browser. It sends you to the Web UI
+# and sets a session cookie; it no longer prints a token. For a bearer
+# token, create an API token on the Web UI's API tokens page and export it
+# as TOKEN. The dev shortcut is grpcurl to the AuthService. Either way
+# you end up with a bearer token for tenant "default".
 
 # Mint a reusable preauth key (admin):
 grpcurl -plaintext -H "authorization: Bearer $TOKEN" \

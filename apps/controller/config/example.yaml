@@ -25,6 +25,11 @@ auth:
     # Public URL of the HTTP listener; used to build OIDC redirect URIs.
     # Override via BAMBOO_BASE_URL.
     base_url: "http://localhost:8081"
+    # Where a browser lands after signing in. Leave empty when the Web UI
+    # shares base_url's origin (the single-VPS proxy setup). Set it for
+    # local development, e.g. "http://localhost:3000". Override via
+    # BAMBOO_WEB_URL.
+    web_url: ""
     google:
       client_id: ""
       # Override via OIDC_GOOGLE_CLIENT_SECRET.
