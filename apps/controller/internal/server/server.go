@@ -91,6 +91,7 @@ func New(cfg *config.Config, pool *db.Pool, ch *clickhouse.Conn) (*Server, error
 	// the public base URL for invite links falls back to the OIDC base
 	// when the SMTP-specific one isn't set (single-domain deploys).
 	httpSrv.SetMailer(mail.New(cfg.SMTP), cfg.SMTP.PublicBaseURL)
+	httpSrv.SetWebURL(cfg.Auth.OIDC.WebURL)
 
 	return &Server{
 		cfg:  cfg,

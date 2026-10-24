@@ -52,6 +52,7 @@ type HTTPServer struct {
 	revoked     *repo.RevokedSessions
 	mailer      *mail.Sender
 	publicURL   string // for /invite links in invitation email; falls back to baseURL
+	webURL      string // where a browser lands after sign-in; falls back to baseURL
 	traces      *clickhouse.Traces
 	anomalies   *clickhouse.Anomalies
 	connEvents  *clickhouse.ConnectionEvents
@@ -1052,17 +1053,29 @@ func (h *HTTPServer) handleCallback(w http.ResponseWriter, r *http.Request, prov
 		return
 	}
 
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.WriteHeader(http.StatusOK)
-	_, _ = fmt.Fprintf(w, `<!doctype html>
-<meta charset="utf-8">
-<title>bamboo session issued</title>
-<style>body{font-family:system-ui;max-width:40rem;margin:3rem auto;padding:1rem}code{background:#f4f4f6;padding:.5rem;display:block;word-break:break-all}</style>
-<h1>Logged in as %s</h1>
-<p>Tenant: <strong>%s</strong></p>
-<p>A session cookie has been set; the Web UI will pick it up automatically. The bearer token is also shown below for CLI use:</p>
-<code>%s</code>
-`, htmlEscape(identity.Email), htmlEscape(tenant.Slug), htmlEscape(token))
+	h.finishBrowserLogin(w, r)
+}
+
+// SetWebURL sets where a browser lands after signing in. Leave it empty
+// when the Web UI is served from the same origin as the controller, which
+// is how the single-VPS stack runs behind its proxy. Set it when they
+// differ, for example the Next.js dev server next to a local controller.
+func (h *HTTPServer) SetWebURL(u string) {
+	h.webURL = strings.TrimSpace(u)
+}
+
+// finishBrowserLogin ends a browser sign-in. The session cookie is already
+// set, so it sends the browser to the Web UI. This used to print the
+// session token on a page that linked nowhere, which left people stuck
+// and put a live credential on screen. The destination comes from server
+// config only, never from the request, so it cannot be used as an open
+// redirect. Callers that need a bearer token mint an API token in the UI.
+func (h *HTTPServer) finishBrowserLogin(w http.ResponseWriter, r *http.Request) {
+	dest := h.webURL
+	if dest == "" {
+		dest = h.baseURL
+	}
+	http.Redirect(w, r, strings.TrimRight(dest, "/")+"/", http.StatusFound)
 }
 
 // SessionCookieName is the cookie name set by the OIDC callback. The
@@ -1089,29 +1102,6 @@ func splitPath(p string) []string {
 		out = append(out, current)
 	}
 	return out
-}
-
-// htmlEscape escapes a string for safe inclusion in HTML.
-func htmlEscape(s string) string {
-	r := []rune(s)
-	out := make([]rune, 0, len(r))
-	for _, c := range r {
-		switch c {
-		case '&':
-			out = append(out, []rune("&amp;")...)
-		case '<':
-			out = append(out, []rune("&lt;")...)
-		case '>':
-			out = append(out, []rune("&gt;")...)
-		case '"':
-			out = append(out, []rune("&quot;")...)
-		case '\'':
-			out = append(out, []rune("&#39;")...)
-		default:
-			out = append(out, c)
-		}
-	}
-	return string(out)
 }
 
 // resolveInvite walks an invite token through the validation gauntlet

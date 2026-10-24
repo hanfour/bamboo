@@ -169,9 +169,13 @@ func (a AuthConfig) ResolvedRelaySecret() string {
 type OIDCProviders struct {
 	// BaseURL is the public-facing URL of the controller HTTP listener.
 	// Used to build redirect URIs (e.g. https://controller.example.com).
-	BaseURL string            `yaml:"base_url"`
-	Google  ClientCredentials `yaml:"google"`
-	GitHub  ClientCredentials `yaml:"github"`
+	BaseURL string `yaml:"base_url"`
+	// WebURL is where a browser lands after signing in. Empty means the
+	// Web UI shares BaseURL's origin, as it does behind the single-VPS
+	// proxy. Set it when the two differ, such as local development.
+	WebURL string            `yaml:"web_url"`
+	Google ClientCredentials `yaml:"google"`
+	GitHub ClientCredentials `yaml:"github"`
 }
 
 // ClientCredentials is a generic OAuth client_id / client_secret pair.
@@ -273,6 +277,9 @@ func (c *Config) applyEnvOverrides() {
 	}
 	if v := os.Getenv("BAMBOO_BASE_URL"); v != "" {
 		c.Auth.OIDC.BaseURL = v
+	}
+	if v := os.Getenv("BAMBOO_WEB_URL"); v != "" {
+		c.Auth.OIDC.WebURL = v
 	}
 	if v := os.Getenv("BAMBOO_SMTP_HOST"); v != "" {
 		c.SMTP.Host = v
