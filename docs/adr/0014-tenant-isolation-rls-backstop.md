@@ -1,6 +1,8 @@
 # 0014. Tenant isolation — Postgres RLS as a DB-level backstop
 
-- **Status**: Proposed
+- **Status**: Accepted (landed on main in PR #271, 2026-10-02: migration
+  `00022_rls_backstop.sql`, `db.WithTenant` / `db.WithBypass`, and the
+  un-skipped `rls_backstop_test.go`)
 - **Date**: 2026-08-11
 - **Deciders**: founders
 - **Related**: `docs/architecture/README.md` (§Multi-tenancy, previously

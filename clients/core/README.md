@@ -65,19 +65,21 @@ the redeemed key.
 
 - Go 1.23+
 - gRPC client (`google.golang.org/grpc`)
-- `wgctrl` for WireGuard kernel/userspace (Sprint 2 — not yet wired)
-- `pion/ice` for NAT traversal candidates (Sprint 2)
+- `wgctrl` for WireGuard kernel/userspace (Linux bring-up in `device/`)
+- RFC 5389 STUN for the public endpoint, with the relay as fallback
 
 ## Layout
 
 ```
 clients/core/
+  client/              gRPC connection to the controller
   cmd/dev-agent/       development-only smoke binary
-  internal/client/     gRPC connection + service stubs
-  internal/iface/      WireGuard interface management (Sprint 2)
-  internal/route/      route table sync (Sprint 2)
-  internal/dns/        DNS handling (Sprint 2)
-  internal/encryption/ Curve25519 helpers (Sprint 2)
+  device/              local WireGuard interface (Linux; other OSes unsupported)
+  encryption/          peer-to-peer NaCl box over WireGuard Curve25519 keys
+  nat64egress/         NAT64 egress helper (Tayga install + health)
+  relay/               client side of the relay protocol (ADR 0013)
+  stun/                RFC 5389 binding requests
+  wg/                  key material and WireGuard config
   LICENSE              interim AGPL notice
 ```
 
