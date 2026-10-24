@@ -184,10 +184,17 @@ cd /opt/bamboo/infra/full
 
 `deploy.sh` runs: fresh verified DB backup → `docker compose pull
 controller web relay` → `migrate status` + `migrate up` → recreate all
-three app services → `docker compose ps` + a health check. `serve` does
-NOT auto-migrate on boot, which is why the explicit `migrate up` between
-pull and recreate matters: additive migrations (the only kind shipped)
-are safe to apply while the old controller is still serving.
+three app services → `docker compose ps` + a health check. The backup
+runs under `sudo` when you are not root, because the backup directory is
+root-only. Running `migrate up` explicitly lets the log show what changed
+before the new controller starts. The controller also applies pending
+migrations on boot unless `BAMBOO_AUTO_MIGRATE=false`.
+
+Most migrations only add columns or tables, which are safe to apply while
+the old controller is still serving. Migration 00022 is not like that: it
+turns on row-level security and creates the `bamboo_app` and
+`bamboo_maintenance` roles. Rehearse it on a restored backup before the
+first upgrade past v0.1.14.
 
 To roll back: set the previous `BAMBOO_IMAGE_TAG` in `.env`, run
 `docker compose run --rm controller migrate down` if you had migrated,
