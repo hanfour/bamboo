@@ -82,6 +82,13 @@ docker compose run --rm controller migrate up
 log "recreating controller + web + relay"
 docker compose up -d controller web relay
 
+# The Caddyfile is a bind mount, so a changed file does not restart Caddy.
+# Reload it in place so route changes (for example the gRPC path) apply.
+if docker compose ps --status running --services 2>/dev/null | grep -qx caddy; then
+    docker compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile \
+        || echo "warning: caddy reload failed; check the Caddyfile with 'docker compose exec caddy caddy validate --config /etc/caddy/Caddyfile'"
+fi
+
 # --- 5. Verify ----------------------------------------------------------
 log "service status"
 docker compose ps

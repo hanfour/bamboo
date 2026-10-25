@@ -416,7 +416,10 @@ Beyond that, time to graduate to the multi-host AWS deployment.
   until restart. Acceptable for first-user dogfood.
 - **OIDC redirect URIs are hard-coded to one DOMAIN.** If you change
   domain after registering OAuth, re-register the OAuth clients.
-- **gRPC port (8080) is not exposed externally.** The Linux bamboo
-  CLI uses gRPC; running it from outside the VPS requires `ssh -L
-  8080:localhost:8080 vps`. Apple apps use REST and don't have this
-  limitation.
+- **gRPC port (8080) is not published on the host.** The Linux bamboo
+  CLI reaches it through Caddy instead: `/bamboo.v1.*` on the main domain
+  is proxied to the controller as h2c, so the CLI connects with
+  `bamboo up --server https://$DOMAIN` and TLS ends at Caddy. After
+  changing the Caddyfile, reload it with `docker compose exec caddy caddy
+  reload --config /etc/caddy/Caddyfile`. Apple apps use REST and are not
+  affected.
