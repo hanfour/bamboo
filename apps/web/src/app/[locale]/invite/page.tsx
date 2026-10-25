@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import { useTranslations } from 'next-intl';
+import { controllerPublicUrl } from '@/lib/publicUrl';
 
 type SearchParams = { token?: string };
 
@@ -23,7 +24,6 @@ type SearchParams = { token?: string };
 //
 // Missing ?token at all is rendered as an inline error card so we
 // don't punish a bare /invite visit with a confusing OAuth redirect.
-const CONTROLLER_BASE = process.env.BAMBOO_API_URL ?? 'http://localhost:8081';
 
 export default async function InvitePage({
  searchParams,
@@ -39,7 +39,7 @@ export default async function InvitePage({
 
 function InviteCard({ token }: { token: string }) {
  const t = useTranslations('invite');
- const loginUrl = `${CONTROLLER_BASE}/auth/google/login?invite=${encodeURIComponent(token)}`;
+ const loginUrl = controllerPublicUrl(`/auth/google/login?invite=${encodeURIComponent(token)}`);
  return (
  <div className="mx-auto max-w-xl space-y-6">
  <header className="space-y-2">

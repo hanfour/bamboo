@@ -115,6 +115,9 @@ services:
       # name. From the browser's perspective the same controller is
       # reachable at https://${DOMAIN} via Caddy.
       BAMBOO_API_URL: "http://controller:8081"
+      # Browser-facing links (sign-in/out) stay relative: Caddy serves /auth/*
+      # on the same origin as the web UI.
+      BAMBOO_PUBLIC_API_URL: ""
       BAMBOO_TENANT: "default"
 
   relay:
