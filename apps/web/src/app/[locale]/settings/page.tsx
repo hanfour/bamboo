@@ -114,7 +114,7 @@ function PreAuthKeysCard() {
  return (
  <Link
  href="/preauth-keys"
- className="group flex h-full items-start justify-between gap-4 rounded-2xl bg-ink-900 p-5 transition-colors hover:bg-[#181818]"
+ className="group flex h-full items-start justify-between gap-4 rounded-2xl bg-ink-900 p-5 transition-colors hover:bg-ink-850"
  >
  <div className="min-w-0">
  <h3 className="text-[15px] font-medium text-bamboo-50">{t('title')}</h3>
@@ -132,7 +132,7 @@ function WebhooksCard() {
  return (
  <Link
  href="/webhooks"
- className="group flex h-full items-start justify-between gap-4 rounded-2xl bg-ink-900 p-5 transition-colors hover:bg-[#181818]"
+ className="group flex h-full items-start justify-between gap-4 rounded-2xl bg-ink-900 p-5 transition-colors hover:bg-ink-850"
  >
  <div className="min-w-0">
  <h3 className="text-[15px] font-medium text-bamboo-50">{t('title')}</h3>
@@ -150,7 +150,7 @@ function RelaysCard() {
  return (
  <Link
  href="/relays"
- className="group flex h-full items-start justify-between gap-4 rounded-2xl bg-ink-900 p-5 transition-colors hover:bg-[#181818]"
+ className="group flex h-full items-start justify-between gap-4 rounded-2xl bg-ink-900 p-5 transition-colors hover:bg-ink-850"
  >
  <div className="min-w-0">
  <h3 className="text-[15px] font-medium text-bamboo-50">{t('title')}</h3>
@@ -168,7 +168,7 @@ function APITokensCard() {
  return (
  <Link
  href="/api-tokens"
- className="group flex h-full items-start justify-between gap-4 rounded-2xl bg-ink-900 p-5 transition-colors hover:bg-[#181818]"
+ className="group flex h-full items-start justify-between gap-4 rounded-2xl bg-ink-900 p-5 transition-colors hover:bg-ink-850"
  >
  <div className="min-w-0">
  <h3 className="text-[15px] font-medium text-bamboo-50">{t('title')}</h3>

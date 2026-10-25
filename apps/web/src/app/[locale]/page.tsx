@@ -175,7 +175,7 @@ function Tile({
  return (
  <Link
  href={href}
- className="group flex flex-col gap-6 rounded-2xl bg-ink-900 p-5 transition-colors hover:bg-[#181818]"
+ className="group flex flex-col gap-6 rounded-2xl bg-ink-900 p-5 transition-colors hover:bg-ink-850"
  >
  <div className="flex items-start justify-between text-bamboo-50">
  {icon}

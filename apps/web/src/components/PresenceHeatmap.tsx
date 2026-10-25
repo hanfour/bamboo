@@ -15,10 +15,10 @@ import {
 // chart. Index = level 0..4.
 const LEVEL_CLASS = [
   'bg-[#777]/15',
-  'bg-[#2a3158]',
-  'bg-[#3d4a8a]',
-  'bg-[#5468c8]',
-  'bg-[#6b85ff]',
+  'bg-[var(--heat-1)]',
+  'bg-[var(--heat-2)]',
+  'bg-[var(--heat-3)]',
+  'bg-[var(--heat-4)]',
 ];
 
 type PeerRef = { id: string; hostname: string };

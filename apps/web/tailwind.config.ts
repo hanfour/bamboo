@@ -4,10 +4,9 @@ import type { Config } from 'tailwindcss';
 
 const config: Config = {
   content: ['./src/**/*.{ts,tsx}'],
-  // `class`-opt-in dark mode. The `<html>` element in
-  // src/app/[locale]/layout.tsx always carries `dark`, so the theme
-  // is OS-independent. A user switching the system to Light does not
-  // flip it.
+  // `class`-opt-in dark mode. `<html>` carries `dark` when the resolved
+  // theme is dark (see src/lib/theme.ts). `dark:` variants and the
+  // color variables in globals.css both key off it.
   darkMode: 'class',
   theme: {
     extend: {
@@ -30,42 +29,37 @@ const config: Config = {
         mono: ['var(--font-mono)', 'ui-monospace', 'monospace'],
       },
       colors: {
-        // Neutral greys, set 2026-10-24 to follow the Cursor dashboard
-        // (page #000, surfaces #111, text #f3f3f3 / #959595 / #777).
-        // The scale names stay `ink` and `bamboo` so every component
-        // picks the new look up without a class rename. Use `ink` for
-        // surfaces and hairlines, `bamboo` for text and controls.
-        //
-        // ink: 950 page (pure black), 900 sidebar and card surface, 800
-        // hairline and hover fill, 700 stronger rule. Measured on the
-        // Cursor dashboard: main area #000, sidebar and cards #111.
+        // Neutral greys. Values live in src/app/globals.css as RGB triples
+        // (light on :root, dark under html.dark) so the theme can switch
+        // at runtime. `ink` is for surfaces and hairlines: 950 page, 900
+        // sidebar and cards, 850 raised hover, 800 hairline and fill. `bamboo`
+        // is for text and controls: 50 primary text and the pill button
+        // fill, 100-200 secondary text (used with /60 to /80 opacity).
         ink: {
-          50: '#F3F3F3',
-          100: '#E4E4E4',
-          200: '#C4C4C4',
-          300: '#959595',
-          400: '#777777',
-          500: '#555555',
-          600: '#3A3A3A',
-          700: '#2E2E2E',
-          800: '#222222',
-          900: '#111111',
-          950: '#000000',
+          50: 'rgb(var(--ink-50) / <alpha-value>)',
+          100: 'rgb(var(--ink-100) / <alpha-value>)',
+          200: 'rgb(var(--ink-200) / <alpha-value>)',
+          300: 'rgb(var(--ink-300) / <alpha-value>)',
+          400: 'rgb(var(--ink-400) / <alpha-value>)',
+          500: 'rgb(var(--ink-500) / <alpha-value>)',
+          600: 'rgb(var(--ink-600) / <alpha-value>)',
+          700: 'rgb(var(--ink-700) / <alpha-value>)',
+          800: 'rgb(var(--ink-800) / <alpha-value>)',
+          850: 'rgb(var(--ink-850) / <alpha-value>)',
+          900: 'rgb(var(--ink-900) / <alpha-value>)',
+          950: 'rgb(var(--ink-950) / <alpha-value>)',
         },
-        // bamboo: 50 primary text and the light pill button, 100-200
-        // secondary text (used with /60 to /80 opacity), 300-500 focus
-        // rings and quiet icons, 600+ rarely used.
         bamboo: {
-          50: '#F3F3F3',
-          100: '#E4E4E4',
-          200: '#C4C4C4',
-          300: '#A8A8A8',
-          400: '#8A8A8A',
-          500: '#707070',
-          600: '#585858',
-          700: '#444444',
-          800: '#333333',
-          900: '#262626',
+          50: 'rgb(var(--bamboo-50) / <alpha-value>)',
+          100: 'rgb(var(--bamboo-100) / <alpha-value>)',
+          200: 'rgb(var(--bamboo-200) / <alpha-value>)',
+          300: 'rgb(var(--bamboo-300) / <alpha-value>)',
+          400: 'rgb(var(--bamboo-400) / <alpha-value>)',
+          500: 'rgb(var(--bamboo-500) / <alpha-value>)',
+          600: 'rgb(var(--bamboo-600) / <alpha-value>)',
+          700: 'rgb(var(--bamboo-700) / <alpha-value>)',
+          800: 'rgb(var(--bamboo-800) / <alpha-value>)',
+          900: 'rgb(var(--bamboo-900) / <alpha-value>)',
         },
         // Back-compat for older hairlines that name stone-300.
         stone: {

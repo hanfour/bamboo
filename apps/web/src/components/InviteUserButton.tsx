@@ -122,7 +122,7 @@ function Modal({
  role="dialog"
  aria-modal="true"
  aria-label={title}
- className="relative w-full max-w-md rounded-2xl bg-ink-900 shadow-xl ring-1 ring-white/5"
+ className="relative w-full max-w-md rounded-2xl bg-ink-900 shadow-xl ring-1 ring-[#777]/20"
  >
  <header className="border-b border-ink-800 px-5 py-3 dark:border-ink-800">
  <h2 className="text-base font-semibold text-bamboo-50">{title}</h2>
