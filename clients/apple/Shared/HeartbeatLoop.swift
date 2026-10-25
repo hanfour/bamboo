@@ -32,10 +32,15 @@ public actor HeartbeatLoop {
                       knownRevision: @Sendable @escaping () async -> Int64 = { 0 },
                       bandwidthStats: @Sendable @escaping () async -> TunnelIPC.BandwidthStats? = { nil },
                       onPolicyChanged: @Sendable @escaping (Int64) -> Void = { _ in },
-                      onPeersChanged: @Sendable @escaping () -> Void = {}) {
+                      onPeersChanged: @Sendable @escaping () -> Void = {},
+                      onSessionRenewed: @Sendable @escaping (String) -> Void = { _ in }) {
         task?.cancel()
         let log = self.log
         task = Task {
+            // The controller hands out a replacement token on a heartbeat
+            // inside the last 6h of a 24h session. Without adopting it the
+            // session expires and every later heartbeat is rejected.
+            var client = client
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: UInt64(HeartbeatLoop.interval * 1_000_000_000))
                 if Task.isCancelled { return }
@@ -71,6 +76,10 @@ public actor HeartbeatLoop {
                     }
                     if resp.peersChanged {
                         onPeersChanged()
+                    }
+                    if let tok = resp.peerSessionToken, !tok.isEmpty {
+                        client = client.withPeerSessionToken(tok)
+                        onSessionRenewed(tok)
                     }
                 } catch {
                     log.warning("heartbeat: \(String(describing: error), privacy: .public)")

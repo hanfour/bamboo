@@ -576,7 +576,8 @@ public final class ConnectionViewModel: ObservableObject {
                 dnsServers: [],
                 mtu: 1280,
                 wgListenPort: wgPort,
-                peers: peers
+                peers: peers,
+                presence: makePresence(peerID: resp.self_.id, token: resp.peerSessionToken)
             )
 
             try await tunnel.startTunnel(with: config)
@@ -648,6 +649,15 @@ public final class ConnectionViewModel: ObservableObject {
                     // reconnect backoff.
                     Task { @MainActor [weak self] in
                         await self?.refreshPolicyFromController()
+                    }
+                },
+                onSessionRenewed: { [weak self] token in
+                    // The controller issued a replacement session. Adopt
+                    // it, and push it to the extension through a config
+                    // rebuild so its own heartbeat keeps authorizing.
+                    Task { @MainActor [weak self] in
+                        self?.peerSessionBearer = token
+                        self?.rebuildAndReapply()
                     }
                 }
             )
@@ -1006,6 +1016,15 @@ public final class ConnectionViewModel: ObservableObject {
         log.log("magicdns: synced \(map.count, privacy: .public) peer name(s)")
     }
 
+    /// makePresence is what the tunnel extension needs to heartbeat on its
+    /// own while this app is suspended. nil when there is no peer-session
+    /// token (an older controller): the extension then does not heartbeat.
+    private func makePresence(peerID: String, token: String?) -> PresenceConfig? {
+        guard let token, !token.isEmpty, let url = parseControllerURL(controllerURL) else { return nil }
+        return PresenceConfig(controllerURL: url.absoluteString, tenantSlug: tenantSlug,
+                              peerID: peerID, sessionToken: token)
+    }
+
     /// rebuildAndReapply rebuilds the tunnel config from the cached
     /// peer set and pushes it to the system VPN. WireGuard sees a
     /// brief restart (~100ms); future PR can replace this with
@@ -1061,7 +1080,8 @@ public final class ConnectionViewModel: ObservableObject {
             dnsServers: prevConfig.dnsServers,
             mtu: prevConfig.mtu,
             wgListenPort: prevConfig.wgListenPort,
-            peers: peers
+            peers: peers,
+            presence: makePresence(peerID: selfID, token: peerSessionBearer) ?? prevConfig.presence
         )
 
         // Heartbeat-driven watch events fire every ~30s and re-trigger

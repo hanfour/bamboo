@@ -182,6 +182,7 @@ targets:
     sources:
       - path: PacketTunnelProvider-macOS
       - path: Shared/BambooTunnelError.swift
+      - path: Shared/PresenceHeartbeat.swift
       - path: Shared/TunnelConfigurationBuilder.swift
       - path: Shared/TunnelIPC.swift
       - path: Shared/WGStatsParser.swift
@@ -363,6 +364,7 @@ targets:
       - path: Shared/BambooClient.swift
       - path: Shared/PeerWatcher.swift
       - path: Shared/BundleVersion.swift
+      - path: Shared/PresenceHeartbeat.swift
       - path: Shared/FlowLifecycle.swift
     settings:
       base:
@@ -439,6 +441,7 @@ targets:
     sources:
       - path: PacketTunnelProvider-iOS
       - path: Shared/BambooTunnelError.swift
+      - path: Shared/PresenceHeartbeat.swift
       - path: Shared/TunnelConfigurationBuilder.swift
       - path: Shared/TunnelIPC.swift
       - path: Shared/WGStatsParser.swift
