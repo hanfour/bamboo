@@ -792,5 +792,11 @@
       "title": "Not found",
       "body": "The resource is gone, or the URL is stale."
     }
+  },
+  "theme": {
+    "label": "Theme",
+    "system": "System",
+    "light": "Light",
+    "dark": "Dark"
   }
 }

@@ -384,7 +384,7 @@ function OsTile({ os }: { os: string }) {
  );
  }
  return (
- <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[#262626] text-bamboo-100">
+ <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-ink-800 text-bamboo-100">
  {glyph}
  </span>
  );

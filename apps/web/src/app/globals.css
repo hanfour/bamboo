@@ -2,22 +2,80 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Neutral dark theme, set 2026-10-24 to follow the Cursor dashboard.
- * `<html>` in src/app/[locale]/layout.tsx always carries the `dark`
- * class, so there is no light mode. Colors are the `ink` and `bamboo`
- * grey scales in tailwind.config.ts. One sans (Inter) is wired through
- * next/font in layout.tsx as --font-sans. */
+/* Theme tokens. The `ink` and `bamboo` grey scales in tailwind.config.ts
+ * read these RGB triples, so every component follows the theme without
+ * a class change. `:root` holds the light values; `<html class="dark">`
+ * swaps in the dark ones (the Cursor-dashboard palette: page #000,
+ * surfaces #111). The class is set before first paint by the inline
+ * script in src/app/[locale]/layout.tsx and kept by ThemeToggle. The
+ * light scales are the dark ones inverted, so a pill button (bamboo-50
+ * fill, ink-950 text) is dark-on-light there. */
 
 :root {
+  color-scheme: light;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
     'Liberation Mono', 'Courier New', monospace;
+  --ink-50: 17 17 17;
+  --ink-100: 34 34 34;
+  --ink-200: 68 68 68;
+  --ink-300: 102 102 102;
+  --ink-400: 136 136 136;
+  --ink-500: 170 170 170;
+  --ink-600: 200 200 200;
+  --ink-700: 220 220 220;
+  --ink-800: 235 235 235;
+  --ink-850: 240 240 240;
+  --ink-900: 246 246 246;
+  --ink-950: 255 255 255;
+  --bamboo-50: 17 17 17;
+  --bamboo-100: 31 31 31;
+  --bamboo-200: 58 58 58;
+  --bamboo-300: 85 85 85;
+  --bamboo-400: 112 112 112;
+  --bamboo-500: 138 138 138;
+  --bamboo-600: 168 168 168;
+  --bamboo-700: 196 196 196;
+  --bamboo-800: 221 221 221;
+  --bamboo-900: 234 234 234;
+  --heat-1: #dfe4fb;
+  --heat-2: #b3c0f5;
+  --heat-3: #7f93e8;
+  --heat-4: #4a63d6;
+}
+
+html.dark {
+  color-scheme: dark;
+  --ink-50: 243 243 243;
+  --ink-100: 228 228 228;
+  --ink-200: 196 196 196;
+  --ink-300: 149 149 149;
+  --ink-400: 119 119 119;
+  --ink-500: 85 85 85;
+  --ink-600: 58 58 58;
+  --ink-700: 46 46 46;
+  --ink-800: 34 34 34;
+  --ink-850: 24 24 24;
+  --ink-900: 17 17 17;
+  --ink-950: 0 0 0;
+  --bamboo-50: 243 243 243;
+  --bamboo-100: 228 228 228;
+  --bamboo-200: 196 196 196;
+  --bamboo-300: 168 168 168;
+  --bamboo-400: 138 138 138;
+  --bamboo-500: 112 112 112;
+  --bamboo-600: 88 88 88;
+  --bamboo-700: 68 68 68;
+  --bamboo-800: 51 51 51;
+  --bamboo-900: 38 38 38;
+  --heat-1: #2a3158;
+  --heat-2: #3d4a8a;
+  --heat-3: #5468c8;
+  --heat-4: #6b85ff;
 }
 
 html,
 body {
-  /* ink-950 is the page surface and bamboo-50 the primary text.
-   * Tailwind's `dark:` variants light up across the tree because
-   * <html> carries the `dark` class. */
+  /* ink-950 is the page surface and bamboo-50 the primary text. */
   @apply bg-ink-950 text-bamboo-50;
 }
 

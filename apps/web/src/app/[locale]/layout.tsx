@@ -5,6 +5,7 @@ import { NextIntlClientProvider } from 'next-intl';
 import { getMessages } from 'next-intl/server';
 import { notFound } from 'next/navigation';
 import { Inter } from 'next/font/google';
+import { themeInitScript } from '@/lib/theme';
 import { routing } from '@/i18n/routing';
 import { TopBar } from '@/components/TopBar';
 import { Sidebar } from '@/components/Sidebar';
@@ -41,15 +42,18 @@ export default async function LocaleLayout({
  }
  const messages = await getMessages();
 
- // Force the dark theme via the `dark` class on <html>. The
- // tailwind config has darkMode: 'class', so this opts every
- // `dark:` variant in. Light mode is deliberately off. The look
- // follows the Cursor dashboard: neutral greys, one sans, no accents.
+ // `dark` is the server default; themeInitScript runs before first
+ // paint and corrects it from the stored choice or the OS setting, so
+ // suppressHydrationWarning covers the class it changes.
  return (
  <html
  lang={locale}
  className={`dark ${bodySans.variable}`}
+ suppressHydrationWarning
  >
+ <head>
+ <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
+ </head>
  <body className="min-h-screen bg-ink-950 font-sans text-bamboo-50 antialiased">
  <NextIntlClientProvider messages={messages}>
  {/* Google-Account-style chrome: thin top bar + persistent
