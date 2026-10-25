@@ -92,6 +92,45 @@ func TestRegister_IdempotentOnSameKey(t *testing.T) {
 	}
 }
 
+// A client that upgraded in place registers again with the same key. The
+// version it reports now must replace the one from its first registration;
+// the Web UI used to show 0.0.1 forever.
+func TestRegister_ReRegisterRefreshesClientVersion(t *testing.T) {
+	f := startFixture(t)
+	ctx := f.outgoingCtx(context.Background())
+	pubKey := randomPubKey(t)
+
+	first, err := f.coord.Register(ctx, &bamboov1.RegisterRequest{
+		Hostname: "phone", WireguardPublicKey: pubKey, Os: "ios", ClientVersion: "0.0.1",
+	})
+	if err != nil {
+		t.Fatalf("first Register: %v", err)
+	}
+	if got := first.GetSelf().GetClientVersion(); got != "0.0.1" {
+		t.Fatalf("first version = %q, want 0.0.1", got)
+	}
+	second, err := f.coord.Register(ctx, &bamboov1.RegisterRequest{
+		Hostname: "phone", WireguardPublicKey: pubKey, Os: "ios", ClientVersion: "0.1.19",
+	})
+	if err != nil {
+		t.Fatalf("second Register: %v", err)
+	}
+	if got := second.GetSelf().GetClientVersion(); got != "0.1.19" {
+		t.Errorf("response version = %q, want 0.1.19", got)
+	}
+
+	// A re-register that reports no version must not erase the stored one.
+	third, err := f.coord.Register(ctx, &bamboov1.RegisterRequest{
+		Hostname: "phone", WireguardPublicKey: pubKey,
+	})
+	if err != nil {
+		t.Fatalf("third Register: %v", err)
+	}
+	if got := third.GetSelf().GetClientVersion(); got != "0.1.19" {
+		t.Errorf("version after an empty re-register = %q, want 0.1.19", got)
+	}
+}
+
 func TestRegister_RejectsMissingFields(t *testing.T) {
 	f := startFixture(t)
 	ctx := f.outgoingCtx(context.Background())
