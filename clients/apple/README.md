@@ -73,6 +73,17 @@ on every settings change, which makes diff review and merge resolution
 unproductive. We use [XcodeGen](https://github.com/yonaskolb/XcodeGen)
 as the source of truth.
 
+## Version
+
+The version the app reports (`CFBundleShortVersionString`, sent as
+`clientVersion`) is the nearest `v*` git tag, for example `0.1.19`. It is
+written to the git-ignored `Config/Version.xcconfig` by
+`scripts/gen-version-xcconfig.sh`, which `xcodegen generate` runs first, so
+Xcode, `xcodebuild` and `build-mac-dist.sh` all pick it up with no manual
+edit. A build between tags reports the last tag; `CURRENT_PROJECT_VERSION`
+tells such builds apart. A checkout without tags falls back to `0.0.0`.
+Do not set `MARKETING_VERSION` in `project.yml`.
+
 ## Toolchain prerequisites
 
 One-time setup per developer Mac:
