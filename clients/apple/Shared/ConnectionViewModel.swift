@@ -104,7 +104,6 @@ public final class ConnectionViewModel: ObservableObject {
     private let watcher = PeerWatcher()
     private let magicDNS = MagicDNSManager()
     private let peerStore = MagicDNSPeerStore()
-    private var relay: RelayClient?
     /// Absolute URL string of the relay we dialed at bring-up
     /// (Settings pin OR RelayPicker choice). nil ⇒ direct-only
     /// mesh. The §4 P2 stage 4b RelaysChanged handler compares
@@ -192,11 +191,9 @@ public final class ConnectionViewModel: ObservableObject {
 
     deinit {
         statusTask?.cancel()
-        let r = relay
         Task { [heartbeat, watcher] in
             await heartbeat.stop()
             await watcher.stop()
-            await r?.close()
         }
     }
 
@@ -288,35 +285,12 @@ public final class ConnectionViewModel: ObservableObject {
         // mis-binding (UI shows "Disconnect" because status was
         // misread as .connected at cold-start) is obvious in the log.
         log.log("Disconnect button pressed; viewModel.status=\(self.status.rawValue, privacy: .public) tunnel.status=\(String(describing: self.tunnel.status), privacy: .public)")
-        let r = relay
-        relay = nil
         Task { [heartbeat, watcher] in
             await heartbeat.stop()
             await watcher.stop()
-            await r?.close()
         }
         tunnel.stopTunnel()
         status = .disconnected
-    }
-
-    /// ensureRelay mints a relay-token, opens a RelayClient, waits
-    /// for SERVER_HELLO. Caller registers peers via addPeer. wgPort
-    /// must match the port WireGuard binds locally so the relay
-    /// proxy delivers decrypted payloads to the right kernel socket.
-    private func ensureRelay(client: BambooClient,
-                             selfId: String,
-                             selfPubKey: String,
-                             url: URL,
-                             wgPort: UInt16) async throws -> RelayClient {
-        let resp = try await client.relayToken(.init(peerId: selfId,
-                                                      wireguardPublicKey: selfPubKey))
-        guard let selfKey = Data(base64Encoded: selfPubKey) else {
-            throw BambooClientError.invalidResponse
-        }
-        let r = RelayClient(selfKey: selfKey, token: resp.token,
-                            wgListenHost: "127.0.0.1", wgListenPort: wgPort)
-        try await r.dial(relayURL: url)
-        return r
     }
 
     /// pickFreeUDPPort opens an ephemeral UDP socket so the OS picks
@@ -507,30 +481,17 @@ public final class ConnectionViewModel: ObservableObject {
             } else {
                 log.log("relay: skipped (relayURL is empty + no controller-supplied relays)")
             }
+            // The relay itself runs in the tunnel extension (RelayMesh): iOS
+            // suspends this app on lock, which used to take the relay with it.
+            // Here we only say which relay to use.
+            var relayConfig: RelayConfig? = nil
             if let url = resolvedRelayURL {
-                do {
-                    let r = try await ensureRelay(client: client,
-                                                   selfId: resp.self_.id,
-                                                   selfPubKey: publicKey,
-                                                   url: url,
-                                                   wgPort: wgPort)
-                    for p in resp.peers {
-                        if let pkData = Data(base64Encoded: p.wireguardPublicKey) {
-                            let proxyAddr = try await r.addPeer(pkData)
-                            peerEndpoints[p.id] = proxyAddr
-                        }
-                    }
-                    self.relay = r
-                    self.currentRelayURL = url.absoluteString
-                    log.log("relay enabled url=\(url.absoluteString, privacy: .public) peers=\(resp.peers.count, privacy: .public)")
-                } catch {
-                    log.warning("relay init failed; falling back to direct: \(String(describing: error), privacy: .public)")
-                }
+                relayConfig = RelayConfig(url: url.absoluteString, selfPublicKey: publicKey)
+                self.currentRelayURL = url.absoluteString
+                log.log("relay enabled url=\(url.absoluteString, privacy: .public) (runs in the tunnel extension)")
             } else {
-                // No relay dialed — direct-only mesh. Clear the
-                // recorded URL so a stage 4b log line doesn't
-                // compare against a stale value from a previous
-                // bring-up.
+                // No relay: direct-only mesh. Clear the recorded URL so a
+                // stage 4b log line doesn't compare against a stale value.
                 self.currentRelayURL = nil
             }
 
@@ -544,7 +505,8 @@ public final class ConnectionViewModel: ObservableObject {
                 dnsServers: [],
                 mtu: 1280,
                 wgListenPort: wgPort,
-                presence: makePresence(peerID: resp.self_.id, token: resp.peerSessionToken)
+                presence: makePresence(peerID: resp.self_.id, token: resp.peerSessionToken),
+                relay: relayConfig
             ) else {
                 throw BambooClientError.invalidResponse
             }
@@ -745,98 +707,21 @@ public final class ConnectionViewModel: ObservableObject {
         await performRelaySwap(to: newURL)
     }
 
-    /// performRelaySwap executes the §4 P2 stage 4b-2 mid-session
-    /// relay swap. Mirrors the CLI's dance in
-    /// clients/cli/cmd/bamboo/up.go:
-    ///
-    ///   1. open new RelayClient at newURL (mint token + dial)
-    ///   2. AddPeer for every currently-cached peer → fresh proxy map
-    ///   3. swap self.peerRelayEndpoints + self.relay + self.currentRelayURL
-    ///   4. rebuildAndReapply pushes the new wg config to the extension
-    ///      (via the existing TunnelIPC.applyConfig path) so every
-    ///      relay-routed peer's endpoint flips to the new proxy port
-    ///   5. close the old RelayClient (releases its proxy listeners
-    ///      and the WSS to the old relay)
-    ///
-    /// Failure at step 1 leaves everything intact — we don't tear
-    /// down a working relay just because the new one wouldn't dial.
-    ///
-    /// Concurrency note: handleRelaysChanged runs on @MainActor
-    /// (the actor isolation propagates through the watcher → this
-    /// callback path), so peerCache + peerRelayEndpoints + relay
-    /// cannot mutate concurrently with this method. The await on
-    /// network operations releases the actor briefly; a re-entrant
-    /// peer_added during that gap is fine — it goes through
-    /// rebuildAndReapply with the OLD proxy map, then THIS swap's
-    /// later rebuildAndReapply replaces with the NEW.
+    /// performRelaySwap moves the mesh to a different relay mid-session.
+    /// The relay client lives in the tunnel extension (RelayMesh), so the
+    /// swap is a config change: push the same config with the new relay
+    /// URL, and the extension dials it, rebinds every peer's local proxy,
+    /// and closes the old connection. If the new relay will not dial, the
+    /// extension keeps peers on their direct endpoints until the next
+    /// config, which is the same degradation as a failed bring-up.
     private func performRelaySwap(to newURL: URL) async {
-        guard
-            let selfID = net.selfID,
-            let prevConfig = lastConfig
-        else {
+        guard let prevConfig = lastConfig, let old = prevConfig.relay else {
             log.warning("relays_changed: no current session state; skipping swap")
             return
         }
-        let privateKey: PrivateKey
-        do {
-            privateKey = try loadOrCreatePrivateKey()
-        } catch {
-            log.warning("relays_changed: load private key failed; skipping swap: \(String(describing: error), privacy: .public)")
-            return
-        }
-        let publicKey = privateKey.publicKey.base64Key
-        let bearer = peerSessionBearer
-            ?? keychain.getString(for: BambooKeychainKey.sessionToken)
-        guard let baseURL = URL(string: controllerURL.trimmingCharacters(in: .whitespacesAndNewlines)) else {
-            log.warning("relays_changed: invalid controllerURL; skipping swap")
-            return
-        }
-        let client = BambooClient(
-            baseURL: baseURL,
-            bearerToken: bearer,
-            tenantSlug: tenantSlug
-        )
-        let newRelay: RelayClient
-        do {
-            newRelay = try await ensureRelay(
-                client: client,
-                selfId: selfID,
-                selfPubKey: publicKey,
-                url: newURL,
-                wgPort: prevConfig.wgListenPort
-            )
-        } catch {
-            log.warning("relays_changed: open new relay failed; staying on current: \(String(describing: error), privacy: .public)")
-            return
-        }
-        // Register every cached peer (excluding self) with the new
-        // relay; fail the whole swap if any AddPeer errors so we
-        // don't end up with a half-populated proxy map that would
-        // leave some peers without a working relay endpoint.
-        var newEndpoints: [String: String] = [:]
-        for p in net.peers.values where p.id != selfID {
-            guard let pkData = Data(base64Encoded: p.wireguardPublicKey) else { continue }
-            do {
-                let proxyAddr = try await newRelay.addPeer(pkData)
-                newEndpoints[p.id] = proxyAddr
-            } catch {
-                log.warning("relays_changed: addPeer failed for \(p.hostname, privacy: .public); staying on current: \(String(describing: error), privacy: .public)")
-                await newRelay.close()
-                return
-            }
-        }
-        // Commit state and push the new config. The old relay is
-        // closed LAST so the brief overlap (~ms) has both relays
-        // alive rather than neither — same ordering as the CLI swap.
-        let oldRelay = self.relay
-        self.relay = newRelay
-        self.net.relayEndpoints = newEndpoints
         self.currentRelayURL = newURL.absoluteString
-        rebuildAndReapply()
-        if let oldRelay = oldRelay {
-            await oldRelay.close()
-        }
-        log.log("relays_changed: swap complete url=\(newURL.absoluteString, privacy: .public) peers=\(newEndpoints.count, privacy: .public)")
+        rebuildAndReapply(relay: RelayConfig(url: newURL.absoluteString, selfPublicKey: old.selfPublicKey))
+        log.log("relays_changed: swap pushed url=\(newURL.absoluteString, privacy: .public)")
     }
 
     /// refreshPolicyFromController re-runs the Register flow and uses
@@ -935,7 +820,7 @@ public final class ConnectionViewModel: ObservableObject {
     /// brief restart (~100ms); future PR can replace this with
     /// handleAppMessage IPC so the extension reconfigures without
     /// dropping the tunnel.
-    private func rebuildAndReapply() {
+    private func rebuildAndReapply(relay newRelay: RelayConfig? = nil) {
         guard
             let selfID = net.selfID,
             let prevConfig = lastConfig,
@@ -944,7 +829,8 @@ public final class ConnectionViewModel: ObservableObject {
                 dnsServers: prevConfig.dnsServers,
                 mtu: prevConfig.mtu,
                 wgListenPort: prevConfig.wgListenPort,
-                presence: makePresence(peerID: selfID, token: peerSessionBearer) ?? prevConfig.presence
+                presence: makePresence(peerID: selfID, token: peerSessionBearer) ?? prevConfig.presence,
+                relay: newRelay ?? prevConfig.relay
             )
         else { return }
 

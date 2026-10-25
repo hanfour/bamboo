@@ -181,6 +181,9 @@ targets:
     # keep the surface identical so future restructures stay simple.
     sources:
       - path: PacketTunnelProvider-macOS
+      - path: Shared/BambooClient.swift
+      - path: Shared/RelayClient.swift
+      - path: Shared/RelayMesh.swift
       - path: Shared/BambooTunnelError.swift
       - path: Shared/PresenceHeartbeat.swift
       - path: Shared/BambooTunnelConfig.swift
@@ -368,6 +371,8 @@ targets:
       - path: Shared/PresenceHeartbeat.swift
       - path: Shared/BambooTunnelConfig.swift
       - path: Shared/PeerState.swift
+      - path: Shared/RelayClient.swift
+      - path: Shared/RelayMesh.swift
       - path: Shared/FlowLifecycle.swift
     settings:
       base:
@@ -443,6 +448,9 @@ targets:
     # PacketTunnelProvider-macOS for rationale.
     sources:
       - path: PacketTunnelProvider-iOS
+      - path: Shared/BambooClient.swift
+      - path: Shared/RelayClient.swift
+      - path: Shared/RelayMesh.swift
       - path: Shared/BambooTunnelError.swift
       - path: Shared/PresenceHeartbeat.swift
       - path: Shared/BambooTunnelConfig.swift

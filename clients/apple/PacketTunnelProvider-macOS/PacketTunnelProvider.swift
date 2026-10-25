@@ -13,6 +13,15 @@ import WireGuardKit
 final class PacketTunnelProvider: NEPacketTunnelProvider {
     private let log = Logger(subsystem: "dev.hanfour.bamboo.tunnel", category: "macos")
 
+    /// Carries peer traffic through the relay from inside the system
+    /// extension, so it survives the app quitting. See RelayMesh.
+    private let mesh = RelayMesh()
+
+    private func prepare(_ appConfig: BambooTunnelConfig) async throws -> TunnelConfiguration {
+        let effective = await mesh.apply(appConfig, auth: appConfig.presence)
+        return try TunnelConfigurationBuilder.build(from: effective)
+    }
+
     private lazy var adapter: WireGuardAdapter = WireGuardAdapter(with: self) { [weak self] level, message in
         self?.log.log("[wg/\(level.rawValue, privacy: .public)] \(message, privacy: .public)")
     }
@@ -38,29 +47,32 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             return
         }
 
-        let tunnelConfig: TunnelConfiguration
-        do {
-            tunnelConfig = try TunnelConfigurationBuilder.build(from: appConfig)
-        } catch {
-            log.error("startTunnel: build config: \(String(describing: error), privacy: .public)")
-            completionHandler(error)
-            return
-        }
-
-        adapter.start(tunnelConfiguration: tunnelConfig) { [weak self] error in
-            if let error = error {
-                self?.log.error("adapter.start: \(String(describing: error), privacy: .public)")
+        Task { [weak self] in
+            guard let self else { return }
+            let tunnelConfig: TunnelConfiguration
+            do {
+                tunnelConfig = try await self.prepare(appConfig)
+            } catch {
+                self.log.error("startTunnel: build config: \(String(describing: error), privacy: .public)")
                 completionHandler(error)
                 return
             }
-            self?.log.log("tunnel up address=\(appConfig.address, privacy: .public) peers=\(appConfig.peers.count)")
-            completionHandler(nil)
+            self.adapter.start(tunnelConfiguration: tunnelConfig) { [weak self] error in
+                if let error = error {
+                    self?.log.error("adapter.start: \(String(describing: error), privacy: .public)")
+                    completionHandler(error)
+                    return
+                }
+                self?.log.log("tunnel up address=\(appConfig.address, privacy: .public) peers=\(appConfig.peers.count)")
+                completionHandler(nil)
+            }
         }
     }
 
     override func stopTunnel(with reason: NEProviderStopReason,
                              completionHandler: @escaping () -> Void) {
         log.log("stopTunnel reason=\(reason.rawValue, privacy: .public)")
+        Task { [mesh] in await mesh.stop() }
         adapter.stop { [weak self] error in
             if let error = error {
                 self?.log.error("adapter.stop: \(String(describing: error), privacy: .public)")
@@ -86,29 +98,25 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                 completionHandler?(self.encodeError("applyConfig missing config"))
                 return
             }
-            let tunnelConfig: TunnelConfiguration
-            do {
-                tunnelConfig = try TunnelConfigurationBuilder.build(from: appConfig)
-            } catch {
-                log.error("applyConfig build: \(String(describing: error), privacy: .public)")
-                completionHandler?(self.encodeError("build: \(error)"))
-                return
-            }
-            adapter.update(tunnelConfiguration: tunnelConfig) { [weak self] error in
-                if let error = error {
-                    // Now that adapter.update propagates wgSetConfig's
-                    // IpcSet return value (our hanfour/wireguard-apple
-                    // fork commit 1252158; see project.yml + #158),
-                    // "device closed" and other IPC failures land here
-                    // with a real WireGuardAdapterError.startWireGuardBackend
-                    // case rather than the silent half-up state PR #153
-                    // worked around by reading back the peer count.
-                    self?.log.error("adapter.update: \(String(describing: error), privacy: .public)")
-                    completionHandler?(self?.encodeError("update: \(error)"))
+            Task { [weak self] in
+                guard let self else { return }
+                let tunnelConfig: TunnelConfiguration
+                do {
+                    tunnelConfig = try await self.prepare(appConfig)
+                } catch {
+                    self.log.error("applyConfig build: \(String(describing: error), privacy: .public)")
+                    completionHandler?(self.encodeError("build: \(error)"))
                     return
                 }
-                self?.log.log("applyConfig ok peers=\(appConfig.peers.count, privacy: .public)")
-                completionHandler?(self?.encodeOK())
+                self.adapter.update(tunnelConfiguration: tunnelConfig) { [weak self] error in
+                    if let error = error {
+                        self?.log.error("adapter.update: \(String(describing: error), privacy: .public)")
+                        completionHandler?(self?.encodeError("update: \(error)"))
+                        return
+                    }
+                    self?.log.log("applyConfig ok peers=\(appConfig.peers.count, privacy: .public)")
+                    completionHandler?(self?.encodeOK())
+                }
             }
 
         case .status:

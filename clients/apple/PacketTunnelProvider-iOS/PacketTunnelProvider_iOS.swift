@@ -15,6 +15,19 @@ final class PacketTunnelProvider_iOS: NEPacketTunnelProvider {
     /// suspended. See PresenceHeartbeat.
     private let presence = PresenceHeartbeat()
 
+    /// Carries peer traffic through the relay from inside the extension, so
+    /// it keeps working while the app is suspended. See RelayMesh.
+    private let mesh = RelayMesh()
+
+    /// Starts presence first (it holds the freshest session token), then
+    /// swaps relay proxy endpoints into the config.
+    private func prepare(_ appConfig: BambooTunnelConfig) async throws -> TunnelConfiguration {
+        await presence.apply(appConfig.presence)
+        let auth = await presence.currentConfig()
+        let effective = await mesh.apply(appConfig, auth: auth)
+        return try TunnelConfigurationBuilder.build(from: effective)
+    }
+
     private lazy var adapter: WireGuardAdapter = WireGuardAdapter(with: self) { [weak self] level, message in
         self?.log.log("[wg/\(level.rawValue, privacy: .public)] \(message, privacy: .public)")
     }
@@ -40,33 +53,35 @@ final class PacketTunnelProvider_iOS: NEPacketTunnelProvider {
             return
         }
 
-        let tunnelConfig: TunnelConfiguration
-        do {
-            tunnelConfig = try TunnelConfigurationBuilder.build(from: appConfig)
-        } catch {
-            log.error("startTunnel: build config: \(String(describing: error), privacy: .public)")
-            completionHandler(error)
-            return
-        }
-
-        adapter.start(tunnelConfiguration: tunnelConfig) { [weak self] error in
-            if let error = error {
-                self?.log.error("adapter.start: \(String(describing: error), privacy: .public)")
+        Task { [weak self] in
+            guard let self else { return }
+            let tunnelConfig: TunnelConfiguration
+            do {
+                tunnelConfig = try await self.prepare(appConfig)
+            } catch {
+                self.log.error("startTunnel: build config: \(String(describing: error), privacy: .public)")
                 completionHandler(error)
                 return
             }
-            self?.log.log("tunnel up address=\(appConfig.address, privacy: .public) peers=\(appConfig.peers.count)")
-            if let presence = self?.presence {
-                Task { await presence.apply(appConfig.presence) }
+            self.adapter.start(tunnelConfiguration: tunnelConfig) { [weak self] error in
+                if let error = error {
+                    self?.log.error("adapter.start: \(String(describing: error), privacy: .public)")
+                    completionHandler(error)
+                    return
+                }
+                self?.log.log("tunnel up address=\(appConfig.address, privacy: .public) peers=\(appConfig.peers.count)")
+                completionHandler(nil)
             }
-            completionHandler(nil)
         }
     }
 
     override func stopTunnel(with reason: NEProviderStopReason,
                              completionHandler: @escaping () -> Void) {
         log.log("stopTunnel reason=\(reason.rawValue, privacy: .public)")
-        Task { [presence] in await presence.stop() }
+        Task { [presence, mesh] in
+            await presence.stop()
+            await mesh.stop()
+        }
         adapter.stop { [weak self] error in
             if let error = error {
                 self?.log.error("adapter.stop: \(String(describing: error), privacy: .public)")
@@ -92,25 +107,25 @@ final class PacketTunnelProvider_iOS: NEPacketTunnelProvider {
                 completionHandler?(self.encodeError("applyConfig missing config"))
                 return
             }
-            let tunnelConfig: TunnelConfiguration
-            do {
-                tunnelConfig = try TunnelConfigurationBuilder.build(from: appConfig)
-            } catch {
-                log.error("applyConfig build: \(String(describing: error), privacy: .public)")
-                completionHandler?(self.encodeError("build: \(error)"))
-                return
-            }
-            adapter.update(tunnelConfiguration: tunnelConfig) { [weak self] error in
-                if let error = error {
-                    self?.log.error("adapter.update: \(String(describing: error), privacy: .public)")
-                    completionHandler?(self?.encodeError("update: \(error)"))
+            Task { [weak self] in
+                guard let self else { return }
+                let tunnelConfig: TunnelConfiguration
+                do {
+                    tunnelConfig = try await self.prepare(appConfig)
+                } catch {
+                    self.log.error("applyConfig build: \(String(describing: error), privacy: .public)")
+                    completionHandler?(self.encodeError("build: \(error)"))
                     return
                 }
-                self?.log.log("applyConfig ok peers=\(appConfig.peers.count, privacy: .public)")
-                if let presence = self?.presence {
-                    Task { await presence.apply(appConfig.presence) }
+                self.adapter.update(tunnelConfiguration: tunnelConfig) { [weak self] error in
+                    if let error = error {
+                        self?.log.error("adapter.update: \(String(describing: error), privacy: .public)")
+                        completionHandler?(self?.encodeError("update: \(error)"))
+                        return
+                    }
+                    self?.log.log("applyConfig ok peers=\(appConfig.peers.count, privacy: .public)")
+                    completionHandler?(self?.encodeOK())
                 }
-                completionHandler?(self?.encodeOK())
             }
 
         case .status:

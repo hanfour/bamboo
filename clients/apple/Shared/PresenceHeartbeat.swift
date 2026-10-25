@@ -72,6 +72,10 @@ public actor PresenceHeartbeat {
         }
     }
 
+    /// The identity and the newest session token, for other extension
+    /// components (the relay) that authenticate as this peer.
+    public func currentConfig() -> PresenceConfig? { config }
+
     public func stop() {
         task?.cancel()
         task = nil
