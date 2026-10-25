@@ -5,8 +5,8 @@ import { getTranslations } from 'next-intl/server';
 import { Link } from '@/i18n/routing';
 import { fetchMe } from '@/lib/api';
 import { UserMenu } from './UserMenu';
+import { controllerPublicUrl } from '@/lib/publicUrl';
 
-const CONTROLLER_BASE = process.env.BAMBOO_API_URL ?? 'http://localhost:8081';
 
 // SidebarUser is the account block at the bottom of the Sidebar. It
 // needs the server-side session, so it is a Server Component that the
@@ -31,7 +31,7 @@ export async function SidebarUser() {
  <UserMenu
  email={me.email}
  tenantSlug={me.tenantSlug}
- signOutHref={`${CONTROLLER_BASE}/auth/sign-out`}
+ signOutHref={controllerPublicUrl('/auth/sign-out')}
  labels={{
  menuAria: t('auth.menu.aria'),
  settings: t('auth.menu.settings'),

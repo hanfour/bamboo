@@ -4,8 +4,8 @@ import { getTranslations, setRequestLocale } from 'next-intl/server';
 
 import { redirect } from '@/i18n/routing';
 import { fetchMe } from '@/lib/api';
+import { controllerPublicUrl } from '@/lib/publicUrl';
 
-const CONTROLLER_BASE = process.env.BAMBOO_API_URL ?? 'http://localhost:8081';
 
 // The sign-in page. It stands alone: ChromeShell drops the sidebar on
 // this route. Someone who is already signed in goes to the overview.
@@ -27,7 +27,7 @@ export default async function LoginPage({ params }: { params: Promise<{ locale: 
  <h1 className="mt-8 text-2xl font-medium tracking-tight text-bamboo-50">{tl('title')}</h1>
  <p className="mt-2 text-[13px] text-bamboo-200/60">{t('subtitle')}</p>
  <a
- href={`${CONTROLLER_BASE}/auth/google/login`}
+ href={controllerPublicUrl('/auth/google/login')}
  className="mt-8 flex h-10 w-full items-center justify-center gap-2 rounded-full bg-bamboo-50 text-[13px] font-medium text-ink-950 transition-colors hover:bg-bamboo-100"
  >
  <GoogleMark />

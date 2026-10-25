@@ -5,6 +5,7 @@ import { Link } from '@/i18n/routing';
 import { FetchErrorState } from '@/components/FetchErrorState';
 import { fetchMe } from '@/lib/api';
 import { AuditExportCard } from './AuditExportCard';
+import { controllerPublicUrl } from '@/lib/publicUrl';
 
 // Settings is the home for tenant + account configuration. P0-3
 // skeleton — shows tenant ID / slug, account email + role, and a
@@ -181,10 +182,9 @@ function APITokensCard() {
  );
 }
 
-// CONTROLLER_BASE mirrors the TopBar value — sign-out is an HTTP
+// Sign-out is an HTTP
 // (not Next) endpoint so we hit the controller directly. Server-side
 // env so it's evaluated at request time, not bundled into the client.
-const CONTROLLER_BASE = process.env.BAMBOO_API_URL ?? 'http://localhost:8081';
 
 // SessionCard renders three lines: who/when of the current session,
 // time-to-expiry, and a sign-out link. Durations are rendered at
@@ -221,7 +221,7 @@ function SessionCard({
  ) : null}
  </div>
  <a
- href={`${CONTROLLER_BASE}/auth/sign-out`}
+ href={controllerPublicUrl('/auth/sign-out')}
  className="inline-flex h-8 items-center rounded-full bg-[#777]/20 px-4 text-[13px] font-medium text-bamboo-50 transition-colors hover:bg-[#777]/30"
  >
  {t('signOut')} →
