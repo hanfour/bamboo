@@ -101,7 +101,7 @@ function Acl({
  <span
  className={`rounded-full px-2 py-0.5 text-xs font-medium ${
  r.action === 'allow'
- ? 'bg-ink-800 text-bamboo-800 dark:bg-bamboo-900/40 dark:text-bamboo-300'
+ ? 'bg-ink-800 text-bamboo-100 dark:bg-bamboo-900/40 dark:text-bamboo-300'
  : 'bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300'
  }`}
  >

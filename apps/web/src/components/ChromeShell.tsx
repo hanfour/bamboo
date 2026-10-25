@@ -10,6 +10,7 @@ import {
  type ReactNode,
 } from 'react';
 import { usePathname } from '@/i18n/routing';
+import { ThemeToggle } from './ThemeToggle';
 
 // ChromeShell owns the responsive chrome state — specifically the
 // drawer-open boolean that the HamburgerButton (in TopBar) sets and
@@ -81,7 +82,14 @@ export function ChromeShell({
 
  // The sign-in page stands alone, without the sidebar or the top bar.
  if (pathname === '/login') {
- return <main className="min-h-screen px-5">{children}</main>;
+ return (
+ <main className="min-h-screen px-5">
+ <div className="absolute right-5 top-5">
+ <ThemeToggle />
+ </div>
+ {children}
+ </main>
+ );
  }
 
  return (

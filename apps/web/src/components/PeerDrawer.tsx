@@ -108,7 +108,7 @@ export function PeerDrawer({ peerResult, events, connectionEvents, routeConflict
  role="dialog"
  aria-modal="true"
  aria-labelledby="peer-drawer-title"
- className={`absolute right-0 top-0 flex h-full w-full max-w-md flex-col bg-ink-900 shadow-2xl ring-1 ring-white/5 transition-transform ${
+ className={`absolute right-0 top-0 flex h-full w-full max-w-md flex-col bg-ink-900 shadow-2xl ring-1 ring-[#777]/20 transition-transform ${
  open ? 'translate-x-0' : 'translate-x-full'
  }`}
  >
@@ -1178,7 +1178,7 @@ function DiffRender({ action, diff }: { action: string; diff: Record<string, unk
  {formatDiffValue(ft.from)}
  </code>
  <span className="text-bamboo-200/40">→</span>
- <code className="rounded border border-bamboo-300 px-1 font-mono text-bamboo-700 dark:border-bamboo-700 dark:text-bamboo-300">
+ <code className="rounded border border-bamboo-300 px-1 font-mono text-bamboo-200 dark:border-bamboo-700 dark:text-bamboo-300">
  {formatDiffValue(ft.to)}
  </code>
  </li>

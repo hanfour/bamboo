@@ -4,6 +4,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { Link } from '@/i18n/routing';
+import { ThemeToggle } from './ThemeToggle';
 
 // UserMenu is the account block at the bottom of the Sidebar: avatar,
 // email and tenant, with a popover that opens upward for Settings and
@@ -61,7 +62,7 @@ export function UserMenu({
  aria-label={labels.menuAria}
  className="flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-[#777]/20"
  >
- <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#262626] text-xs font-medium text-bamboo-50">
+ <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-ink-800 text-xs font-medium text-bamboo-50">
  {initial}
  </span>
  <span className="min-w-0 flex-1">
@@ -76,10 +77,13 @@ export function UserMenu({
  {open && (
  <div
  role="menu"
- className="absolute inset-x-0 bottom-full z-40 mb-2 overflow-hidden rounded-xl bg-[#1c1c1c] p-1 shadow-xl ring-1 ring-white/10"
+ className="absolute inset-x-0 bottom-full z-40 mb-2 overflow-hidden rounded-xl bg-ink-850 p-1 shadow-xl ring-1 ring-[#777]/30"
  >
  <div className="px-3 py-2 text-[11px] text-bamboo-200/60">
  {labels.tenant}: {tenantSlug}
+ </div>
+ <div className="px-3 py-2">
+ <ThemeToggle />
  </div>
  <Link
  href="/settings"
