@@ -16,16 +16,23 @@
 name: bamboo
 options:
   bundleIdPrefix: dev.hanfour.bamboo
+  # MARKETING_VERSION comes from the nearest v* git tag, written to the
+  # git-ignored Config/Version.xcconfig before each generate. Do not set it
+  # in `settings`: a project-level value there would beat the xcconfig.
+  preGenCommand: scripts/gen-version-xcconfig.sh
   deploymentTarget:
     macOS: "13.0"
     iOS: "16.0"
   developmentLanguage: en
   createIntermediateGroups: true
 
+configFiles:
+  Debug: Config/Version.xcconfig
+  Release: Config/Version.xcconfig
+
 settings:
   base:
     SWIFT_VERSION: "5.9"
-    MARKETING_VERSION: "0.0.1"
     CURRENT_PROJECT_VERSION: "3"
     CODE_SIGN_STYLE: Automatic
     # DEVELOPMENT_TEAM left unset on purpose. With CODE_SIGN_STYLE=Automatic
