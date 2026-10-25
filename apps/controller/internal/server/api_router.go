@@ -401,6 +401,8 @@ func (h *HTTPServer) routeReadOnlyAndDNS(w http.ResponseWriter, r *http.Request,
 		h.apiRecommendations(w, r, tenant)
 	case "/api/v1/activity":
 		h.apiActivity(w, r, tenant)
+	case "/api/v1/presence":
+		h.apiPresence(w, r, tenant)
 	case "/api/v1/users":
 		h.apiUsers(w, r, authn, tenant)
 	case "/api/v1/logs":

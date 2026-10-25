@@ -87,6 +87,18 @@
         "title": "DNS",
         "desc": "解析器、搜尋網域與 DNS64。"
       }
+    },
+    "presence": {
+      "title": "連線時間",
+      "all": "全部",
+      "none": "離線",
+      "mostActiveMonth": "最活躍月份",
+      "mostActiveDay": "最活躍日",
+      "longestStreak": "最長連續天數",
+      "currentStreak": "目前連續天數",
+      "days": "{count} 天",
+      "less": "少",
+      "more": "多"
     }
   },
   "peers": {

@@ -21,6 +21,7 @@
 
 import { cookies } from 'next/headers';
 
+import type { PresenceEntry } from './presence';
 import type {
   AclPolicy,
   AclRule,
@@ -388,6 +389,17 @@ export async function fetchPolicyRevisions(): Promise<FetchResult<PolicyHistoryR
   );
   if (r.kind !== 'ok') return r;
   return { kind: 'ok', value: r.value.revisions ?? [] };
+}
+
+// fetchPresence returns per-peer daily online seconds (UTC days) for the
+// overview activity chart. A failure collapses to an empty list: the
+// chart is a side-section and must not take the page down.
+export async function fetchPresence(days = 371): Promise<PresenceEntry[]> {
+  const r = await fetchResult<{ entries: PresenceEntry[] }>(
+    `/api/v1/presence?days=${encodeURIComponent(String(days))}`,
+  );
+  if (r.kind !== 'ok') return [];
+  return r.value.entries ?? [];
 }
 
 export async function fetchActivity(limit = 20): Promise<FetchResult<ActivityEvent[]>> {

@@ -278,7 +278,7 @@ func normalizeRoute(path string) string {
 	case "/healthz", "/metrics", "/api/v1/", "/api/v1",
 		"/api/v1/policy", "/api/v1/policy/validate", "/api/v1/policy/simulate",
 		"/api/v1/policy/revisions", "/api/v1/policy/rollback",
-		"/api/v1/logs", "/api/v1/activity", "/api/v1/recommendations",
+		"/api/v1/logs", "/api/v1/activity", "/api/v1/presence", "/api/v1/recommendations",
 		"/api/v1/me", "/api/v1/users", "/api/v1/invitations",
 		"/api/v1/preauth-keys", "/api/v1/dns", "/api/v1/tenant",
 		"/api/v1/overview", "/api/v1/peers/register", "/api/v1/peers/heartbeat",
