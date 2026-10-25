@@ -3,13 +3,20 @@
 import type { ReactNode } from 'react';
 import { useTranslations } from 'next-intl';
 import { Link } from '@/i18n/routing';
-import { fetchActivity, fetchOverview, type ApiOverview } from '@/lib/api';
+import { fetchActivity, fetchOverview, fetchPeers, fetchPresence, type ApiOverview } from '@/lib/api';
+import type { PresenceEntry } from '@/lib/presence';
 import type { ActivityEvent } from '@/lib/types';
 import { ActivityFeed } from '@/components/ActivityFeed';
 import { FetchErrorState } from '@/components/FetchErrorState';
+import { PresenceHeatmap } from '@/components/PresenceHeatmap';
 
 export default async function DashboardPage() {
- const [overview, activity] = await Promise.all([fetchOverview(), fetchActivity(20)]);
+ const [overview, activity, presence, peers] = await Promise.all([
+ fetchOverview(),
+ fetchActivity(20),
+ fetchPresence(),
+ fetchPeers(),
+ ]);
 
  // The dashboard's primary signal is the overview card stack; if
  // that fetch fails we surface the auth/network state explicitly
@@ -25,6 +32,9 @@ export default async function DashboardPage() {
  <Dashboard
  overview={overview.value}
  activity={activity.kind === 'ok' ? activity.value : []}
+ presence={presence}
+ peers={peers.kind === 'ok' ? peers.value.peers.map((p) => ({ id: p.id, hostname: p.hostname })) : []}
+ today={new Date().toISOString().slice(0, 10)}
  />
  );
 }
@@ -32,9 +42,15 @@ export default async function DashboardPage() {
 function Dashboard({
  overview,
  activity,
+ presence,
+ peers,
+ today,
 }: {
  overview: ApiOverview;
  activity: ActivityEvent[];
+ presence: PresenceEntry[];
+ peers: { id: string; hostname: string }[];
+ today: string;
 }) {
  const t = useTranslations('dashboard');
  const total = overview.totalPeers;
@@ -103,6 +119,10 @@ function Dashboard({
  <Tile href="/acl" title={t('tiles.acl.title')} desc={t('tiles.acl.desc')} icon={<TileShield />} />
  <Tile href="/dns" title={t('tiles.dns.title')} desc={t('tiles.dns.desc')} icon={<TileGlobe />} />
  </section>
+
+ <Card>
+ <PresenceHeatmap entries={presence} peers={peers} today={today} />
+ </Card>
 
  <Card>
  <h2 className="mb-4 text-[13px] text-bamboo-200/60">{t('recentActivity')}</h2>

@@ -883,3 +883,74 @@ func TestPeers_ListNAT64EgressActiveTenants(t *testing.T) {
 		t.Errorf("tenant C (dns64 off) should be absent")
 	}
 }
+
+func TestPeers_UpdateLastSeenAccruesPresence(t *testing.T) {
+	pool := requireDB(t)
+	tenants := repo.NewTenants(pool)
+	peers := repo.NewPeers(pool)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	slug := fmt.Sprintf("presence-%s", uuid.NewString()[:8])
+	tenant, err := tenants.GetOrCreate(ctx, slug, "presence test", "100.64.0.0/24")
+	if err != nil {
+		t.Fatalf("GetOrCreate tenant: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, tenant.ID)
+	})
+	p, err := peers.Insert(ctx, &repo.Peer{
+		TenantID:           tenant.ID,
+		Hostname:           "presence-peer",
+		WireGuardPublicKey: randomB64(t),
+		IP:                 "100.64.0.30",
+		Status:             "offline",
+	})
+	if err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+	since := time.Now().UTC().AddDate(0, 0, -1)
+	sum := func() int {
+		rows, err := peers.PresenceSince(ctx, tenant.ID, since)
+		if err != nil {
+			t.Fatalf("PresenceSince: %v", err)
+		}
+		n := 0
+		for _, d := range rows {
+			n += d.Seconds
+		}
+		return n
+	}
+
+	// First beat credits nothing: there is no previous tick.
+	if _, err := peers.UpdateLastSeen(ctx, p.ID); err != nil {
+		t.Fatalf("first beat: %v", err)
+	}
+	if got := sum(); got != 0 {
+		t.Fatalf("after first beat = %ds, want 0", got)
+	}
+
+	// A beat 20s after the previous tick credits about 20s.
+	if _, err := pool.Exec(ctx, `UPDATE peers SET presence_tick_at = now() - interval '20 seconds' WHERE id = $1`, p.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := peers.UpdateLastSeen(ctx, p.ID); err != nil {
+		t.Fatalf("second beat: %v", err)
+	}
+	if got := sum(); got < 19 || got > 22 {
+		t.Fatalf("after 20s gap = %ds, want ~20", got)
+	}
+
+	// A long absence is capped at PresenceMaxGap, not credited in full.
+	before := sum()
+	if _, err := pool.Exec(ctx, `UPDATE peers SET presence_tick_at = now() - interval '3 hours' WHERE id = $1`, p.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := peers.UpdateLastSeen(ctx, p.ID); err != nil {
+		t.Fatalf("third beat: %v", err)
+	}
+	if got := sum() - before; got != int(repo.PresenceMaxGap.Seconds()) {
+		t.Fatalf("after 3h gap credited %ds, want cap %ds", got, int(repo.PresenceMaxGap.Seconds()))
+	}
+}

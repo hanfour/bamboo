@@ -286,21 +286,78 @@ func (r *Peers) GetByID(ctx context.Context, id uuid.UUID) (*Peer, error) {
 // is yanked). Only the status column is sticky.
 func (r *Peers) UpdateLastSeen(ctx context.Context, id uuid.UUID) (uuid.UUID, error) {
 	var tenantID uuid.UUID
+	// The inner SELECT ... FOR UPDATE reads the previous presence tick under
+	// the row lock, so two concurrent heartbeats cannot both account the
+	// same interval. (A locking CTE cannot be used: FOR UPDATE skips rows
+	// the same statement already updated.) The gap is capped at
+	// PresenceMaxGap: a client that was away for hours must not be credited
+	// with the time in between. The first tick (NULL) credits nothing.
 	err := r.pool.QueryRow(ctx, `
-		UPDATE peers
-		   SET last_seen_at = now(),
-		       status       = CASE WHEN status = 'disabled'
-		                            THEN status
-		                            ELSE 'online'
-		                       END,
-		       updated_at   = now()
-		 WHERE id = $1
-		RETURNING tenant_id
-	`, id).Scan(&tenantID)
+		WITH upd AS (
+			UPDATE peers AS p
+			   SET last_seen_at     = now(),
+			       presence_tick_at = now(),
+			       status           = CASE WHEN p.status = 'disabled'
+			                                THEN p.status
+			                                ELSE 'online'
+			                           END,
+			       updated_at       = now()
+			  FROM (SELECT id, presence_tick_at
+			          FROM peers
+			         WHERE id = $1
+			           FOR UPDATE) AS old
+			 WHERE p.id = old.id
+			RETURNING p.id, p.tenant_id, old.presence_tick_at AS prev_tick
+		), acc AS (
+			INSERT INTO peer_presence_daily (peer_id, tenant_id, day, seconds)
+			SELECT id, tenant_id, (now() AT TIME ZONE 'UTC')::date,
+			       LEAST(EXTRACT(EPOCH FROM now() - prev_tick)::int, $2)
+			  FROM upd
+			 WHERE prev_tick IS NOT NULL
+			ON CONFLICT (peer_id, day)
+			DO UPDATE SET seconds = peer_presence_daily.seconds + EXCLUDED.seconds
+		)
+		SELECT tenant_id FROM upd
+	`, id, int(PresenceMaxGap.Seconds())).Scan(&tenantID)
 	if err != nil {
 		return uuid.Nil, asNotFound(err)
 	}
 	return tenantID, nil
+}
+
+// PresenceMaxGap caps the time one heartbeat can add to a day. Clients
+// beat every 30s, so three missed beats count as a disconnect.
+const PresenceMaxGap = 90 * time.Second
+
+// PresenceDay is one day of online time for one peer.
+type PresenceDay struct {
+	PeerID  uuid.UUID
+	Day     time.Time
+	Seconds int
+}
+
+// PresenceSince returns the per-peer daily online seconds for the tenant
+// from sinceDay (UTC date) onward, oldest first.
+func (r *Peers) PresenceSince(ctx context.Context, tenantID uuid.UUID, sinceDay time.Time) ([]PresenceDay, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT peer_id, day, seconds
+		  FROM peer_presence_daily
+		 WHERE tenant_id = $1 AND day >= $2::date
+		 ORDER BY day, peer_id
+	`, tenantID, sinceDay.UTC().Format("2006-01-02"))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []PresenceDay
+	for rows.Next() {
+		var d PresenceDay
+		if err := rows.Scan(&d.PeerID, &d.Day, &d.Seconds); err != nil {
+			return nil, err
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
 }
 
 // FindByPubKey returns a peer matching the (tenant_id, wireguard_public_key)

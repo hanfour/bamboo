@@ -87,6 +87,18 @@
         "title": "DNS",
         "desc": "Resolvers, search domains and DNS64."
       }
+    },
+    "presence": {
+      "title": "Connected time",
+      "all": "All",
+      "none": "offline",
+      "mostActiveMonth": "Most active month",
+      "mostActiveDay": "Most active day",
+      "longestStreak": "Longest streak",
+      "currentStreak": "Current streak",
+      "days": "{count, plural, one {# day} other {# days}}",
+      "less": "Less",
+      "more": "More"
     }
   },
   "peers": {

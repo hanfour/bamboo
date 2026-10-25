@@ -2156,6 +2156,40 @@ func (h *HTTPServer) apiActivity(w http.ResponseWriter, r *http.Request, tenant 
 	writeJSON(w, http.StatusOK, map[string]any{"events": out})
 }
 
+// apiPresenceJSON is one (peer, UTC day) bucket of online seconds.
+type apiPresenceJSON struct {
+	PeerID  string `json:"peerId"`
+	Day     string `json:"day"`
+	Seconds int    `json:"seconds"`
+}
+
+// apiPresence implements GET /api/v1/presence?days=N. It returns the
+// per-peer daily online seconds for the overview activity chart. Days
+// defaults to 371 (53 weeks) and is capped at 400.
+func (h *HTTPServer) apiPresence(w http.ResponseWriter, r *http.Request, tenant *repo.Tenant) {
+	days := 371
+	if v := r.URL.Query().Get("days"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 400 {
+			days = n
+		}
+	}
+	since := time.Now().UTC().AddDate(0, 0, -days)
+	var rows []repo.PresenceDay
+	if txErr := db.WithTenant(r.Context(), h.pool, tenant.ID, func(q db.Querier) error {
+		var err error
+		rows, err = repo.NewPeers(q).PresenceSince(r.Context(), tenant.ID, since)
+		return err
+	}); txErr != nil {
+		writeError(w, http.StatusInternalServerError, txErr)
+		return
+	}
+	out := make([]apiPresenceJSON, 0, len(rows))
+	for _, d := range rows {
+		out = append(out, apiPresenceJSON{PeerID: d.PeerID.String(), Day: d.Day.Format("2006-01-02"), Seconds: d.Seconds})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"entries": out})
+}
+
 // apiCreatePreAuthKeyReq is the request shape for POST
 // /api/v1/preauth-keys. TTL is intentionally absent — the MVP
 // surface in the Web UI doesn't expose it; bootstrap script and
