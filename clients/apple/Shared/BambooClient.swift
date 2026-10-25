@@ -193,6 +193,10 @@ public struct BambooClient {
         public var peersChanged: Bool
         public var policyChanged: Bool
         public var currentPolicyRevision: Int64
+        /// Present only when the presented session is inside the
+        /// controller's renewal window (the last 6h of its 24h life).
+        public var peerSessionToken: String?
+        public var peerSessionExpiresAt: Int64?
     }
 
     public struct RelayTokenRequest: Encodable {

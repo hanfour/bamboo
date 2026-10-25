@@ -11,6 +11,10 @@ import WireGuardKit
 final class PacketTunnelProvider_iOS: NEPacketTunnelProvider {
     private let log = Logger(subsystem: "dev.hanfour.bamboo.tunnel", category: "ios")
 
+    /// Keeps the device online on the controller while the host app is
+    /// suspended. See PresenceHeartbeat.
+    private let presence = PresenceHeartbeat()
+
     private lazy var adapter: WireGuardAdapter = WireGuardAdapter(with: self) { [weak self] level, message in
         self?.log.log("[wg/\(level.rawValue, privacy: .public)] \(message, privacy: .public)")
     }
@@ -52,6 +56,9 @@ final class PacketTunnelProvider_iOS: NEPacketTunnelProvider {
                 return
             }
             self?.log.log("tunnel up address=\(appConfig.address, privacy: .public) peers=\(appConfig.peers.count)")
+            if let presence = self?.presence {
+                Task { await presence.apply(appConfig.presence) }
+            }
             completionHandler(nil)
         }
     }
@@ -59,6 +66,7 @@ final class PacketTunnelProvider_iOS: NEPacketTunnelProvider {
     override func stopTunnel(with reason: NEProviderStopReason,
                              completionHandler: @escaping () -> Void) {
         log.log("stopTunnel reason=\(reason.rawValue, privacy: .public)")
+        Task { [presence] in await presence.stop() }
         adapter.stop { [weak self] error in
             if let error = error {
                 self?.log.error("adapter.stop: \(String(describing: error), privacy: .public)")
@@ -99,6 +107,9 @@ final class PacketTunnelProvider_iOS: NEPacketTunnelProvider {
                     return
                 }
                 self?.log.log("applyConfig ok peers=\(appConfig.peers.count, privacy: .public)")
+                if let presence = self?.presence {
+                    Task { await presence.apply(appConfig.presence) }
+                }
                 completionHandler?(self?.encodeOK())
             }
 

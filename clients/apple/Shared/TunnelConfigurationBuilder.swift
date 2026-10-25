@@ -46,6 +46,10 @@ public struct BambooTunnelConfig: Codable, Equatable {
     /// kept for backwards compatibility with stored configs.
     public let wgListenPort: UInt16
     public let peers: [BambooPeerConfig]
+    /// Lets the extension keep the device online on the controller while
+    /// the app is suspended (iOS). nil from configs written before this
+    /// field existed, in which case the extension does not heartbeat.
+    public let presence: PresenceConfig?
 
     public init(privateKey: String,
                 address: String,
@@ -53,7 +57,8 @@ public struct BambooTunnelConfig: Codable, Equatable {
                 dnsServers: [String] = [],
                 mtu: UInt16? = nil,
                 wgListenPort: UInt16 = 0,
-                peers: [BambooPeerConfig] = []) {
+                peers: [BambooPeerConfig] = [],
+                presence: PresenceConfig? = nil) {
         self.privateKey = privateKey
         self.address = address
         self.address6 = address6
@@ -61,6 +66,7 @@ public struct BambooTunnelConfig: Codable, Equatable {
         self.mtu = mtu
         self.wgListenPort = wgListenPort
         self.peers = peers
+        self.presence = presence
     }
 }
 
