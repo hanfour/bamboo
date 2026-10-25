@@ -476,6 +476,27 @@ func (r *Peers) UpdateEndpoints(ctx context.Context, id uuid.UUID, endpoints []s
 	return tag.RowsAffected() > 0, nil
 }
 
+// UpdateClientInfo refreshes the version and OS a client reports when it
+// registers again. Registration is idempotent on the public key, and before
+// this the first registration's values stuck forever, so an upgraded client
+// kept showing its original version. Empty arguments leave the stored value
+// alone. Returns true when something changed.
+func (r *Peers) UpdateClientInfo(ctx context.Context, id uuid.UUID, clientVersion, os string) (bool, error) {
+	tag, err := r.pool.Exec(ctx, `
+		UPDATE peers
+		   SET client_version = COALESCE(NULLIF($2, ''), client_version),
+		       os             = COALESCE(NULLIF($3, ''), os),
+		       updated_at     = now()
+		 WHERE id = $1
+		   AND (client_version IS DISTINCT FROM COALESCE(NULLIF($2, ''), client_version)
+		        OR os IS DISTINCT FROM COALESCE(NULLIF($3, ''), os))
+	`, id, clientVersion, os)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
 // WGSyncState is the per-peer snapshot the wg-state reporter feeds
 // into SyncWGState. It mirrors the subset of `wg show <iface> dump`
 // the controller persists: liveness (Status / LastHandshake) plus

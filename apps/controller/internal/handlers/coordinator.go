@@ -453,6 +453,29 @@ func (h *CoordinatorHandler) Register(ctx context.Context, req *bamboov1.Registe
 				self.Endpoints = eps
 			}
 		}
+		// Refresh the client version and OS. Without this a client that
+		// upgraded in place kept the version from its first registration.
+		// Non-fatal for the same reason as the backfill below.
+		if cv, osName := req.GetClientVersion(), req.GetOs(); cv != "" || osName != "" {
+			cerr := db.WithTenant(ctx, h.pool, tenant.ID, func(q db.Querier) error {
+				changed, uerr := repo.NewPeers(q).UpdateClientInfo(ctx, self.ID, cv, osName)
+				if uerr != nil {
+					return uerr
+				}
+				if changed {
+					if cv != "" {
+						self.ClientVersion = cv
+					}
+					if osName != "" {
+						self.OS = osName
+					}
+				}
+				return nil
+			})
+			if cerr != nil {
+				slog.Warn("re-registration: refresh client info", "peer_id", self.ID, "err", cerr)
+			}
+		}
 		// Backfill peer_dns_name for peers that registered before
 		// MagicDNS landed. The column is nullable; we only fill it
 		// when currently NULL (admins who set an explicit name later

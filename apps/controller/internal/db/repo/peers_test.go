@@ -1059,3 +1059,67 @@ func TestPeers_HeartbeatKeepsStatusOnline(t *testing.T) {
 		}
 	})
 }
+
+// A client that upgraded in place registers again with the same public key.
+// The stored version used to stay at whatever the first registration said.
+func TestPeers_UpdateClientInfo(t *testing.T) {
+	pool := requireDB(t)
+	tenants := repo.NewTenants(pool)
+	peers := repo.NewPeers(pool)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	slug := fmt.Sprintf("clientinfo-%s", uuid.NewString()[:8])
+	tenant, err := tenants.GetOrCreate(ctx, slug, "client info", "100.64.0.0/24")
+	if err != nil {
+		t.Fatalf("GetOrCreate tenant: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, tenant.ID)
+	})
+	p, err := peers.Insert(ctx, &repo.Peer{
+		TenantID: tenant.ID, Hostname: "upgrader", WireGuardPublicKey: randomB64(t),
+		IP: "100.64.0.61", OS: "ios", ClientVersion: "0.0.1", Status: "online",
+	})
+	if err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+	get := func() *repo.Peer {
+		got, err := peers.GetByID(ctx, p.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+
+	changed, err := peers.UpdateClientInfo(ctx, p.ID, "0.1.19", "ios")
+	if err != nil || !changed {
+		t.Fatalf("upgrade: changed=%v err=%v, want true", changed, err)
+	}
+	if got := get(); got.ClientVersion != "0.1.19" || got.OS != "ios" {
+		t.Errorf("after upgrade = %q/%q, want 0.1.19/ios", got.ClientVersion, got.OS)
+	}
+
+	changed, err = peers.UpdateClientInfo(ctx, p.ID, "0.1.19", "ios")
+	if err != nil || changed {
+		t.Errorf("same values: changed=%v err=%v, want false", changed, err)
+	}
+
+	// An empty field must not erase what is stored.
+	changed, err = peers.UpdateClientInfo(ctx, p.ID, "", "")
+	if err != nil || changed {
+		t.Errorf("empty values: changed=%v err=%v, want false", changed, err)
+	}
+	if got := get(); got.ClientVersion != "0.1.19" || got.OS != "ios" {
+		t.Errorf("empty update erased values: %q/%q", got.ClientVersion, got.OS)
+	}
+
+	// OS alone can change too.
+	if _, err := peers.UpdateClientInfo(ctx, p.ID, "", "darwin"); err != nil {
+		t.Fatal(err)
+	}
+	if got := get(); got.OS != "darwin" || got.ClientVersion != "0.1.19" {
+		t.Errorf("os-only update = %q/%q, want darwin/0.1.19", got.OS, got.ClientVersion)
+	}
+}
