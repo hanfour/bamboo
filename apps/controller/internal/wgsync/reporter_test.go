@@ -16,11 +16,12 @@ import (
 )
 
 type fakePeerStore struct {
-	syncCalls  []repo.WGSyncState
-	keptOff    []string // last argument passed to MarkOfflineExcept
-	rowsPerKey map[string]int64
-	setErr     error
-	markErr    error
+	syncCalls   []repo.WGSyncState
+	keptOff     []string      // last argument passed to MarkOfflineExcept
+	sweepWindow time.Duration // heartbeat window passed to MarkOfflineExcept
+	rowsPerKey  map[string]int64
+	setErr      error
+	markErr     error
 }
 
 func (f *fakePeerStore) SyncWGState(_ context.Context, s repo.WGSyncState) (int64, error) {
@@ -34,7 +35,8 @@ func (f *fakePeerStore) SyncWGState(_ context.Context, s repo.WGSyncState) (int6
 	return 1, nil
 }
 
-func (f *fakePeerStore) MarkOfflineExcept(_ context.Context, pubkeys []string) error {
+func (f *fakePeerStore) MarkOfflineExcept(_ context.Context, pubkeys []string, window time.Duration) error {
+	f.sweepWindow = window
 	cp := append([]string(nil), pubkeys...)
 	sort.Strings(cp)
 	f.keptOff = cp
@@ -265,5 +267,25 @@ func TestReconcile_ParseErrorPropagates(t *testing.T) {
 	r := New(Config{Peers: store, StatePath: path})
 	if err := r.reconcile(context.Background()); err == nil {
 		t.Fatal("reconcile: want parse error, got nil")
+	}
+}
+
+// Liveness has two sources, the handshake in the dump and the peer's own
+// heartbeat. The reporter must hand the online window to the store for
+// both the per-peer sync and the sweep, or a heartbeating device that
+// never peers with this host gets marked offline every tick.
+func TestApplyStates_PassesHeartbeatWindow(t *testing.T) {
+	now := time.Date(2026, 5, 10, 14, 0, 0, 0, time.UTC)
+	store := &fakePeerStore{}
+	r := newReporterAt(now, store, 3*time.Minute)
+
+	if err := r.applyStates(context.Background(), []PeerState{{PublicKey: "k-a", LatestHandshake: now}}); err != nil {
+		t.Fatalf("applyStates: %v", err)
+	}
+	if store.sweepWindow != 3*time.Minute {
+		t.Errorf("sweep window = %v, want 3m", store.sweepWindow)
+	}
+	if len(store.syncCalls) != 1 || store.syncCalls[0].HeartbeatWindow != 3*time.Minute {
+		t.Errorf("sync calls = %+v, want one with HeartbeatWindow 3m", store.syncCalls)
 	}
 }
