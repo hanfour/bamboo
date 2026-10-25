@@ -17,10 +17,22 @@
     # unrelated services on sibling subdomains you don't want pinned.
     header Strict-Transport-Security "max-age=31536000; includeSubDomains"
 
-    # Controller endpoints — REST + OIDC + healthz.
-    @controller path /api/* /auth/* /healthz
+    # Controller endpoints — REST + OIDC + healthz + the client installer.
+    @controller path /api/* /auth/* /healthz /install.sh
     handle @controller {
         reverse_proxy controller:8081
+    }
+
+    # gRPC for the bamboo CLI (peer watch, device desk). The controller
+    # serves plaintext HTTP/2 on 8080 inside the compose network; Caddy
+    # terminates TLS and speaks h2c to it. Streams stay open for hours, so
+    # flushing is immediate. Authentication is the controller's own
+    # (pre-auth key on Register, peer-session bearer afterwards).
+    @grpc path /bamboo.v1.*
+    handle @grpc {
+        reverse_proxy h2c://controller:8080 {
+            flush_interval -1
+        }
     }
 
     # Everything else lands on the Web UI (Next.js standalone).

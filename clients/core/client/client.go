@@ -10,6 +10,7 @@ import (
 
 	bamboov1 "github.com/hanfour/bamboo/proto/gen/go/bamboo/v1"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 )
 
@@ -22,14 +23,31 @@ type Client struct {
 	Telemetry   bamboov1.TelemetryServiceClient
 }
 
-// Dial establishes a connection to a controller at addr.
-//
-// The current implementation uses insecure transport for local development.
-// Production deployments must add TLS via grpc.WithTransportCredentials.
-func Dial(_ context.Context, addr string) (*Client, error) {
+// Option tunes Dial.
+type Option func(*dialConfig)
+
+type dialConfig struct{ tls bool }
+
+// WithTLS dials over TLS using the system roots. A controller behind a
+// reverse proxy (https://host) needs this; the plain gRPC port used in
+// local development does not.
+func WithTLS() Option { return func(c *dialConfig) { c.tls = true } }
+
+// Dial establishes a connection to a controller at addr. The transport is
+// insecure unless WithTLS is given, which is only suitable for a local or
+// tunnelled controller.
+func Dial(_ context.Context, addr string, opts ...Option) (*Client, error) {
+	var cfg dialConfig
+	for _, o := range opts {
+		o(&cfg)
+	}
+	creds := insecure.NewCredentials()
+	if cfg.tls {
+		creds = credentials.NewTLS(nil)
+	}
 	conn, err := grpc.NewClient(
 		addr,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithTransportCredentials(creds),
 		// A desk file is capped at 4MiB. The protobuf frame around it
 		// does not fit in gRPC's default 4MiB message.
 		grpc.WithDefaultCallOptions(

@@ -1,0 +1,61 @@
+name: Release CLI
+
+# On a vX.Y.Z tag, build the Linux CLI binaries, publish them with a
+# SHA256SUMS file as a GitHub Release. The controller's /install.sh and the
+# in-app "latest client version" hint both read this release.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  cli:
+    name: build and publish CLI
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: clients/cli/go.mod
+          cache-dependency-path: clients/cli/go.sum
+
+      - name: Build
+        working-directory: clients/cli
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME}"
+          DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          mkdir -p ../../dist
+          for ARCH in amd64 arm64; do
+            GOOS=linux GOARCH=$ARCH go build -trimpath \
+              -ldflags "-s -w -X main.Version=${VERSION} -X main.Commit=${GITHUB_SHA::7} -X main.BuildDate=${DATE}" \
+              -o "../../dist/bamboo-linux-${ARCH}" ./cmd/bamboo
+          done
+          cd ../../dist
+          sha256sum bamboo-linux-* > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Smoke test the amd64 binary
+        run: |
+          ./dist/bamboo-linux-amd64 version | tee /dev/stderr | grep -q "${GITHUB_REF_NAME}"
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            gh release upload "${GITHUB_REF_NAME}" dist/* --clobber
+          else
+            gh release create "${GITHUB_REF_NAME}" dist/* \
+              --title "${GITHUB_REF_NAME}" --generate-notes --latest
+          fi

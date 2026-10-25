@@ -135,7 +135,11 @@
       "oneShotWarning": "If you lose this key, mint a new one — there's no way to retrieve it.",
       "copy": "Copy",
       "copied": "Copied",
-      "done": "Done"
+      "done": "Done",
+      "linuxCommand": "Linux server: run as one command",
+      "linuxHint": "Installs the client, checks its checksum, registers this machine and starts a systemd service. It needs root.",
+      "agentPrompt": "Or paste this into a coding agent on that machine",
+      "agentHint": "Works with Claude Code, Codex, Grok and similar. The key is in the text, so paste it only into an agent you trust on that machine."
     },
     "pending": {
       "title": "{count, plural, one {# pending device} other {# pending devices}}",

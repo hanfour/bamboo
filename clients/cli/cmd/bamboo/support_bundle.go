@@ -79,7 +79,7 @@ each other. --output overrides.`,
 		defer func() { _ = f.Close() }()
 
 		opts := bundleOptions{
-			ControllerAddr: flagAddr,
+			ControllerAddr: activeTarget.grpcAddr,
 			TenantSlug:     flagTenant,
 			Interface:      flagIface,
 			Env:            os.Environ(),

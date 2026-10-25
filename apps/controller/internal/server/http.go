@@ -171,6 +171,7 @@ func NewHTTPServer(
 	if err := tenantCollector.Register(h.metrics); err != nil {
 		slog.Warn("metrics: tenant collector registration failed", "err", err)
 	}
+	mux.HandleFunc("/install.sh", h.handleInstallScript)
 	mux.HandleFunc("/auth/", h.routeAuth)
 	mux.HandleFunc("/auth/sign-out", h.handleSignOut)
 	mux.HandleFunc("/api/v1/admin/relays", h.routeAdminRelays)
@@ -275,7 +276,7 @@ func (s *statusRecorder) Flush() {
 func normalizeRoute(path string) string {
 	// Fast-path the static endpoints first.
 	switch path {
-	case "/healthz", "/metrics", "/api/v1/", "/api/v1",
+	case "/healthz", "/metrics", "/install.sh", "/api/v1/", "/api/v1",
 		"/api/v1/policy", "/api/v1/policy/validate", "/api/v1/policy/simulate",
 		"/api/v1/policy/revisions", "/api/v1/policy/rollback",
 		"/api/v1/logs", "/api/v1/activity", "/api/v1/presence", "/api/v1/recommendations",

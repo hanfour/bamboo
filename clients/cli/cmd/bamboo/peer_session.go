@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
@@ -35,12 +36,54 @@ type peerSession struct {
 	mu        sync.RWMutex
 	token     string
 	expiresAt time.Time
+	// path, when set, is where set() persists the token so a restarted
+	// service re-registers with it instead of redeeming a single-use
+	// pre-auth key a second time.
+	path string
+}
+
+type storedSession struct {
+	Token     string `json:"token"`
+	ExpiresAt int64  `json:"expiresAt"`
 }
 
 func (s *peerSession) set(token string, expiresAt time.Time) {
 	s.mu.Lock()
 	s.token = token
 	s.expiresAt = expiresAt
+	path := s.path
+	s.mu.Unlock()
+	if path == "" {
+		return
+	}
+	raw, err := json.Marshal(storedSession{Token: token, ExpiresAt: expiresAt.Unix()})
+	if err == nil {
+		err = os.WriteFile(path, raw, 0o600)
+	}
+	if err != nil {
+		// Not fatal: the tunnel works, only restarts lose the shortcut.
+		slog.Warn("persist peer session", "path", path, "err", err)
+	}
+}
+
+// loadFrom reads a token saved by an earlier run and keeps writing
+// future renewals to the same file. A missing or unreadable file is
+// not an error; the session just starts empty.
+func (s *peerSession) loadFrom(path string) {
+	s.mu.Lock()
+	s.path = path
+	s.mu.Unlock()
+	raw, err := os.ReadFile(path) //nolint:gosec // path is under our state dir
+	if err != nil {
+		return
+	}
+	var st storedSession
+	if json.Unmarshal(raw, &st) != nil || st.Token == "" {
+		return
+	}
+	s.mu.Lock()
+	s.token = st.Token
+	s.expiresAt = time.Unix(st.ExpiresAt, 0)
 	s.mu.Unlock()
 }
 
@@ -203,6 +246,9 @@ func restPeersToProto(in []restPeer) []*bamboov1.Peer {
 // counterpart of flagAddr (which is gRPC). Defaults to localhost:8081
 // in dev — matches the make local-up port wiring.
 func controllerHTTPBase() string {
+	if activeTarget.httpBase != "" {
+		return activeTarget.httpBase
+	}
 	base := os.Getenv("BAMBOO_CONTROLLER_HTTP_URL")
 	if base == "" {
 		base = "http://localhost:8081"
