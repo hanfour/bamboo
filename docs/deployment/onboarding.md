@@ -65,7 +65,7 @@ The API response includes `secret` once. Use either key as `$SECRET` on
 the database host:
 
 ```bash
-bamboo up --login-server "$CONTROLLER" --preauth-key "$SECRET" --hostname db-server
+sudo env BAMBOO_AUTH_KEY="$SECRET" bamboo up --server "$CONTROLLER" --hostname db-server
 ```
 
 That peer's owner is the DBA, and its tags are `db`.

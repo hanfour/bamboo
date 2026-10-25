@@ -17,6 +17,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -93,7 +94,11 @@ func runUp(cmd *cobra.Command, _ []string) error {
 	ctx, cancel := context.WithTimeout(cmd.Context(), 10*time.Second)
 	defer cancel()
 
-	cli, err := client.Dial(ctx, flagAddr)
+	var dialOpts []client.Option
+	if activeTarget.tls {
+		dialOpts = append(dialOpts, client.WithTLS())
+	}
+	cli, err := client.Dial(ctx, activeTarget.grpcAddr, dialOpts...)
 	if err != nil {
 		return fmt.Errorf("dial controller: %w", err)
 	}
@@ -127,6 +132,9 @@ func runUp(cmd *cobra.Command, _ []string) error {
 	// the relay-token mint and the authedAdapter that wraps heartbeat
 	// / watch outgoing metadata.
 	session := &peerSession{}
+	if dir, derr := state.Dir(); derr == nil {
+		session.loadFrom(filepath.Join(dir, "session.json"))
+	}
 	resp, err := registerWithController(ctx, priv, session, wgPort)
 	if err != nil {
 		return err

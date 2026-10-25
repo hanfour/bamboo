@@ -12,6 +12,7 @@ import (
 
 // Shared flags.
 var (
+	flagServer               string
 	flagAddr                 string
 	flagTenant               string
 	flagAuthKey              string
@@ -34,8 +35,12 @@ var rootCmd = &cobra.Command{
 Bringing up an interface (bamboo up) requires root / CAP_NET_ADMIN on
 Linux and is currently unsupported on other platforms; macOS users
 should use the app under clients/apple/.`,
-	PersistentPreRun: func(_ *cobra.Command, _ []string) {
+	PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
+		if err := setupTarget(cmd); err != nil {
+			return err
+		}
 		configureLogger(flagLogJSON)
+		return nil
 	},
 	// Don't dump the entire usage block on every RunE error; the error
 	// message is enough.
@@ -48,11 +53,12 @@ func Execute() {
 }
 
 func init() {
-	rootCmd.PersistentFlags().StringVar(&flagAddr, "addr", "localhost:8080", "controller gRPC address")
+	rootCmd.PersistentFlags().StringVar(&flagServer, "server", "", "controller URL, e.g. https://bamboo.example.com (gRPC over TLS and REST on the same host); env BAMBOO_SERVER")
+	rootCmd.PersistentFlags().StringVar(&flagAddr, "addr", "localhost:8080", "controller gRPC address for a local controller without TLS; ignored when --server is set; env BAMBOO_ADDR")
 	rootCmd.PersistentFlags().StringVar(&flagTenant, "tenant", "default", "tenant slug; ignored if --auth-key is set")
-	rootCmd.PersistentFlags().StringVar(&flagAuthKey, "auth-key", "", "pre-auth key secret (bka_..._...)")
+	rootCmd.PersistentFlags().StringVar(&flagAuthKey, "auth-key", "", "pre-auth key secret (bka_..._...); env BAMBOO_AUTH_KEY keeps it out of the process list")
 	rootCmd.PersistentFlags().StringVar(&flagIface, "iface", "bamboo0", "WireGuard interface name")
-	rootCmd.PersistentFlags().StringVar(&flagHostname, "hostname", defaultHostname(), "peer hostname to register")
+	rootCmd.PersistentFlags().StringVar(&flagHostname, "hostname", defaultHostname(), "peer hostname to register; env BAMBOO_HOSTNAME")
 	rootCmd.PersistentFlags().BoolVar(&flagLogJSON, "log-json", false, "emit JSON-formatted logs (default: text)")
 	rootCmd.PersistentFlags().Uint16Var(&flagWGListenPort, "wg-listen-port", 0, "WireGuard UDP listen port; 0 = pick a free port (the same port is used for STUN discovery so the advertised endpoint matches what other peers can actually dial)")
 	rootCmd.PersistentFlags().StringSliceVar(&flagAdvertiseRoutes, "advertise-routes", nil, "advertise these CIDRs as reachable through this peer (subnet router; issue #136); admin must approve before they merge into other peers' allowed_ips. Comma-separated or repeated, e.g. --advertise-routes 10.0.0.0/24,192.168.86.0/24")
