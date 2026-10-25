@@ -7,6 +7,7 @@ import { useTranslations } from 'next-intl';
 import { QRCodeSVG } from 'qrcode.react';
 import { mintPreAuthKeyAction } from '@/lib/actions';
 import { parseTagList } from '@/lib/tags';
+import { agentPrompt, installCommand } from '@/lib/install';
 import { useDialogA11y } from '@/hooks/useDialogA11y';
 
 // NewPeerButton wraps the /peers header's"新增節點" button with a
@@ -76,6 +77,7 @@ export function NewPeerButton({ tenantSlug }: { tenantSlug: string }) {
  {result ? (
  <ResultView
  tenantSlug={tenantSlug}
+ singleUse={!reusable}
  secret={result.secret}
  description={result.description}
  onDone={close}
@@ -259,11 +261,13 @@ function FormView({
 
 function ResultView({
  tenantSlug,
+ singleUse,
  secret,
  description,
  onDone,
 }: {
  tenantSlug: string;
+ singleUse: boolean;
  secret: string;
  description: string;
  onDone: () => void;
@@ -310,6 +314,13 @@ function ResultView({
  <p className="text-center text-xs text-bamboo-200/60">{t('qrHint')}</p>
  </div>
 
+ <div className="space-y-2">
+ <CopyableField label={t('linuxCommand')} value={installCommand(controllerURL, secret)} mono secret />
+ <p className="text-xs text-bamboo-200/60">{t('linuxHint')}</p>
+ <CopyableField label={t('agentPrompt')} value={agentPrompt(controllerURL, secret, singleUse)} multiline />
+ <p className="text-xs text-bamboo-200/60">{t('agentHint')}</p>
+ </div>
+
  <details className="space-y-2 text-sm">
  <summary className="cursor-pointer select-none text-xs uppercase tracking-wide text-bamboo-200/60 hover:text-bamboo-100 dark:text-bamboo-200/40 dark:hover:text-bamboo-100">
  {t('manualFieldsToggle')}
@@ -343,11 +354,13 @@ function CopyableField({
  value,
  mono,
  secret,
+ multiline,
 }: {
  label: string;
  value: string;
  mono?: boolean;
  secret?: boolean;
+ multiline?: boolean;
 }) {
  const t = useTranslations('peers.newPeer');
  const [copied, setCopied] = useState(false);
@@ -369,6 +382,15 @@ function CopyableField({
  {label}
  </label>
  <div className="flex gap-2">
+ {multiline ? (
+ <textarea
+ value={value}
+ rows={6}
+ readOnly
+ className="flex-1 select-all resize-none rounded border border-bamboo-200/30 bg-ink-900 px-2 py-1.5 font-mono text-xs text-bamboo-50"
+ onFocus={(e) => e.target.select()}
+ />
+ ) : (
  <input
  type="text"
  value={value}
@@ -378,6 +400,7 @@ function CopyableField({
  } ${secret ? 'tracking-tight' : ''}`}
  onFocus={(e) => e.target.select()}
  />
+ )}
  <button
  type="button"
  onClick={copy}

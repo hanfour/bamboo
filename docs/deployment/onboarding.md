@@ -70,6 +70,8 @@ sudo env BAMBOO_AUTH_KEY="$SECRET" bamboo up --server "$CONTROLLER" --hostname d
 
 That peer's owner is the DBA, and its tags are `db`.
 
+For a Linux host, or to let a coding agent do it, see [agent-install](agent-install.md).
+
 ## 3. Enroll the laptops
 
 Alice signs in and enrolls her own machine with that session (the web

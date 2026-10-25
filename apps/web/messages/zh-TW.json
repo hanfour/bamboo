@@ -135,7 +135,11 @@
       "oneShotWarning": "如果遺失這把 key，請重新產生一組 — 無法復原。",
       "copy": "複製",
       "copied": "已複製",
-      "done": "完成"
+      "done": "完成",
+      "linuxCommand": "Linux 伺服器：整段貼上執行",
+      "linuxHint": "會安裝用戶端、驗證校驗碼、註冊這台機器並啟動 systemd 服務，需要 root。",
+      "agentPrompt": "或把這段貼給該機器上的程式碼 agent",
+      "agentHint": "適用 Claude Code、Codex、Grok 等。金鑰就在文字裡，只貼給你信任、且在那台機器上執行的 agent。"
     },
     "pending": {
       "title": "{count, plural, other {# 個待審核裝置}}",
