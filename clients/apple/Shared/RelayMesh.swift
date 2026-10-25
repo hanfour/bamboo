@@ -76,6 +76,19 @@ public actor RelayMesh {
         return config.replacingPeers(peers)
     }
 
+    /// The session token was renewed; later relay tokens must use it.
+    public func updateAuth(_ newAuth: PresenceConfig) {
+        auth = newAuth
+    }
+
+    /// The network changed under us (Wi-Fi to cellular, resume from sleep).
+    /// A WebSocket on the old path can sit dead for minutes before the read
+    /// fails, so replace it now.
+    public func forceRedial() {
+        guard client != nil else { return }
+        scheduleRedial()
+    }
+
     public func stop() async {
         redialTask?.cancel()
         redialTask = nil

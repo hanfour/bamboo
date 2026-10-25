@@ -222,6 +222,33 @@ public final class TunnelManager: ObservableObject {
         }
     }
 
+    /// Asks the extension's control plane for the peer name list it holds,
+    /// so the app can refresh the MagicDNS map. nil when the tunnel is not
+    /// connected, the extension predates the call, or it is not running the
+    /// control plane (the app drives it then).
+    public func peerSnapshot() async -> TunnelIPC.PeerSnapshot? {
+        guard let session = manager?.connection as? NETunnelProviderSession,
+              session.status == .connected,
+              let payload = try? TunnelIPC.encode(TunnelIPC.Request(kind: .peerSnapshot)) else {
+            return nil
+        }
+        return await withCheckedContinuation { (cont: CheckedContinuation<TunnelIPC.PeerSnapshot?, Never>) in
+            do {
+                try session.sendProviderMessage(payload) { response in
+                    guard let response,
+                          let decoded = try? TunnelIPC.decodeResponse(response),
+                          decoded.ok else {
+                        cont.resume(returning: nil)
+                        return
+                    }
+                    cont.resume(returning: decoded.snapshot)
+                }
+            } catch {
+                cont.resume(returning: nil)
+            }
+        }
+    }
+
     // MARK: - private
 
     private func attachObserver() {

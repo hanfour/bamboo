@@ -117,6 +117,10 @@ public final class ConnectionViewModel: ObservableObject {
     /// gone out of scope.
     private var serverRegionHint: String = ""
     private var statusTask: Task<Void, Never>?
+    /// iOS only: while the extension runs the control plane, this polls it
+    /// for peer names to keep the MagicDNS map current.
+    private var snapshotTask: Task<Void, Never>?
+    private var lastSnapshot: TunnelIPC.PeerSnapshot?
 
     // Latest known tunnel config; held so we can rebuild + reapply
     // when peer endpoints change without re-running the full register
@@ -285,6 +289,8 @@ public final class ConnectionViewModel: ObservableObject {
         // mis-binding (UI shows "Disconnect" because status was
         // misread as .connected at cold-start) is obvious in the log.
         log.log("Disconnect button pressed; viewModel.status=\(self.status.rawValue, privacy: .public) tunnel.status=\(String(describing: self.tunnel.status), privacy: .public)")
+        snapshotTask?.cancel()
+        snapshotTask = nil
         Task { [heartbeat, watcher] in
             await heartbeat.stop()
             await watcher.stop()
@@ -506,7 +512,9 @@ public final class ConnectionViewModel: ObservableObject {
                 mtu: 1280,
                 wgListenPort: wgPort,
                 presence: makePresence(peerID: resp.self_.id, token: resp.peerSessionToken),
-                relay: relayConfig
+                relay: relayConfig,
+                controlPlane: makeControlPlane(peerID: resp.self_.id, token: resp.peerSessionToken,
+                                               publicKey: publicKey, routes: parsedAdvertisedRoutes)
             ) else {
                 throw BambooClientError.invalidResponse
             }
@@ -529,6 +537,14 @@ public final class ConnectionViewModel: ObservableObject {
             self.peerStore.setNAT64Config(MagicDNSPeerStore.NAT64Config(
                 dns64Enabled: resp.dns64Enabled ?? false,
                 nat64Prefix: resp.nat64Prefix ?? ""))
+
+            // When the extension runs the control plane (iOS), it does the
+            // heartbeat and watch itself and keeps doing so while this app is
+            // suspended. Here we only mirror its peer names into MagicDNS.
+            if config.controlPlane != nil {
+                startSnapshotPoll()
+                return
+            }
 
             // Background loops: heartbeat keeps last_seen fresh +
             // re-reports our endpoint; watcher streams peer changes
@@ -809,6 +825,43 @@ public final class ConnectionViewModel: ObservableObject {
     /// makePresence is what the tunnel extension needs to heartbeat on its
     /// own while this app is suspended. nil when there is no peer-session
     /// token (an older controller): the extension then does not heartbeat.
+    /// The extension runs the control plane on iOS, where the app is
+    /// suspended in the background. macOS keeps it in the app for now.
+    private func makeControlPlane(peerID: String, token: String?, publicKey: String,
+                                  routes: [String]) -> ControlPlaneConfig? {
+        #if os(iOS)
+        guard let token, !token.isEmpty, let url = parseControllerURL(controllerURL) else { return nil }
+        return ControlPlaneConfig(controllerURL: url.absoluteString, tenantSlug: tenantSlug, peerID: peerID,
+                                  sessionToken: token, hostname: hostname, wireguardPublicKey: publicKey,
+                                  os: currentOSName(), clientVersion: BundleVersion.current,
+                                  advertisedRoutes: routes.isEmpty ? nil : routes,
+                                  advertiseExitNode: advertiseExitNode ? true : nil)
+        #else
+        return nil
+        #endif
+    }
+
+    private func startSnapshotPoll() {
+        snapshotTask?.cancel()
+        snapshotTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
+                guard let self else { return }
+                if let snap = await self.tunnel.peerSnapshot(), snap != self.lastSnapshot {
+                    self.lastSnapshot = snap
+                    var map: [String: MagicDNSPeerStore.PeerEntry] = [:]
+                    for e in snap.peers {
+                        map[e.dnsName] = MagicDNSPeerStore.PeerEntry(ipv4: e.ip, ipv6: e.ip6, hostname: e.hostname)
+                    }
+                    self.peerStore.setPeers(map)
+                    self.peerStore.setNAT64Config(MagicDNSPeerStore.NAT64Config(
+                        dns64Enabled: snap.dns64Enabled, nat64Prefix: snap.nat64Prefix))
+                    self.log.log("magicdns: synced \(map.count, privacy: .public) peer name(s) from extension")
+                }
+            }
+        }
+    }
+
     private func makePresence(peerID: String, token: String?) -> PresenceConfig? {
         guard let token, !token.isEmpty, let url = parseControllerURL(controllerURL) else { return nil }
         return PresenceConfig(controllerURL: url.absoluteString, tenantSlug: tenantSlug,
@@ -830,7 +883,8 @@ public final class ConnectionViewModel: ObservableObject {
                 mtu: prevConfig.mtu,
                 wgListenPort: prevConfig.wgListenPort,
                 presence: makePresence(peerID: selfID, token: peerSessionBearer) ?? prevConfig.presence,
-                relay: newRelay ?? prevConfig.relay
+                relay: newRelay ?? prevConfig.relay,
+                controlPlane: prevConfig.controlPlane
             )
         else { return }
 

@@ -19,13 +19,72 @@ final class PacketTunnelProvider_iOS: NEPacketTunnelProvider {
     /// it keeps working while the app is suspended. See RelayMesh.
     private let mesh = RelayMesh()
 
-    /// Starts presence first (it holds the freshest session token), then
-    /// swaps relay proxy endpoints into the config.
+    /// Registers, heartbeats and watches for peer and policy changes while
+    /// the app is suspended. Used when the app sends a controlPlane block;
+    /// otherwise the app stays in charge and `presence` only keeps the
+    /// device online. See ControlPlane.
+    private let controlPlane = ControlPlane()
+
+    /// Picks who authenticates as this peer (the control plane when it runs,
+    /// else the presence heartbeat), then swaps relay proxy endpoints into
+    /// the config.
     private func prepare(_ appConfig: BambooTunnelConfig) async throws -> TunnelConfiguration {
-        await presence.apply(appConfig.presence)
-        let auth = await presence.currentConfig()
+        let auth: PresenceConfig?
+        if let cp = appConfig.controlPlane {
+            await presence.stop()
+            auth = await controlPlane.auth() ?? cp.asPresence()
+        } else {
+            await presence.apply(appConfig.presence)
+            auth = await presence.currentConfig()
+        }
         let effective = await mesh.apply(appConfig, auth: auth)
         return try TunnelConfigurationBuilder.build(from: effective)
+    }
+
+    /// Starts the control plane, or hands a running one the app's new base.
+    private func runControlPlane(for appConfig: BambooTunnelConfig) async {
+        guard let cp = appConfig.controlPlane else {
+            await controlPlane.stop()
+            return
+        }
+        if await controlPlane.isRunning, await controlPlane.auth()?.peerID == cp.peerID {
+            await controlPlane.rebase(appConfig)
+            return
+        }
+        await controlPlane.start(
+            base: appConfig,
+            cfg: cp,
+            bandwidth: { [weak self] in await self?.readBandwidth() },
+            apply: { [weak self] config in await self?.applyFromControlPlane(config) },
+            tokenRenewed: { [weak self] auth in await self?.mesh.updateAuth(auth) },
+            networkChanged: { [weak self] in await self?.mesh.forceRedial() }
+        )
+    }
+
+    private func readBandwidth() async -> TunnelIPC.BandwidthStats? {
+        await withCheckedContinuation { cont in
+            adapter.getRuntimeConfiguration { config in
+                guard let config else { cont.resume(returning: nil); return }
+                let (sent, received) = WGStatsParser.sumBytes(config)
+                cont.resume(returning: .init(bytesSent: sent, bytesReceived: received))
+            }
+        }
+    }
+
+    private func applyFromControlPlane(_ config: BambooTunnelConfig) async {
+        do {
+            let tunnelConfig = try await prepare(config)
+            let err: Error? = await withCheckedContinuation { cont in
+                adapter.update(tunnelConfiguration: tunnelConfig) { cont.resume(returning: $0) }
+            }
+            if let err {
+                log.error("control-plane apply: \(String(describing: err), privacy: .public)")
+            } else {
+                log.log("control-plane apply ok peers=\(config.peers.count, privacy: .public)")
+            }
+        } catch {
+            log.error("control-plane apply build: \(String(describing: error), privacy: .public)")
+        }
     }
 
     private lazy var adapter: WireGuardAdapter = WireGuardAdapter(with: self) { [weak self] level, message in
@@ -71,6 +130,7 @@ final class PacketTunnelProvider_iOS: NEPacketTunnelProvider {
                 }
                 self?.log.log("tunnel up address=\(appConfig.address, privacy: .public) peers=\(appConfig.peers.count)")
                 completionHandler(nil)
+                Task { [weak self] in await self?.runControlPlane(for: appConfig) }
             }
         }
     }
@@ -78,7 +138,8 @@ final class PacketTunnelProvider_iOS: NEPacketTunnelProvider {
     override func stopTunnel(with reason: NEProviderStopReason,
                              completionHandler: @escaping () -> Void) {
         log.log("stopTunnel reason=\(reason.rawValue, privacy: .public)")
-        Task { [presence, mesh] in
+        Task { [presence, mesh, controlPlane] in
+            await controlPlane.stop()
             await presence.stop()
             await mesh.stop()
         }
@@ -109,6 +170,13 @@ final class PacketTunnelProvider_iOS: NEPacketTunnelProvider {
             }
             Task { [weak self] in
                 guard let self else { return }
+                // With the control plane running here, its peer view is the
+                // truth; the app only supplies the base (relay, key, port).
+                if appConfig.controlPlane != nil, await self.controlPlane.isRunning {
+                    await self.runControlPlane(for: appConfig)
+                    completionHandler?(self.encodeOK())
+                    return
+                }
                 let tunnelConfig: TunnelConfiguration
                 do {
                     tunnelConfig = try await self.prepare(appConfig)
@@ -134,6 +202,17 @@ final class PacketTunnelProvider_iOS: NEPacketTunnelProvider {
                 status: .init(connected: true, peerCount: -1)
             )
             completionHandler?((try? TunnelIPC.encode(resp)) ?? Data())
+
+        case .peerSnapshot:
+            Task { [weak self] in
+                guard let self else { return }
+                guard await self.controlPlane.isRunning else {
+                    completionHandler?(self.encodeError("control plane not running"))
+                    return
+                }
+                let snap = await self.controlPlane.snapshot()
+                completionHandler?((try? TunnelIPC.encode(TunnelIPC.Response(ok: true, snapshot: snap))) ?? Data())
+            }
 
         case .bandwidthStats:
             // Mirror of the macOS provider's path — see comments
