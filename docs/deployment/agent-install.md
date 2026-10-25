@@ -63,7 +63,7 @@ The machine appears under Peers in the Web UI within a few seconds.
 | --- | --- |
 | `checksum mismatch` | The download was corrupted or tampered with. Do not install; retry, and check the release page. |
 | `download failed` | The controller's repository has no release yet. A release is created when a `v*` tag is pushed. |
-| `register http` with `pre-auth key not found`, `revoked`, `expired` or `invalid pre-auth key format` | The key was mistyped, revoked, expired or already spent. Create a new one. |
+| `register http` with `pre-auth key already used`, `not found`, `revoked`, `expired` or `invalid pre-auth key format` | The key was mistyped, revoked, expired or already spent. Create a new one. |
 | `dial controller` or `Unavailable` | The proxy does not route gRPC. On the single-VPS stack, check that the Caddyfile has the `/bamboo.v1.*` handler and reload Caddy. |
 | `wireguard kernel module is not available` | Use Linux 5.6 or newer, or install the WireGuard package. |
 | Works as root but not in a container | The container needs `CAP_NET_ADMIN` and `/dev/net/tun`. |
