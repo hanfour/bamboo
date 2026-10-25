@@ -487,6 +487,13 @@ type WGSyncState struct {
 	Endpoint      string    // "" = wg dump says "(none)"; existing column value is kept
 	RxBytes       int64
 	TxBytes       int64
+	// HeartbeatWindow keeps a peer that heartbeated this recently 'online'
+	// even when the dump shows no fresh handshake. A device that does not
+	// peer with this host's WireGuard interface (every app client, any
+	// node that only meshes with other nodes) is live by its heartbeat,
+	// not by a handshake here. Zero disables the rule: status is exactly
+	// what the dump says.
+	HeartbeatWindow time.Duration
 }
 
 // SyncWGState mirrors one peer's state from the host's wg dump into
@@ -495,6 +502,8 @@ type WGSyncState struct {
 //   - status is overwritten EXCEPT when the row is admin-disabled
 //     ('disabled'), in which case the reporter's online/offline
 //     derivation is suppressed and the column sticks at 'disabled'.
+//     An 'offline' verdict is also not applied while the peer's own
+//     heartbeat is within HeartbeatWindow.
 //     Wgsync metrics (endpoint, bytes, handshake) still update so
 //     forensic observability of a disabled peer remains useful.
 //   - last_seen_at and last_handshake_at use GREATEST so a stale
@@ -524,7 +533,12 @@ func (r *Peers) SyncWGState(ctx context.Context, s WGSyncState) (int64, error) {
 	}
 	tag, err := r.pool.Exec(ctx, `
 		UPDATE peers
-		   SET status            = CASE WHEN status = 'disabled' THEN 'disabled' ELSE $1 END,
+		   SET status            = CASE
+		                                 WHEN status = 'disabled' THEN 'disabled'
+		                                 WHEN $1 = 'offline'
+		                                  AND last_seen_at > now() - make_interval(secs => $7::double precision) THEN 'online'
+		                                 ELSE $1
+		                           END,
 		       last_seen_at      = GREATEST(last_seen_at, $2::timestamptz),
 		       last_handshake_at = GREATEST(last_handshake_at, $2::timestamptz),
 		       wg_endpoint       = COALESCE($3, wg_endpoint),
@@ -532,7 +546,7 @@ func (r *Peers) SyncWGState(ctx context.Context, s WGSyncState) (int64, error) {
 		       tx_bytes          = $5,
 		       updated_at        = now()
 		 WHERE wireguard_public_key = $6
-	`, s.Status, handshakeArg, endpointArg, s.RxBytes, s.TxBytes, s.PubKey)
+	`, s.Status, handshakeArg, endpointArg, s.RxBytes, s.TxBytes, s.PubKey, s.HeartbeatWindow.Seconds())
 	if err != nil {
 		return 0, err
 	}
@@ -540,22 +554,30 @@ func (r *Peers) SyncWGState(ctx context.Context, s WGSyncState) (int64, error) {
 }
 
 // MarkOfflineExcept sets status='offline' on every peer whose
-// pubkey is NOT in keepPubKeys. last_seen_at is preserved so the
-// UI can still show "last seen N hours ago" for retired peers.
+// pubkey is NOT in keepPubKeys and that has not heartbeated within
+// heartbeatWindow. last_seen_at is preserved so the UI can still show
+// "last seen N hours ago" for retired peers.
 //
-// An empty keepPubKeys is treated as "skip the sweep this round"
-// rather than "mark every peer offline". The wg-state reporter can
-// briefly observe an empty dump (interface flap, host-script
-// transient error, controller starting before WG is configured)
-// and we don't want one empty observation to flip every peer
-// offline simultaneously. The next non-empty tick catches up.
+// The heartbeat condition matters because liveness has two sources: a
+// WireGuard handshake on this host's interface (the dump), and the
+// peer's own heartbeat. Only the first is in keepPubKeys. A device that
+// meshes with other nodes instead of this host is absent from the dump
+// by design, and sweeping it while it heartbeats made the UI show a
+// connected device as offline.
 //
-// Callers that genuinely want to mark all peers offline should
-// use a separate API; none exists today because there's no
-// production need.
-func (r *Peers) MarkOfflineExcept(ctx context.Context, keepPubKeys []string) error {
-	if len(keepPubKeys) == 0 {
+// With heartbeatWindow zero the old rule applies: an empty keepPubKeys
+// is treated as "skip the sweep this round", because one empty dump
+// (interface flap, host-script hiccup, controller starting before WG is
+// configured) must not flip every peer offline. With a window, an empty
+// dump is safe to act on, since recent heartbeats protect live peers,
+// and it is needed so heartbeat-only peers still decay when the host has
+// no WireGuard peers at all.
+func (r *Peers) MarkOfflineExcept(ctx context.Context, keepPubKeys []string, heartbeatWindow time.Duration) error {
+	if len(keepPubKeys) == 0 && heartbeatWindow <= 0 {
 		return nil
+	}
+	if keepPubKeys == nil {
+		keepPubKeys = []string{}
 	}
 	run := func(q db.Querier) error {
 		_, err := q.Exec(ctx, `
@@ -564,7 +586,9 @@ func (r *Peers) MarkOfflineExcept(ctx context.Context, keepPubKeys []string) err
 		       updated_at = now()
 		 WHERE wireguard_public_key <> ALL($1::text[])
 		   AND status NOT IN ('offline', 'disabled')
-	`, keepPubKeys)
+		   AND (last_seen_at IS NULL
+		        OR last_seen_at < now() - make_interval(secs => $2::double precision))
+	`, keepPubKeys, heartbeatWindow.Seconds())
 		return err
 	}
 	if pool, ok := r.pool.(*db.Pool); ok {

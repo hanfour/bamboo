@@ -265,7 +265,7 @@ func TestPeers_MarkOfflineExcept(t *testing.T) {
 	}
 
 	// Empty keep-list is a no-op (defensive against transient empty dump).
-	if err := peers.MarkOfflineExcept(ctx, nil); err != nil {
+	if err := peers.MarkOfflineExcept(ctx, nil, 0); err != nil {
 		t.Fatalf("MarkOfflineExcept empty: %v", err)
 	}
 	stillKeep, _ := peers.GetByID(ctx, keep.ID)
@@ -276,7 +276,7 @@ func TestPeers_MarkOfflineExcept(t *testing.T) {
 	}
 
 	// Real keep-list: zombie flips, keep stays.
-	if err := peers.MarkOfflineExcept(ctx, []string{keepKey}); err != nil {
+	if err := peers.MarkOfflineExcept(ctx, []string{keepKey}, 0); err != nil {
 		t.Fatalf("MarkOfflineExcept keep-only: %v", err)
 	}
 	gotKeep, _ := peers.GetByID(ctx, keep.ID)
@@ -953,4 +953,109 @@ func TestPeers_UpdateLastSeenAccruesPresence(t *testing.T) {
 	if got := sum() - before; got != int(repo.PresenceMaxGap.Seconds()) {
 		t.Fatalf("after 3h gap credited %ds, want cap %ds", got, int(repo.PresenceMaxGap.Seconds()))
 	}
+}
+
+// A device that heartbeats but never handshakes with this host's
+// WireGuard interface (an app client, or a node that meshes only with
+// other nodes) must stay online. The reporter used to overwrite it with
+// 'offline' on every tick.
+func TestPeers_HeartbeatKeepsStatusOnline(t *testing.T) {
+	pool := requireDB(t)
+	tenants := repo.NewTenants(pool)
+	peers := repo.NewPeers(pool)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	slug := fmt.Sprintf("hbstatus-%s", uuid.NewString()[:8])
+	tenant, err := tenants.GetOrCreate(ctx, slug, "heartbeat status", "100.64.0.0/24")
+	if err != nil {
+		t.Fatalf("GetOrCreate tenant: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, tenant.ID)
+	})
+	newPeer := func(host, ip string) *repo.Peer {
+		p, err := peers.Insert(ctx, &repo.Peer{
+			TenantID: tenant.ID, Hostname: host, WireGuardPublicKey: randomB64(t), IP: ip, Status: "online",
+		})
+		if err != nil {
+			t.Fatalf("Insert %s: %v", host, err)
+		}
+		return p
+	}
+	setSeen := func(p *repo.Peer, ago time.Duration) {
+		if _, err := pool.Exec(ctx, `UPDATE peers SET last_seen_at = now() - make_interval(secs => $2::double precision), status = 'online' WHERE id = $1`, p.ID, ago.Seconds()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	status := func(p *repo.Peer) string {
+		got, err := peers.GetByID(ctx, p.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got.Status
+	}
+	const window = 3 * time.Minute
+
+	t.Run("sync keeps a heartbeating peer online", func(t *testing.T) {
+		p := newPeer("hb-fresh", "100.64.0.51")
+		setSeen(p, 20*time.Second)
+		if _, err := peers.SyncWGState(ctx, repo.WGSyncState{PubKey: p.WireGuardPublicKey, Status: "offline", HeartbeatWindow: window}); err != nil {
+			t.Fatal(err)
+		}
+		if got := status(p); got != "online" {
+			t.Errorf("status = %q, want online", got)
+		}
+	})
+	t.Run("sync still marks a silent peer offline", func(t *testing.T) {
+		p := newPeer("hb-stale", "100.64.0.52")
+		setSeen(p, 10*time.Minute)
+		if _, err := peers.SyncWGState(ctx, repo.WGSyncState{PubKey: p.WireGuardPublicKey, Status: "offline", HeartbeatWindow: window}); err != nil {
+			t.Fatal(err)
+		}
+		if got := status(p); got != "offline" {
+			t.Errorf("status = %q, want offline", got)
+		}
+	})
+	t.Run("zero window keeps the old rule", func(t *testing.T) {
+		p := newPeer("hb-nowindow", "100.64.0.53")
+		setSeen(p, 5*time.Second)
+		if _, err := peers.SyncWGState(ctx, repo.WGSyncState{PubKey: p.WireGuardPublicKey, Status: "offline"}); err != nil {
+			t.Fatal(err)
+		}
+		if got := status(p); got != "offline" {
+			t.Errorf("status = %q, want offline", got)
+		}
+	})
+	t.Run("sweep spares heartbeating peers and takes silent ones", func(t *testing.T) {
+		live := newPeer("sweep-live", "100.64.0.54")
+		dead := newPeer("sweep-dead", "100.64.0.55")
+		setSeen(live, 20*time.Second)
+		setSeen(dead, 10*time.Minute)
+		if err := peers.MarkOfflineExcept(ctx, []string{randomB64(t)}, window); err != nil {
+			t.Fatal(err)
+		}
+		if got := status(live); got != "online" {
+			t.Errorf("live peer = %q, want online", got)
+		}
+		if got := status(dead); got != "offline" {
+			t.Errorf("silent peer = %q, want offline", got)
+		}
+	})
+	t.Run("an empty dump still decays silent peers when a window is set", func(t *testing.T) {
+		live := newPeer("empty-live", "100.64.0.56")
+		dead := newPeer("empty-dead", "100.64.0.57")
+		setSeen(live, 10*time.Second)
+		setSeen(dead, 20*time.Minute)
+		if err := peers.MarkOfflineExcept(ctx, nil, window); err != nil {
+			t.Fatal(err)
+		}
+		if got := status(live); got != "online" {
+			t.Errorf("live peer = %q, want online", got)
+		}
+		if got := status(dead); got != "offline" {
+			t.Errorf("silent peer = %q, want offline", got)
+		}
+	})
 }

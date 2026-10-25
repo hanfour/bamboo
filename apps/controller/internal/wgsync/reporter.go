@@ -30,7 +30,7 @@ const (
 // peer manually `wg set`d on the host that never registered via REST.
 type PeerStore interface {
 	SyncWGState(ctx context.Context, state repo.WGSyncState) (int64, error)
-	MarkOfflineExcept(ctx context.Context, pubkeys []string) error
+	MarkOfflineExcept(ctx context.Context, pubkeys []string, heartbeatWindow time.Duration) error
 }
 
 // Reporter reconciles peer liveness from a wg-show-dump file.
@@ -146,6 +146,9 @@ func (r *Reporter) applyStates(ctx context.Context, states []PeerState) error {
 			Endpoint:      s.Endpoint,
 			RxBytes:       s.RxBytes,
 			TxBytes:       s.TxBytes,
+			// A peer that heartbeats is live even without a handshake
+			// here (see repo.WGSyncState.HeartbeatWindow).
+			HeartbeatWindow: r.onlineWindow,
 		})
 		if err != nil {
 			return fmt.Errorf("sync wg state pubkey=%s: %w", s.PublicKey, err)
@@ -159,13 +162,12 @@ func (r *Reporter) applyStates(ctx context.Context, states []PeerState) error {
 			slog.Debug("wgsync: pubkey in wg dump has no peers row", "pubkey", s.PublicKey)
 		}
 	}
-	// Peers in the DB whose pubkey is no longer in the wg dump are
-	// zombies (e.g. removed via `wg set ... peer ... remove`). Mark
-	// them offline rather than deleting the row, per the design
-	// decision to keep history. The repo treats an empty pubkeys
-	// list as "skip the sweep" so a transient empty dump doesn't
-	// flip every peer offline at once.
-	if err := r.peers.MarkOfflineExcept(ctx, pubkeys); err != nil {
+	// Peers in the DB whose pubkey is not in the wg dump are marked
+	// offline rather than deleted, per the design decision to keep
+	// history, unless they heartbeated within the online window. Not
+	// being in the dump is normal for a device that meshes with other
+	// nodes and not with this host, and its heartbeat is its liveness.
+	if err := r.peers.MarkOfflineExcept(ctx, pubkeys, r.onlineWindow); err != nil {
 		return fmt.Errorf("mark zombies offline: %w", err)
 	}
 	return nil
