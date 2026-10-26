@@ -57,6 +57,21 @@ The machine appears under Peers in the Web UI within a few seconds.
 > report the mesh IP. Do not print the key again, write it to a file or commit
 > it. If the command fails after registering, do not retry; tell me.
 
+## Remote shell is off, and `--session-exec` means root
+
+The unit that `install-service` writes runs `bamboo up` without
+`--session-exec`. In that mode the device accepts messages and file
+transfers from the desk, and refuses to start a terminal.
+
+Do not add `--session-exec` unless you want an admin of this tenant to have a
+shell on the machine. The service runs as root, so that shell is a **root
+shell**. Terminal start and close are audited (`peer.desk.term`,
+`peer.desk.term.close`); the commands and output are not recorded.
+
+The unit sets `NoNewPrivileges=true`, so programs started from that shell
+cannot gain more privileges through setuid binaries such as `sudo`. That is a
+small extra limit, not a sandbox: the shell is already root.
+
 ## What can go wrong
 
 | Symptom | Cause and fix |

@@ -107,10 +107,15 @@ func TestRenderEnvFileAndUnit(t *testing.T) {
 		"ExecStart=/usr/local/bin/bamboo up\n",
 		"XDG_CONFIG_HOME=/var/lib/bamboo",
 		"Restart=always",
+		"NoNewPrivileges=true",
 	} {
 		if !strings.Contains(unit, want) {
 			t.Errorf("unit missing %q:\n%s", want, unit)
 		}
+	}
+	// The unit runs as root, so a remote shell must stay an explicit opt-in.
+	if strings.Contains(unit, "session-exec") {
+		t.Errorf("unit must not enable --session-exec:\n%s", unit)
 	}
 	if strings.Contains(unit, "bka_") {
 		t.Error("the pre-auth key must not appear in the unit file")
