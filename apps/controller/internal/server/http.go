@@ -263,6 +263,21 @@ func (s *statusRecorder) Flush() {
 	}
 }
 
+// Unwrap lets http.ResponseController reach the underlying writer, so a
+// handler behind this middleware can still adjust its connection deadlines.
+func (s *statusRecorder) Unwrap() http.ResponseWriter { return s.ResponseWriter }
+
+// clearStreamDeadlines lifts the server-wide read and write deadlines for a
+// long-lived stream. http.Server.WriteTimeout bounds the whole response, so
+// without this an SSE stream is cut at that mark (30s) no matter how many
+// keepalives it sends, and every client reconnects and re-syncs twice a
+// minute.
+func clearStreamDeadlines(w http.ResponseWriter) {
+	rc := http.NewResponseController(w)
+	_ = rc.SetWriteDeadline(time.Time{})
+	_ = rc.SetReadDeadline(time.Time{})
+}
+
 // normalizeRoute collapses UUID-bearing paths to patterns so the
 // metrics cardinality stays bounded. The router itself uses
 // strings.CutPrefix / CutSuffix to dispatch, so we mirror its
