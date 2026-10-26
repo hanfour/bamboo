@@ -128,6 +128,10 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             )
             completionHandler?((try? TunnelIPC.encode(resp)) ?? Data())
 
+        case .peerSnapshot:
+            // The control plane runs in the app on macOS, not here.
+            completionHandler?(self.encodeError("control plane not running"))
+
         case .bandwidthStats:
             // adapter.getRuntimeConfiguration returns the wg-uapi
             // config string asynchronously. WGStatsParser sums
