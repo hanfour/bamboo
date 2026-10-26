@@ -29,6 +29,11 @@ public enum TunnelIPC {
         /// the CLI's REST plumb in PR #188). Out-of-process because
         /// the wg interface lives in the extension, not the app.
         case bandwidthStats
+
+        /// The host app asks for the peer name list the extension's control
+        /// plane currently holds, so the app (which the extension cannot
+        /// reach through the App Group) can refresh the MagicDNS map.
+        case peerSnapshot
     }
 
     /// Request envelope sent app -> extension.
@@ -51,8 +56,11 @@ public enum TunnelIPC {
         public let error: String?
         public let status: TunnelStatus?
         public let bandwidth: BandwidthStats?
+        public let snapshot: PeerSnapshot?
 
-        public init(ok: Bool, error: String? = nil, status: TunnelStatus? = nil, bandwidth: BandwidthStats? = nil) {
+        public init(ok: Bool, error: String? = nil, status: TunnelStatus? = nil, bandwidth: BandwidthStats? = nil,
+                    snapshot: PeerSnapshot? = nil) {
+            self.snapshot = snapshot
             self.ok = ok
             self.error = error
             self.status = status
@@ -69,6 +77,34 @@ public enum TunnelIPC {
         public init(connected: Bool, peerCount: Int) {
             self.connected = connected
             self.peerCount = peerCount
+        }
+    }
+
+    /// PeerSnapshot is what `kind=peerSnapshot` returns. dnsName is the
+    /// MagicDNS label without the domain.
+    public struct PeerSnapshot: Codable, Equatable {
+        public struct Entry: Codable, Equatable {
+            public let dnsName: String
+            public let hostname: String
+            public let ip: String
+            public let ip6: String?
+
+            public init(dnsName: String, hostname: String, ip: String, ip6: String?) {
+                self.dnsName = dnsName
+                self.hostname = hostname
+                self.ip = ip
+                self.ip6 = ip6
+            }
+        }
+
+        public let peers: [Entry]
+        public let dns64Enabled: Bool
+        public let nat64Prefix: String
+
+        public init(peers: [Entry], dns64Enabled: Bool, nat64Prefix: String) {
+            self.peers = peers
+            self.dns64Enabled = dns64Enabled
+            self.nat64Prefix = nat64Prefix
         }
     }
 

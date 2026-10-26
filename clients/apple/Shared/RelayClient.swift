@@ -38,7 +38,9 @@ public actor RelayClient {
     private var keepaliveTask: Task<Void, Never>?
 
     private let selfKey: Data
-    private let token: String
+    private var token: String
+    private var relayURL: URL?
+    private var onDisconnect: (@Sendable () -> Void)?
     private let wgListenAddr: NWEndpoint  // 127.0.0.1:<wg port>
 
     private var peers: [Data: PeerSocket] = [:]
@@ -69,6 +71,33 @@ public actor RelayClient {
     /// handshake fails with NSURLErrorBadServerResponse. Normalise
     /// here so the user-facing URL doesn't need the path.
     public func dial(relayURL: URL) async throws {
+        self.relayURL = relayURL
+        try await connect()
+    }
+
+    /// Called once when the WebSocket read loop ends without close()
+    /// (relay restart, network change, the app or extension resumed
+    /// after a suspension). The owner decides when to redial.
+    public func setOnDisconnect(_ handler: (@Sendable () -> Void)?) {
+        onDisconnect = handler
+    }
+
+    /// Replace a dead WebSocket with a fresh one using a new token. The
+    /// per-peer local proxies stay bound to the same ports, so WireGuard's
+    /// endpoints do not change and no config rebuild is needed.
+    public func redial(token newToken: String) async throws {
+        token = newToken
+        readTask?.cancel()
+        readTask = nil
+        keepaliveTask?.cancel()
+        keepaliveTask = nil
+        task?.cancel(with: .goingAway, reason: nil)
+        task = nil
+        try await connect()
+    }
+
+    private func connect() async throws {
+        guard let relayURL else { throw Error.closed }
         let normalised: URL = {
             let path = relayURL.path
             if path.isEmpty || path == "/" {
@@ -252,6 +281,7 @@ public actor RelayClient {
             } catch {
                 if !Task.isCancelled {
                     log.warning("relay read: \(String(describing: error), privacy: .public)")
+                    onDisconnect?()
                 }
                 return
             }

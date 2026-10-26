@@ -106,7 +106,9 @@ public struct PeerState: Equatable {
                              dnsServers: [String],
                              mtu: UInt16?,
                              wgListenPort: UInt16,
-                             presence: PresenceConfig?) -> BambooTunnelConfig? {
+                             presence: PresenceConfig?,
+                             relay: RelayConfig? = nil,
+                             controlPlane: ControlPlaneConfig? = nil) -> BambooTunnelConfig? {
         guard let selfIPv4 else { return nil }
         return BambooTunnelConfig(
             privateKey: privateKey,
@@ -116,7 +118,9 @@ public struct PeerState: Equatable {
             mtu: mtu,
             wgListenPort: wgListenPort,
             peers: peerConfigs(),
-            presence: presence
+            presence: presence,
+            relay: relay,
+            controlPlane: controlPlane
         )
     }
 }
