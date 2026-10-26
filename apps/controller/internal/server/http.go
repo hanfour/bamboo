@@ -14,6 +14,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -57,6 +58,7 @@ type HTTPServer struct {
 	anomalies   *clickhouse.Anomalies
 	connEvents  *clickhouse.ConnectionEvents
 	coord       *handlers.CoordinatorHandler
+	deskTerms   sync.Map // opID -> deskTermMeta, until the session ends
 	metrics     *metrics.Registry
 	publisher   *webhooks.Publisher
 	releaseFeed *releasefeed.Feed
@@ -196,6 +198,7 @@ func NewHTTPServer(
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      30 * time.Second,
 	}
+	h.watchDeskSessions()
 	return h
 }
 

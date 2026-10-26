@@ -168,6 +168,8 @@ func (h *HTTPServer) apiDeskTermStart(w http.ResponseWriter, r *http.Request, au
 	ctx, cancel := h.deskContext(r, tenant.ID)
 	defer cancel()
 	opID := uuid.NewString()
+	// Stored before the call: the shell can exit before DeskCall returns.
+	h.rememberDeskTerm(r, authn, tenant, opID)
 	res, err := h.coord.DeskCall(ctx, peerID, operate.Frame{
 		OpID: opID,
 		Kind: operate.KindPTYStart,
@@ -175,6 +177,7 @@ func (h *HTTPServer) apiDeskTermStart(w http.ResponseWriter, r *http.Request, au
 		Cols: body.Cols,
 	})
 	if err != nil {
+		h.deskTerms.Delete(opID)
 		if !deskLookupErr(err) {
 			h.auditDesk(r, authn, tenant, peerID, "peer.desk.term", map[string]any{"ok": false, "error": err.Error()})
 		}
@@ -182,6 +185,7 @@ func (h *HTTPServer) apiDeskTermStart(w http.ResponseWriter, r *http.Request, au
 		return
 	}
 	if !res.OK {
+		h.deskTerms.Delete(opID)
 		h.auditDesk(r, authn, tenant, peerID, "peer.desk.term", map[string]any{"ok": false, "error": res.Error})
 		writeError(w, deskResultStatus(res), errors.New(deskResultError(res)))
 		return
@@ -505,4 +509,80 @@ func deskFilename(path string) string {
 		return "download"
 	}
 	return name
+}
+
+// deskTermMeta is who opened a terminal, kept until it ends so the end
+// event can be audited under the same actor after the request is gone.
+type deskTermMeta struct {
+	tenantID  uuid.UUID
+	actorType string
+	actorID   *uuid.UUID
+	userAgent string
+}
+
+func (h *HTTPServer) rememberDeskTerm(r *http.Request, authn *authnContext, tenant *repo.Tenant, opID string) {
+	if tenant == nil {
+		return
+	}
+	m := deskTermMeta{tenantID: tenant.ID, actorType: "system", userAgent: r.UserAgent()}
+	if authn != nil && authn.claims != nil {
+		id := authn.claims.UserID
+		m.actorType = "user"
+		m.actorID = &id
+	} else if authn != nil && authn.apiToken != nil {
+		m.actorType = "api"
+	}
+	h.deskTerms.Store(opID, m)
+}
+
+// watchDeskSessions audits the end of every terminal session: how long it
+// ran, how many bytes each way, and why it ended. Contents are not kept.
+func (h *HTTPServer) watchDeskSessions() {
+	if h.coord == nil {
+		return
+	}
+	h.coord.OnDeskSessionEnd(func(peerID uuid.UUID, e operate.PTYEnd) {
+		v, ok := h.deskTerms.LoadAndDelete(e.OpID)
+		if !ok {
+			return
+		}
+		m := v.(deskTermMeta)
+		ev, err := deskTermEndEvent(m, peerID, e)
+		if err != nil {
+			slog.Warn("desk audit", "err", err)
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		h.auditInTenant(ctx, m.tenantID, ev)
+	})
+}
+
+// deskTermEndEvent builds the audit row for a finished terminal session.
+func deskTermEndEvent(m deskTermMeta, peerID uuid.UUID, e operate.PTYEnd) (*repo.AuditEvent, error) {
+	raw, err := json.Marshal(map[string]any{
+		"opId":       e.OpID,
+		"reason":     e.Reason,
+		"exitCode":   e.ExitCode,
+		"durationMs": e.Duration.Milliseconds(),
+		"bytesIn":    e.BytesIn,
+		"bytesOut":   e.BytesOut,
+	})
+	if err != nil {
+		return nil, err
+	}
+	ev := &repo.AuditEvent{
+		TenantID:     &m.tenantID,
+		ActorType:    m.actorType,
+		ActorID:      m.actorID,
+		Action:       "peer.desk.term.end",
+		ResourceType: "peer",
+		ResourceID:   &peerID,
+		Diff:         raw,
+	}
+	if m.userAgent != "" {
+		ua := m.userAgent
+		ev.UserAgent = &ua
+	}
+	return ev, nil
 }

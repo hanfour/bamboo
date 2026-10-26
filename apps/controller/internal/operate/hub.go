@@ -81,6 +81,35 @@ type Hub struct {
 	links   map[string]*link
 	waiters map[string]map[string]chan Result
 	pty     map[string]*ptySess
+	onEnd   func(peerID string, e PTYEnd)
+}
+
+// Why a terminal session ended.
+const (
+	EndExit         = "exit"         // the shell exited, or an admin closed it
+	EndReplaced     = "replaced"     // a newer shell started on the same device
+	EndDisconnected = "disconnected" // the device stream dropped
+	EndFailed       = "failed"       // the start frame never reached the device
+)
+
+// PTYEnd summarises one finished terminal session. It never holds the
+// terminal's contents, only sizes and timing.
+type PTYEnd struct {
+	OpID     string
+	Reason   string
+	ExitCode int // -1 when the device did not report one
+	Started  time.Time
+	Duration time.Duration
+	BytesIn  int64 // admin to device (keystrokes)
+	BytesOut int64 // device to admin (output)
+}
+
+// SetOnPTYEnd registers fn to be called once for every terminal session
+// that ends. fn runs on its own goroutine.
+func (h *Hub) SetOnPTYEnd(fn func(peerID string, e PTYEnd)) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.onEnd = fn
 }
 
 type link struct {
@@ -99,10 +128,30 @@ type ptySess struct {
 	bytes    chan []byte
 	finished chan struct{}
 	once     sync.Once
+	started  time.Time
+	bytesIn  atomic.Int64
+	bytesOut atomic.Int64
 }
 
-func (s *ptySess) finish() {
-	s.once.Do(func() { close(s.finished) })
+// finish closes the session once and reports it to onEnd, if set.
+func (s *ptySess) finish(h *Hub, peerID, reason string, exit int) {
+	s.once.Do(func() {
+		close(s.finished)
+		if h.onEnd == nil {
+			return
+		}
+		fn := h.onEnd
+		e := PTYEnd{
+			OpID:     s.opID,
+			Reason:   reason,
+			ExitCode: exit,
+			Started:  s.started,
+			Duration: time.Since(s.started),
+			BytesIn:  s.bytesIn.Load(),
+			BytesOut: s.bytesOut.Load(),
+		}
+		go fn(peerID, e)
+	})
 }
 
 // NewHub returns an empty desk router.
@@ -145,7 +194,7 @@ func (h *Hub) dropLinkLocked(peerID string, l *link) {
 	delete(h.links, peerID)
 	l.close()
 	delete(h.waiters, peerID)
-	h.finishPTYLocked(peerID, "")
+	h.finishPTYLocked(peerID, "", EndDisconnected, -1)
 }
 
 // Call sends f and waits for the matching result. A pty-start registers
@@ -192,7 +241,7 @@ func (h *Hub) Call(ctx context.Context, peerID string, f Frame) (Result, error) 
 		if f.Kind == KindPTYStart {
 			h.mu.Lock()
 			if s := h.pty[peerID]; s != nil && s.opID == f.OpID {
-				s.finish()
+				s.finish(h, peerID, EndFailed, -1)
 				delete(h.pty, peerID)
 			}
 			h.mu.Unlock()
@@ -244,9 +293,18 @@ func (h *Hub) Push(ctx context.Context, peerID string, f Frame) error {
 		return ErrOffline
 	}
 	out, done := l.out, l.done
+	var sess *ptySess
+	if f.Kind == KindPTYData {
+		if s := h.pty[peerID]; s != nil && s.opID == f.OpID {
+			sess = s
+		}
+	}
 	h.mu.Unlock()
 	select {
 	case out <- f:
+		if sess != nil {
+			sess.bytesIn.Add(int64(len(f.Data)))
+		}
 		return nil
 	case <-done:
 		return ErrOffline
@@ -272,7 +330,7 @@ func (h *Hub) Result(peerID string, res Result) {
 			return
 		}
 	}
-	h.finishPTYLocked(peerID, res.OpID)
+	h.finishPTYLocked(peerID, res.OpID, EndExit, res.ExitCode)
 }
 
 // Output forwards terminal bytes for opID. Bytes for a different shell
@@ -287,6 +345,7 @@ func (h *Hub) Output(peerID, opID string, data []byte) {
 	if s == nil || s.opID != opID {
 		return
 	}
+	s.bytesOut.Add(int64(len(data)))
 	chunk := append([]byte(nil), data...)
 	select {
 	case s.bytes <- chunk:
@@ -319,16 +378,17 @@ func (h *Hub) ExecEnabled(peerID string) (enabled, online bool) {
 
 func (h *Hub) replacePTYLocked(peerID, opID string) {
 	if old := h.pty[peerID]; old != nil {
-		old.finish()
+		old.finish(h, peerID, EndReplaced, -1)
 	}
 	h.pty[peerID] = &ptySess{
 		opID:     opID,
+		started:  time.Now(),
 		bytes:    make(chan []byte, ptyCap),
 		finished: make(chan struct{}),
 	}
 }
 
-func (h *Hub) finishPTYLocked(peerID, opID string) {
+func (h *Hub) finishPTYLocked(peerID, opID, reason string, exit int) {
 	s := h.pty[peerID]
 	if s == nil {
 		return
@@ -336,7 +396,7 @@ func (h *Hub) finishPTYLocked(peerID, opID string) {
 	if opID != "" && s.opID != opID {
 		return
 	}
-	s.finish()
+	s.finish(h, peerID, reason, exit)
 }
 
 func (h *Hub) forget(peerID, opID string) {

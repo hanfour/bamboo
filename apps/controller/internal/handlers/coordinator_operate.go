@@ -213,6 +213,21 @@ func (h *CoordinatorHandler) DeskSubscribe(ctx context.Context, peerID uuid.UUID
 	return sub, nil
 }
 
+// OnDeskSessionEnd calls fn on its own goroutine each time a terminal
+// session on a device ends. It carries sizes and timing, never contents.
+func (h *CoordinatorHandler) OnDeskSessionEnd(fn func(peerID uuid.UUID, e operate.PTYEnd)) {
+	if h == nil || h.ops == nil || fn == nil {
+		return
+	}
+	h.ops.SetOnPTYEnd(func(peerID string, e operate.PTYEnd) {
+		id, err := uuid.Parse(peerID)
+		if err != nil {
+			return
+		}
+		fn(id, e)
+	})
+}
+
 func (h *CoordinatorHandler) requireDesk(ctx context.Context, peerID uuid.UUID) error {
 	if h == nil || h.ops == nil {
 		return status.Error(codes.FailedPrecondition, "operate hub unavailable")

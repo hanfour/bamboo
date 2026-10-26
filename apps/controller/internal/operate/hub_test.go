@@ -208,3 +208,75 @@ func recvFrame(t *testing.T, frames <-chan Frame) Frame {
 		return Frame{}
 	}
 }
+
+// startTerm opens a terminal on peer and answers the start request.
+func startTerm(t *testing.T, h *Hub, frames <-chan Frame, opID string) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = h.Call(context.Background(), "peer", Frame{OpID: opID, Kind: KindPTYStart, Rows: 24, Cols: 80})
+	}()
+	recvFrame(t, frames)
+	h.Result("peer", Result{OpID: opID, OK: true})
+	<-done
+}
+
+func recvEnd(t *testing.T, ch <-chan PTYEnd) PTYEnd {
+	t.Helper()
+	select {
+	case e := <-ch:
+		return e
+	case <-time.After(time.Second):
+		t.Fatal("no PTYEnd")
+		return PTYEnd{}
+	}
+}
+
+func TestPTYEndReportsSizesAndExit(t *testing.T) {
+	h := NewHub()
+	ends := make(chan PTYEnd, 4)
+	h.SetOnPTYEnd(func(_ string, e PTYEnd) { ends <- e })
+	frames, _, detach := h.Attach("peer", true)
+	defer detach()
+	startTerm(t, h, frames, "op-1")
+
+	if err := h.Push(context.Background(), "peer", Frame{OpID: "op-1", Kind: KindPTYData, Data: []byte("ls\n")}); err != nil {
+		t.Fatal(err)
+	}
+	// Input for another shell is not counted.
+	if err := h.Push(context.Background(), "peer", Frame{OpID: "other", Kind: KindPTYData, Data: []byte("xxxx")}); err != nil {
+		t.Fatal(err)
+	}
+	h.Output("peer", "op-1", []byte("file1\nfile2\n"))
+	h.Result("peer", Result{OpID: "op-1", OK: true, ExitCode: 3})
+
+	e := recvEnd(t, ends)
+	if e.OpID != "op-1" || e.Reason != EndExit || e.ExitCode != 3 || e.BytesIn != 3 || e.BytesOut != 12 {
+		t.Fatalf("end = %+v", e)
+	}
+	if e.Started.IsZero() || e.Duration < 0 {
+		t.Fatalf("timing = %+v", e)
+	}
+	select {
+	case extra := <-ends:
+		t.Fatalf("reported twice: %+v", extra)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+func TestPTYEndOnDisconnectAndReplace(t *testing.T) {
+	h := NewHub()
+	ends := make(chan PTYEnd, 4)
+	h.SetOnPTYEnd(func(_ string, e PTYEnd) { ends <- e })
+	frames, _, detach := h.Attach("peer", true)
+	startTerm(t, h, frames, "op-1")
+	startTerm(t, h, frames, "op-2")
+	if e := recvEnd(t, ends); e.OpID != "op-1" || e.Reason != EndReplaced || e.ExitCode != -1 {
+		t.Fatalf("replaced = %+v", e)
+	}
+	detach()
+	if e := recvEnd(t, ends); e.OpID != "op-2" || e.Reason != EndDisconnected {
+		t.Fatalf("disconnected = %+v", e)
+	}
+}
