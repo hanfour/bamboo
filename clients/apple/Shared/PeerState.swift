@@ -94,7 +94,8 @@ public struct PeerState: Equatable {
                     publicKey: p.wireguardPublicKey,
                     allowedIPs: allowed,
                     endpoint: relayEndpoints[p.id] ?? p.endpoints?.first,
-                    persistentKeepalive: 25
+                    persistentKeepalive: 25,
+                    candidates: p.endpoints
                 )
             }
             .sorted { $0.id < $1.id }

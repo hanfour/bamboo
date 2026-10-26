@@ -17,9 +17,34 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     /// extension, so it survives the app quitting. See RelayMesh.
     private let mesh = RelayMesh()
 
-    private func prepare(_ appConfig: BambooTunnelConfig) async throws -> TunnelConfiguration {
+    private func prepare(_ appConfig: BambooTunnelConfig) async throws -> (effective: BambooTunnelConfig, tunnel: TunnelConfiguration) {
         let effective = await mesh.apply(appConfig, auth: appConfig.presence)
-        return try TunnelConfigurationBuilder.build(from: effective)
+        return (effective, try TunnelConfigurationBuilder.build(from: effective))
+    }
+
+    /// The config the app last sent, applied again when a peer moves
+    /// between the relay and a direct address.
+    private var lastAppConfig: BambooTunnelConfig?
+
+    private func runtimeDump() async -> String? {
+        await withCheckedContinuation { cont in
+            adapter.getRuntimeConfiguration { cont.resume(returning: $0) }
+        }
+    }
+
+    private func reapplyForPathChange() async {
+        guard let appConfig = lastAppConfig else { return }
+        do {
+            let prepared = try await prepare(appConfig)
+            let err: Error? = await withCheckedContinuation { cont in
+                adapter.update(tunnelConfiguration: prepared.tunnel) { cont.resume(returning: $0) }
+            }
+            if let err {
+                log.error("path change apply: \(String(describing: err), privacy: .public)")
+            }
+        } catch {
+            log.error("path change build: \(String(describing: error), privacy: .public)")
+        }
     }
 
     private lazy var adapter: WireGuardAdapter = WireGuardAdapter(with: self) { [weak self] level, message in
@@ -49,22 +74,30 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
 
         Task { [weak self] in
             guard let self else { return }
-            let tunnelConfig: TunnelConfiguration
+            let prepared: (effective: BambooTunnelConfig, tunnel: TunnelConfiguration)
             do {
-                tunnelConfig = try await self.prepare(appConfig)
+                prepared = try await self.prepare(appConfig)
             } catch {
                 self.log.error("startTunnel: build config: \(String(describing: error), privacy: .public)")
                 completionHandler(error)
                 return
             }
-            self.adapter.start(tunnelConfiguration: tunnelConfig) { [weak self] error in
+            self.adapter.start(tunnelConfiguration: prepared.tunnel) { [weak self] error in
                 if let error = error {
                     self?.log.error("adapter.start: \(String(describing: error), privacy: .public)")
                     completionHandler(error)
                     return
                 }
                 self?.log.log("tunnel up address=\(appConfig.address, privacy: .public) peers=\(appConfig.peers.count)")
+                self?.lastAppConfig = appConfig
                 completionHandler(nil)
+                Task { [weak self] in
+                    guard let self else { return }
+                    await self.mesh.enableDirectPaths(
+                        stats: { [weak self] in await self?.runtimeDump() },
+                        changed: { [weak self] in await self?.reapplyForPathChange() }
+                    )
+                }
             }
         }
     }
@@ -100,15 +133,16 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             }
             Task { [weak self] in
                 guard let self else { return }
-                let tunnelConfig: TunnelConfiguration
+                self.lastAppConfig = appConfig
+                let prepared: (effective: BambooTunnelConfig, tunnel: TunnelConfiguration)
                 do {
-                    tunnelConfig = try await self.prepare(appConfig)
+                    prepared = try await self.prepare(appConfig)
                 } catch {
                     self.log.error("applyConfig build: \(String(describing: error), privacy: .public)")
                     completionHandler?(self.encodeError("build: \(error)"))
                     return
                 }
-                self.adapter.update(tunnelConfiguration: tunnelConfig) { [weak self] error in
+                self.adapter.update(tunnelConfiguration: prepared.tunnel) { [weak self] error in
                     if let error = error {
                         self?.log.error("adapter.update: \(String(describing: error), privacy: .public)")
                         completionHandler?(self?.encodeError("update: \(error)"))

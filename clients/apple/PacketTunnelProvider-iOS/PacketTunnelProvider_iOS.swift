@@ -52,6 +52,19 @@ final class PacketTunnelProvider_iOS: NEPacketTunnelProvider {
     private var stopping = false
     private var recovering = false
 
+    private func runtimeDump() async -> String? {
+        await withCheckedContinuation { cont in
+            adapter.getRuntimeConfiguration { cont.resume(returning: $0) }
+        }
+    }
+
+    /// A peer moved between the relay and a direct address: apply the same
+    /// base config again so the mesh hands WireGuard the new endpoints.
+    private func reapplyForPathChange() async {
+        guard let base = lastBase else { return }
+        await applyFromControlPlane(base)
+    }
+
     /// WireGuard closes its device for good when reading the tun fails
     /// (seen as "no buffer space available"). Every later update then fails
     /// with "device closed" and the tunnel looks up but carries nothing, so
@@ -182,7 +195,14 @@ final class PacketTunnelProvider_iOS: NEPacketTunnelProvider {
                 self?.lastBase = appConfig
                 self?.log.log("tunnel up address=\(appConfig.address, privacy: .public) peers=\(appConfig.peers.count)")
                 completionHandler(nil)
-                Task { [weak self] in await self?.runControlPlane(for: appConfig) }
+                Task { [weak self] in
+                    guard let self else { return }
+                    await self.mesh.enableDirectPaths(
+                        stats: { [weak self] in await self?.runtimeDump() },
+                        changed: { [weak self] in await self?.reapplyForPathChange() }
+                    )
+                    await self.runControlPlane(for: appConfig)
+                }
             }
         }
     }

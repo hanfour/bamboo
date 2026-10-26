@@ -33,7 +33,10 @@ public actor HeartbeatLoop {
                       bandwidthStats: @Sendable @escaping () async -> TunnelIPC.BandwidthStats? = { nil },
                       onPolicyChanged: @Sendable @escaping (Int64) -> Void = { _ in },
                       onPeersChanged: @Sendable @escaping () -> Void = {},
-                      onSessionRenewed: @Sendable @escaping (String) -> Void = { _ in }) {
+                      onSessionRenewed: @Sendable @escaping (String) -> Void = { _ in },
+                      endpoints discover: @Sendable @escaping () async -> [String]? = {
+                          (try? await STUNClient.discover()).map { [$0] }
+                      }) {
         task?.cancel()
         let log = self.log
         task = Task {
@@ -47,12 +50,7 @@ public actor HeartbeatLoop {
 
                 // Refresh STUN. Failure is non-fatal — we still
                 // heartbeat with a nil endpoints list.
-                var endpoints: [String]? = nil
-                do {
-                    endpoints = [try await STUNClient.discover()]
-                } catch {
-                    log.debug("heartbeat stun refresh failed: \(String(describing: error), privacy: .public)")
-                }
+                let endpoints = await discover()
 
                 // Pull cumulative wg byte counters from the
                 // extension via TunnelIPC.bandwidthStats. nil ⇒

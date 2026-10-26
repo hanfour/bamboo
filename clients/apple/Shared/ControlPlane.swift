@@ -220,9 +220,12 @@ public actor ControlPlane {
     private func beat() async {
         guard let cfg, let client = client() else { return }
         var endpoints: [String]? = nil
-        if let ep = try? await STUNClient.discover() {
-            endpoints = [ep]
-            lastEndpoints = endpoints
+        if let port = base?.wgListenPort {
+            let found = await EndpointDiscovery.candidates(wgPort: port)
+            if !found.isEmpty {
+                endpoints = found
+                lastEndpoints = found
+            }
         }
         let bw = await bandwidth?()
         do {

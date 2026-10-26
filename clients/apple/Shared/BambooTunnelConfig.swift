@@ -15,17 +15,30 @@ public struct BambooPeerConfig: Codable, Equatable {
     public let allowedIPs: [String]       // CIDRs the peer should be reachable on
     public let endpoint: String?          // host:port; nil while STUN/relay isn't wired
     public let persistentKeepalive: UInt16?
+    /// Every direct address the peer advertised, in the order to try them.
+    /// Only RelayMesh reads this, to decide when to leave the relay; the
+    /// config it hands to WireGuard no longer carries it.
+    public let candidates: [String]?
+
+    /// The same peer without its candidate list, for configs that go to
+    /// WireGuard.
+    public func withoutCandidates() -> BambooPeerConfig {
+        BambooPeerConfig(id: id, publicKey: publicKey, allowedIPs: allowedIPs,
+                         endpoint: endpoint, persistentKeepalive: persistentKeepalive)
+    }
 
     public init(id: String,
                 publicKey: String,
                 allowedIPs: [String],
                 endpoint: String? = nil,
-                persistentKeepalive: UInt16? = nil) {
+                persistentKeepalive: UInt16? = nil,
+                candidates: [String]? = nil) {
         self.id = id
         self.publicKey = publicKey
         self.allowedIPs = allowedIPs
         self.endpoint = endpoint
         self.persistentKeepalive = persistentKeepalive
+        self.candidates = candidates
     }
 }
 

@@ -25,11 +25,33 @@ public actor RelayMesh {
     private var proxied: [String: String] = [:]   // peer public key (base64) -> proxy endpoint
     private var redialTask: Task<Void, Never>?
 
-    public init() {}
+    // Direct-path upgrade. See PathSelector.
+    private var selector = PathSelector()
+    private var observations: [String: WGPeerObservation] = [:]
+    private var lastPeers: [BambooPeerConfig] = []
+    private var appliedPaths: [String: PeerPath] = [:]
+    private var pathStats: (@Sendable () async -> String?)?
+    private var onPathChange: (@Sendable () async -> Void)?
+    private var pathTask: Task<Void, Never>?
+    private let lanAddresses: @Sendable () -> [String]
+
+    public init(lanAddresses: @escaping @Sendable () -> [String] = { EndpointDiscovery.lanIPv4Addresses() }) {
+        self.lanAddresses = lanAddresses
+    }
+
+    /// Lets the mesh watch WireGuard and move peers between the relay and
+    /// a direct address. `stats` returns the UAPI dump; `changed` asks the
+    /// owner to apply the config again once a peer's path moved.
+    public func enableDirectPaths(stats: @escaping @Sendable () async -> String?,
+                                  changed: @escaping @Sendable () async -> Void) {
+        pathStats = stats
+        onPathChange = changed
+        startPathTask()
+    }
 
     public func apply(_ config: BambooTunnelConfig, auth newAuth: PresenceConfig?) async -> BambooTunnelConfig {
         guard let relayCfg = config.relay, let url = URL(string: relayCfg.url), let newAuth else {
-            await stop()
+            await closeRelay()
             return config
         }
         auth = newAuth
@@ -51,29 +73,77 @@ public actor RelayMesh {
         }
         guard let client else { return config }
 
+        lastPeers = config.peers
+        let paths = resolvePaths(now: Date())
+        appliedPaths = paths
+
         var peers: [BambooPeerConfig] = []
         var live = Set<String>()
         for p in config.peers {
             guard let key = Data(base64Encoded: p.publicKey), key.count == RelayClient.pubKeyLen else {
-                peers.append(p)
+                peers.append(p.withoutCandidates())
                 continue
             }
             live.insert(p.publicKey)
             do {
-                let endpoint = try await client.addPeer(key)
+                var endpoint = try await client.addPeer(key)
                 proxied[p.publicKey] = endpoint
+                if case .direct(let d) = paths[p.publicKey] { endpoint = d }
                 peers.append(BambooPeerConfig(id: p.id, publicKey: p.publicKey, allowedIPs: p.allowedIPs,
                                               endpoint: endpoint, persistentKeepalive: p.persistentKeepalive))
             } catch {
                 log.warning("relay-mesh: addPeer \(p.id, privacy: .public): \(String(describing: error), privacy: .public)")
-                peers.append(p)
+                peers.append(p.withoutCandidates())
             }
         }
         for gone in proxied.keys where !live.contains(gone) {
             if let key = Data(base64Encoded: gone) { await client.removePeer(key) }
             proxied.removeValue(forKey: gone)
         }
+        selector.retain(live)
         return config.replacingPeers(peers)
+    }
+
+    // MARK: - direct paths
+
+    /// The path each relayed peer should use now. Peers with no usable
+    /// direct address, and every peer while this device has no LAN or Wi-Fi
+    /// address (cellular), stay on the relay.
+    private func resolvePaths(now: Date) -> [String: PeerPath] {
+        let lan = lanAddresses()
+        var out: [String: PeerPath] = [:]
+        for p in lastPeers {
+            let usable = lan.isEmpty || pathStats == nil ? [] : (p.candidates ?? []).filter {
+                EndpointDiscovery.isReachableLAN($0, from: lan)
+            }
+            out[p.publicKey] = selector.path(peer: p.publicKey, candidates: usable,
+                                             observation: observations[p.publicKey], now: now)
+        }
+        return out
+    }
+
+    private func startPathTask() {
+        pathTask?.cancel()
+        pathTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
+                guard let self else { return }
+                await self.pathTick()
+            }
+        }
+    }
+
+    private func pathTick() async {
+        guard client != nil, let pathStats, let onPathChange,
+              lastPeers.contains(where: { !($0.candidates ?? []).isEmpty }),
+              let dump = await pathStats() else { return }
+        observations = WGStatsParser.observations(dump)
+        let next = resolvePaths(now: Date())
+        guard next != appliedPaths else { return }
+        for (key, path) in next where appliedPaths[key] != path {
+            log.log("relay-mesh: path \(String(key.prefix(6)), privacy: .public) -> \(String(describing: path), privacy: .public)")
+        }
+        await onPathChange()
     }
 
     /// The session token was renewed; later relay tokens must use it.
@@ -90,6 +160,20 @@ public actor RelayMesh {
     }
 
     public func stop() async {
+        pathTask?.cancel()
+        pathTask = nil
+        pathStats = nil
+        onPathChange = nil
+        await closeRelay()
+    }
+
+    /// Drops the relay connection and everything learned about paths. The
+    /// path hooks stay, so a later config with a relay picks up again.
+    private func closeRelay() async {
+        selector = PathSelector()
+        observations.removeAll()
+        appliedPaths.removeAll()
+        lastPeers.removeAll()
         redialTask?.cancel()
         redialTask = nil
         await closeClient()
