@@ -193,6 +193,7 @@ EnvironmentFile=%s
 Environment=XDG_CONFIG_HOME=%s
 StateDirectory=bamboo
 StateDirectoryMode=0700
+NoNewPrivileges=true
 ExecStart=%s up
 Restart=always
 RestartSec=5
