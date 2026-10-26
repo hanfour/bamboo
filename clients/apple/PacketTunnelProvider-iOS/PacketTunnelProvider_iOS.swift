@@ -28,7 +28,7 @@ final class PacketTunnelProvider_iOS: NEPacketTunnelProvider {
     /// Picks who authenticates as this peer (the control plane when it runs,
     /// else the presence heartbeat), then swaps relay proxy endpoints into
     /// the config.
-    private func prepare(_ appConfig: BambooTunnelConfig) async throws -> TunnelConfiguration {
+    private func prepare(_ appConfig: BambooTunnelConfig) async throws -> (effective: BambooTunnelConfig, tunnel: TunnelConfiguration) {
         let auth: PresenceConfig?
         if let cp = appConfig.controlPlane {
             await presence.stop()
@@ -38,7 +38,48 @@ final class PacketTunnelProvider_iOS: NEPacketTunnelProvider {
             auth = await presence.currentConfig()
         }
         let effective = await mesh.apply(appConfig, auth: auth)
-        return try TunnelConfigurationBuilder.build(from: effective)
+        return (effective, try TunnelConfigurationBuilder.build(from: effective))
+    }
+
+    /// The config last handed to WireGuard, after relay endpoints were
+    /// swapped in. A peer whose direct endpoint moves while its traffic goes
+    /// through the relay leaves this unchanged, so there is nothing to apply.
+    private var lastApplied: BambooTunnelConfig?
+
+    /// The app-side config behind `lastApplied`, kept to rebuild the backend.
+    private var lastBase: BambooTunnelConfig?
+
+    private var stopping = false
+    private var recovering = false
+
+    /// WireGuard closes its device for good when reading the tun fails
+    /// (seen as "no buffer space available"). Every later update then fails
+    /// with "device closed" and the tunnel looks up but carries nothing, so
+    /// stop the backend and start it again from the last config.
+    private func recoverBackend(reason: String) async {
+        guard !stopping, !recovering, let base = lastBase else { return }
+        recovering = true
+        defer { recovering = false }
+        log.error("backend recover: \(reason, privacy: .public)")
+        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+            adapter.stop { _ in cont.resume() }
+        }
+        do {
+            let prepared = try await prepare(base)
+            let err: Error? = await withCheckedContinuation { cont in
+                adapter.start(tunnelConfiguration: prepared.tunnel) { cont.resume(returning: $0) }
+            }
+            if let err {
+                log.error("backend recover: start failed: \(String(describing: err), privacy: .public)")
+                cancelTunnelWithError(err)
+                return
+            }
+            lastApplied = prepared.effective
+            log.log("backend recover: ok peers=\(prepared.effective.peers.count, privacy: .public)")
+        } catch {
+            log.error("backend recover: build failed: \(String(describing: error), privacy: .public)")
+            cancelTunnelWithError(error)
+        }
     }
 
     /// Starts the control plane, or hands a running one the app's new base.
@@ -72,14 +113,19 @@ final class PacketTunnelProvider_iOS: NEPacketTunnelProvider {
     }
 
     private func applyFromControlPlane(_ config: BambooTunnelConfig) async {
+        guard !recovering else { return }
+        lastBase = config
         do {
-            let tunnelConfig = try await prepare(config)
+            let prepared = try await prepare(config)
+            if prepared.effective == lastApplied { return }
             let err: Error? = await withCheckedContinuation { cont in
-                adapter.update(tunnelConfiguration: tunnelConfig) { cont.resume(returning: $0) }
+                adapter.update(tunnelConfiguration: prepared.tunnel) { cont.resume(returning: $0) }
             }
             if let err {
                 log.error("control-plane apply: \(String(describing: err), privacy: .public)")
+                await recoverBackend(reason: "apply failed")
             } else {
+                lastApplied = prepared.effective
                 log.log("control-plane apply ok peers=\(config.peers.count, privacy: .public)")
             }
         } catch {
@@ -88,7 +134,11 @@ final class PacketTunnelProvider_iOS: NEPacketTunnelProvider {
     }
 
     private lazy var adapter: WireGuardAdapter = WireGuardAdapter(with: self) { [weak self] level, message in
-        self?.log.log("[wg/\(level.rawValue, privacy: .public)] \(message, privacy: .public)")
+        guard let self else { return }
+        self.log.log("[wg/\(level.rawValue, privacy: .public)] \(message, privacy: .public)")
+        if message.contains("Failed to read packet from TUN device") {
+            Task { await self.recoverBackend(reason: message) }
+        }
     }
 
     override func startTunnel(options _: [String: NSObject]?,
@@ -114,20 +164,22 @@ final class PacketTunnelProvider_iOS: NEPacketTunnelProvider {
 
         Task { [weak self] in
             guard let self else { return }
-            let tunnelConfig: TunnelConfiguration
+            let prepared: (effective: BambooTunnelConfig, tunnel: TunnelConfiguration)
             do {
-                tunnelConfig = try await self.prepare(appConfig)
+                prepared = try await self.prepare(appConfig)
             } catch {
                 self.log.error("startTunnel: build config: \(String(describing: error), privacy: .public)")
                 completionHandler(error)
                 return
             }
-            self.adapter.start(tunnelConfiguration: tunnelConfig) { [weak self] error in
+            self.adapter.start(tunnelConfiguration: prepared.tunnel) { [weak self] error in
                 if let error = error {
                     self?.log.error("adapter.start: \(String(describing: error), privacy: .public)")
                     completionHandler(error)
                     return
                 }
+                self?.lastApplied = prepared.effective
+                self?.lastBase = appConfig
                 self?.log.log("tunnel up address=\(appConfig.address, privacy: .public) peers=\(appConfig.peers.count)")
                 completionHandler(nil)
                 Task { [weak self] in await self?.runControlPlane(for: appConfig) }
@@ -137,6 +189,7 @@ final class PacketTunnelProvider_iOS: NEPacketTunnelProvider {
 
     override func stopTunnel(with reason: NEProviderStopReason,
                              completionHandler: @escaping () -> Void) {
+        stopping = true
         log.log("stopTunnel reason=\(reason.rawValue, privacy: .public)")
         Task { [presence, mesh, controlPlane] in
             await controlPlane.stop()
@@ -177,20 +230,22 @@ final class PacketTunnelProvider_iOS: NEPacketTunnelProvider {
                     completionHandler?(self.encodeOK())
                     return
                 }
-                let tunnelConfig: TunnelConfiguration
+                let prepared: (effective: BambooTunnelConfig, tunnel: TunnelConfiguration)
                 do {
-                    tunnelConfig = try await self.prepare(appConfig)
+                    prepared = try await self.prepare(appConfig)
                 } catch {
                     self.log.error("applyConfig build: \(String(describing: error), privacy: .public)")
                     completionHandler?(self.encodeError("build: \(error)"))
                     return
                 }
-                self.adapter.update(tunnelConfiguration: tunnelConfig) { [weak self] error in
+                self.adapter.update(tunnelConfiguration: prepared.tunnel) { [weak self] error in
                     if let error = error {
                         self?.log.error("adapter.update: \(String(describing: error), privacy: .public)")
                         completionHandler?(self?.encodeError("update: \(error)"))
                         return
                     }
+                    self?.lastApplied = prepared.effective
+                    self?.lastBase = appConfig
                     self?.log.log("applyConfig ok peers=\(appConfig.peers.count, privacy: .public)")
                     completionHandler?(self?.encodeOK())
                 }
