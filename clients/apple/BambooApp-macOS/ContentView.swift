@@ -85,6 +85,11 @@ struct ContentView: View {
                         .buttonStyle(.borderedProminent)
                         .controlSize(.small)
                         .disabled(connection.isSigningIn)
+                        if connection.isSigningIn {
+                            Button("Cancel", action: connection.cancelSignIn)
+                                .buttonStyle(.borderless)
+                                .controlSize(.small)
+                        }
                     }
 
                     LabelledField(label: "Pre-auth key (fallback)", text: $connection.preAuthKey)

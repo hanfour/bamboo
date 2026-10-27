@@ -115,6 +115,9 @@ private struct SettingsView: View {
                             .frame(maxWidth: .infinity)
                         }
                         .disabled(connection.isSigningIn)
+                        if connection.isSigningIn {
+                            Button("Cancel", role: .cancel, action: connection.cancelSignIn)
+                        }
                     }
                     SecureField("Pre-auth key (fallback)", text: $connection.preAuthKey)
                         .textInputAutocapitalization(.never)
