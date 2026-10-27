@@ -370,6 +370,8 @@ targets:
       - path: Shared/RelayPicker.swift
       - path: Shared/BambooClient.swift
       - path: Shared/BootstrapAuth.swift
+      - path: Shared/OneShot.swift
+      - path: Shared/AuthClient.swift
       - path: Shared/PeerWatcher.swift
       - path: Shared/BundleVersion.swift
       - path: Shared/PresenceHeartbeat.swift

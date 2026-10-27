@@ -39,6 +39,19 @@ public final class AuthClient: NSObject {
         super.init()
     }
 
+    /// How long a sign-in may stay open before the app gives up on it.
+    public static let signInTimeout: TimeInterval = 300
+
+    private var pending: (shot: OneShot<URL>, session: ASWebAuthenticationSession?)?
+
+    /// Ends a sign-in that is still waiting, e.g. the window was closed and
+    /// the system never said so.
+    public func cancelSignIn() {
+        guard let pending else { return }
+        pending.shot.finish(.failure(AuthError.userCancelled))
+        pending.session?.cancel()
+    }
+
     /// Provider identifies which controller route to hit. Phase 1 only
     /// implements Google (matching the controller's enum), but the
     /// argument is here so callers don't have to refactor when GitHub
@@ -61,10 +74,7 @@ public final class AuthClient: NSObject {
                                             provider: provider)
 
         let callbackURL: URL = try await withCheckedThrowingContinuation { continuation in
-            // Hold a reference so the session isn't deallocated mid-
-            // flight. ASWebAuthenticationSession's completion handler
-            // captures `self`, but the session object itself must
-            // outlive the user's interaction with Safari.
+            let shot = OneShot(continuation)
             var session: ASWebAuthenticationSession?
             session = ASWebAuthenticationSession(
                 url: url,
@@ -74,17 +84,17 @@ public final class AuthClient: NSObject {
                 if let error = error {
                     if let asError = error as? ASWebAuthenticationSessionError,
                        asError.code == .canceledLogin {
-                        continuation.resume(throwing: AuthError.userCancelled)
+                        shot.finish(.failure(AuthError.userCancelled))
                     } else {
-                        continuation.resume(throwing: AuthError.underlying(error))
+                        shot.finish(.failure(AuthError.underlying(error)))
                     }
                     return
                 }
                 guard let url = url else {
-                    continuation.resume(throwing: AuthError.emptyCallback)
+                    shot.finish(.failure(AuthError.emptyCallback))
                     return
                 }
-                continuation.resume(returning: url)
+                shot.finish(.success(url))
             }
             // prefersEphemeralWebBrowserSession=true skips the system
             // browser's cookie store — every sign-in starts cold. Good
@@ -93,8 +103,21 @@ public final class AuthClient: NSObject {
             // logging out of Google in Safari.
             session?.prefersEphemeralWebBrowserSession = true
             session?.presentationContextProvider = self
-            session?.start()
+            #if canImport(AppKit) && !canImport(UIKit)
+            // A menu-bar app is not frontmost when the button is clicked, and
+            // the system sign-in window can stay hidden behind other windows.
+            NSApp.activate(ignoringOtherApps: true)
+            #endif
+            pending = (shot, session)
+            if session?.start() != true {
+                shot.finish(.failure(AuthError.couldNotStart))
+            } else {
+                // Closing the window does not always call the handler. Do not
+                // wait for it forever.
+                shot.finish(after: AuthClient.signInTimeout, with: .failure(AuthError.timedOut))
+            }
         }
+        pending = nil
 
         return try parseCallback(callbackURL)
     }
@@ -194,6 +217,8 @@ public enum AuthError: Error, CustomStringConvertible {
     case emptyCallback
     case malformedCallback(String)
     case underlying(Error)
+    case couldNotStart
+    case timedOut
 
     public var description: String {
         switch self {
@@ -207,6 +232,10 @@ public enum AuthError: Error, CustomStringConvertible {
             return "callback URL malformed: \(why)"
         case .underlying(let err):
             return "auth session: \(err)"
+        case .couldNotStart:
+            return "could not open the sign-in window"
+        case .timedOut:
+            return "sign-in timed out, try again"
         }
     }
 }

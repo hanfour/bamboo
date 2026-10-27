@@ -230,6 +230,11 @@ public final class ConnectionViewModel: ObservableObject {
         Task { await self.signInAsync() }
     }
 
+    /// Ends a sign-in that is stuck (window closed, nothing came back).
+    public func cancelSignIn() {
+        authClient.cancelSignIn()
+    }
+
     private func signInAsync() async {
         isSigningIn = true
         defer { isSigningIn = false }
