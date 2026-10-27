@@ -98,4 +98,6 @@ public enum KeychainError: Error {
 public enum BambooKeychainKey {
     public static let wireguardPrivateKey = "wg_private_key"
     public static let sessionToken = "session_token"
+    /// Latest peer-session token this app saw, the fallback when the sign-in token expired.
+    public static let peerSessionToken = "peer_session_token"
 }

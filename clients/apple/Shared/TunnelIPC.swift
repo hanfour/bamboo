@@ -34,6 +34,12 @@ public enum TunnelIPC {
         /// plane currently holds, so the app (which the extension cannot
         /// reach through the App Group) can refresh the MagicDNS map.
         case peerSnapshot
+
+        /// The host app asks for the peer-session token the extension's
+        /// control plane holds. The extension renews it all day while the
+        /// app's copy ages, and the app needs a live one to register again
+        /// after its own sign-in token has expired.
+        case sessionToken
     }
 
     /// Request envelope sent app -> extension.
@@ -57,9 +63,11 @@ public enum TunnelIPC {
         public let status: TunnelStatus?
         public let bandwidth: BandwidthStats?
         public let snapshot: PeerSnapshot?
+        public let sessionToken: String?
 
         public init(ok: Bool, error: String? = nil, status: TunnelStatus? = nil, bandwidth: BandwidthStats? = nil,
-                    snapshot: PeerSnapshot? = nil) {
+                    snapshot: PeerSnapshot? = nil, sessionToken: String? = nil) {
+            self.sessionToken = sessionToken
             self.snapshot = snapshot
             self.ok = ok
             self.error = error

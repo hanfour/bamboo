@@ -254,6 +254,10 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             // The control plane runs in the app on macOS, not here.
             completionHandler?(self.encodeError("control plane not running"))
 
+        case .sessionToken:
+            // The control plane runs in the app on macOS; it already has the token.
+            completionHandler?(self.encodeError("control plane not running"))
+
         case .bandwidthStats:
             // adapter.getRuntimeConfiguration returns the wg-uapi
             // config string asynchronously. WGStatsParser sums

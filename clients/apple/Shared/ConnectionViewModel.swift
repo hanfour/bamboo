@@ -279,9 +279,25 @@ public final class ConnectionViewModel: ObservableObject {
     /// identity.
     public func signOut() {
         keychain.remove(for: BambooKeychainKey.sessionToken)
+        keychain.remove(for: BambooKeychainKey.peerSessionToken)
         UserDefaults.bambooStandard.removeObject(forKey: "signedInEmail")
         self.signedInEmail = nil
         log.log("sign-out: cleared session token")
+    }
+
+    /// The freshest peer-session token available: the extension's (it renews
+    /// all day), then the app's own, then the one saved on disk.
+    private func livePeerToken() async -> String? {
+        if let fromExtension = await tunnel.sessionToken(), !fromExtension.isEmpty {
+            rememberPeerToken(fromExtension)
+            return fromExtension
+        }
+        return peerSessionBearer ?? keychain.getString(for: BambooKeychainKey.peerSessionToken)
+    }
+
+    private func rememberPeerToken(_ token: String?) {
+        guard let token, !token.isEmpty else { return }
+        try? keychain.setString(token, for: BambooKeychainKey.peerSessionToken)
     }
 
     public func disconnect() {
@@ -413,7 +429,7 @@ public final class ConnectionViewModel: ObservableObject {
                 bearerToken: keychain.getString(for: BambooKeychainKey.sessionToken),
                 tenantSlug: tenantSlug
             )
-            let resp = try await bootstrapClient.register(.init(
+            let registerRequest = BambooClient.RegisterRequest(
                 hostname: hostname,
                 wireguardPublicKey: publicKey,
                 os: currentOSName(),
@@ -423,7 +439,17 @@ public final class ConnectionViewModel: ObservableObject {
                 endpoints: discoveredEndpoints.isEmpty ? nil : discoveredEndpoints,
                 advertisedRoutes: parsedAdvertisedRoutes.isEmpty ? nil : parsedAdvertisedRoutes,
                 advertiseExitNode: advertiseExitNode ? true : nil
-            ))
+            )
+            // The sign-in token dies after 24h; the tunnel keeps a peer-session
+            // token alive, so use that when the controller refuses the first.
+            let resp = try await BootstrapAuth.run(
+                userToken: keychain.getString(for: BambooKeychainKey.sessionToken),
+                peerToken: { [weak self] in await self?.livePeerToken() },
+                attempt: { token in
+                    try await BambooClient(baseURL: url, bearerToken: token, tenantSlug: self.tenantSlug)
+                        .register(registerRequest)
+                }
+            )
 
             // Once Register returns, prefer the peer-session bearer
             // for every subsequent peer-bound call (heartbeat / watch
@@ -523,6 +549,7 @@ public final class ConnectionViewModel: ObservableObject {
             self.lastConfig = config
             self.net = state
             self.peerSessionBearer = resp.peerSessionToken
+            rememberPeerToken(resp.peerSessionToken)
             // Push the current peer map across the App Group so the
             // DNSProxy extension can answer *.bamboo queries.
             self.syncMagicDNSMap()
@@ -587,6 +614,7 @@ public final class ConnectionViewModel: ObservableObject {
                     // rebuild so its own heartbeat keeps authorizing.
                     Task { @MainActor [weak self] in
                         self?.peerSessionBearer = token
+                        self?.rememberPeerToken(token)
                         self?.rebuildAndReapply()
                     }
                 },
@@ -787,6 +815,7 @@ public final class ConnectionViewModel: ObservableObject {
                 endpoints: nil
             ))
             self.peerSessionBearer = resp.peerSessionToken
+            rememberPeerToken(resp.peerSessionToken)
             // Replace the peer set so removed peers leave the rebuild; self
             // and the relay endpoints stay put.
             self.net.adopt(register: resp)

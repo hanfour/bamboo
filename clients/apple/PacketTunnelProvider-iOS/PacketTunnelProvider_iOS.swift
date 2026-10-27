@@ -333,6 +333,15 @@ final class PacketTunnelProvider_iOS: NEPacketTunnelProvider {
                 completionHandler?((try? TunnelIPC.encode(TunnelIPC.Response(ok: true, snapshot: snap))) ?? Data())
             }
 
+        case .sessionToken:
+            Task { [weak self] in
+                guard let self, let tok = await self.controlPlane.currentToken() else {
+                    completionHandler?(self?.encodeError("control plane not running"))
+                    return
+                }
+                completionHandler?((try? TunnelIPC.encode(TunnelIPC.Response(ok: true, sessionToken: tok))) ?? Data())
+            }
+
         case .bandwidthStats:
             // Mirror of the macOS provider's path — see comments
             // there. Forwarded through TunnelManager.bandwidthStats
