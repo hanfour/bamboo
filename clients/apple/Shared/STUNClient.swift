@@ -42,8 +42,8 @@ public enum STUNClient {
 
     /// Discover sends a binding request to the STUN server (host:port)
     /// and returns the host:port the discovery socket presents to the
-    /// outside world. timeoutSeconds applies to both the connect and
-    /// read.
+    /// outside world. The whole call, connect and reply together, gives
+    /// up after twice timeoutSeconds and throws; it never hangs.
     ///
     /// localPort optionally pins the source UDP port the request goes
     /// out on. The default 0 lets the OS pick an ephemeral port; that
@@ -73,57 +73,43 @@ public enum STUNClient {
         let txID = generateTransactionID()
         let request = buildBindingRequest(transactionID: txID)
 
-        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Swift.Error>) in
+        // One serial queue owns the connection, the reply and the deadline,
+        // and whichever comes first finishes the call. Waiting on the reply
+        // from a child task does not work: after a timeout the child still
+        // blocks until the connection is cancelled, so the call never
+        // returned when a packet was lost or the network was down (.waiting).
+        let response: Data = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Data, Swift.Error>) in
+            var done = false
+            func finish(_ result: Result<Data, Swift.Error>) {
+                guard !done else { return }
+                done = true
+                conn.stateUpdateHandler = nil
+                conn.cancel()
+                cont.resume(with: result)
+            }
             conn.stateUpdateHandler = { state in
                 switch state {
                 case .ready:
-                    cont.resume()
+                    conn.send(content: request, completion: .contentProcessed { err in
+                        if let err { finish(.failure(Error.writeFailed(err))); return }
+                        conn.receiveMessage { data, _, _, err in
+                            if let err { finish(.failure(Error.readFailed(err))); return }
+                            guard let data else { finish(.failure(Error.readFailed(nil))); return }
+                            finish(.success(data))
+                        }
+                    })
                 case .failed(let err):
-                    cont.resume(throwing: Error.dnsFailed(String(describing: err)))
+                    finish(.failure(Error.dnsFailed(String(describing: err))))
                 case .cancelled:
-                    break
+                    finish(.failure(Error.timeout))
                 default:
                     break
                 }
             }
+            // Covers resolving and connecting as well as waiting for the reply.
+            queue.asyncAfter(deadline: .now() + timeoutSeconds * 2) { finish(.failure(Error.timeout)) }
             conn.start(queue: queue)
         }
-
-        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Swift.Error>) in
-            conn.send(content: request, completion: .contentProcessed { err in
-                if let err = err {
-                    cont.resume(throwing: Error.writeFailed(err))
-                } else {
-                    cont.resume()
-                }
-            })
-        }
-
-        let response: Data = try await withThrowingTaskGroup(of: Data.self) { group in
-            group.addTask {
-                return try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Data, Swift.Error>) in
-                    conn.receiveMessage { (data, _, _, err) in
-                        if let err = err {
-                            cont.resume(throwing: Error.readFailed(err))
-                            return
-                        }
-                        guard let data = data else {
-                            cont.resume(throwing: Error.readFailed(nil))
-                            return
-                        }
-                        cont.resume(returning: data)
-                    }
-                }
-            }
-            group.addTask {
-                try await Task.sleep(nanoseconds: UInt64(timeoutSeconds * 1_000_000_000))
-                throw Error.timeout
-            }
-            defer { group.cancelAll() }
-            guard let first = try await group.next() else { throw Error.timeout }
-            return first
-        }
-        conn.cancel()
 
         return try parseResponse(response, transactionID: txID)
     }
