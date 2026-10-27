@@ -117,10 +117,14 @@ public enum TunnelIPC {
     public struct BandwidthStats: Codable {
         public let bytesSent: UInt64
         public let bytesReceived: UInt64
+        /// "direct" or "relay" when the extension's relay mesh knows how
+        /// peers are reached; nil otherwise (older extension, no relay).
+        public let connectionPath: String?
 
-        public init(bytesSent: UInt64, bytesReceived: UInt64) {
+        public init(bytesSent: UInt64, bytesReceived: UInt64, connectionPath: String? = nil) {
             self.bytesSent = bytesSent
             self.bytesReceived = bytesReceived
+            self.connectionPath = connectionPath
         }
     }
 

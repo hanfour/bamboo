@@ -71,7 +71,8 @@ public actor HeartbeatLoop {
                         knownPolicyRevision: rev,
                         endpoints: endpoints,
                         bytesSent: bw?.bytesSent,
-                        bytesReceived: bw?.bytesReceived
+                        bytesReceived: bw?.bytesReceived,
+                        connectionPath: bw?.connectionPath
                     ))
                     if resp.policyChanged {
                         onPolicyChanged(resp.currentPolicyRevision)

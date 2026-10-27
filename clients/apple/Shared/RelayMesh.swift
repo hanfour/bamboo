@@ -194,6 +194,18 @@ public actor RelayMesh {
         return true
     }
 
+    /// How this device reaches the mesh, for the controller's heartbeat:
+    /// "direct" when any peer has a direct address that is no longer being
+    /// tried, "relay" when peers go through the relay, nil when the relay
+    /// is not in use (peers dial each other plainly, nothing to report).
+    public func connectionPath() -> String? {
+        guard client != nil, !appliedPaths.isEmpty else { return nil }
+        for (key, path) in appliedPaths {
+            if case .direct = path, !selector.isProbing(key) { return "direct" }
+        }
+        return "relay"
+    }
+
     /// The session token was renewed; later relay tokens must use it.
     public func updateAuth(_ newAuth: PresenceConfig) {
         auth = newAuth

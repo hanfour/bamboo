@@ -263,12 +263,14 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             // bandwidth-sample side-channel skips the write.
             adapter.getRuntimeConfiguration { [weak self] config in
                 let (sent, received) = config.map(WGStatsParser.sumBytes) ?? (0, 0)
-                let resp = TunnelIPC.Response(
-                    ok: true,
-                    bandwidth: .init(bytesSent: sent, bytesReceived: received)
-                )
-                completionHandler?((try? TunnelIPC.encode(resp)) ?? Data())
-                _ = self
+                Task {
+                    let path = await self?.mesh.connectionPath()
+                    let resp = TunnelIPC.Response(
+                        ok: true,
+                        bandwidth: .init(bytesSent: sent, bytesReceived: received, connectionPath: path)
+                    )
+                    completionHandler?((try? TunnelIPC.encode(resp)) ?? Data())
+                }
             }
         }
     }
