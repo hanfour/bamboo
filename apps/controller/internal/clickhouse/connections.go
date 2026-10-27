@@ -136,6 +136,7 @@ func (r *ConnectionEvents) ListByPeer(
 		       reason, matched_rule_id
 		  FROM connection_events
 		 WHERE tenant_id = ? AND source_peer_id = ? AND occurred_at >= ?
+		   AND event_type = 'path_change'
 		 ORDER BY occurred_at DESC
 		 LIMIT ?
 	`, tenantID, peerID, since, uint64(limit))
