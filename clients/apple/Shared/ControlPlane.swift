@@ -253,6 +253,11 @@ public actor ControlPlane {
         }
     }
 
+    /// The newest peer-session token, nil before the first register.
+    public func currentToken() -> String? {
+        token.isEmpty ? nil : token
+    }
+
     private func adopt(token newToken: String) async {
         guard newToken != token, let cfg else { return }
         token = newToken

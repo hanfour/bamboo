@@ -369,6 +369,7 @@ targets:
       - path: Shared/WGStatsParser.swift
       - path: Shared/RelayPicker.swift
       - path: Shared/BambooClient.swift
+      - path: Shared/BootstrapAuth.swift
       - path: Shared/PeerWatcher.swift
       - path: Shared/BundleVersion.swift
       - path: Shared/PresenceHeartbeat.swift

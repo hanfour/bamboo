@@ -249,6 +249,31 @@ public final class TunnelManager: ObservableObject {
         }
     }
 
+    /// The peer-session token the extension's control plane holds, or nil
+    /// when the tunnel is down or the extension does not run the control plane.
+    public func sessionToken() async -> String? {
+        guard let session = manager?.connection as? NETunnelProviderSession,
+              session.status == .connected,
+              let payload = try? TunnelIPC.encode(TunnelIPC.Request(kind: .sessionToken)) else {
+            return nil
+        }
+        return await withCheckedContinuation { (cont: CheckedContinuation<String?, Never>) in
+            do {
+                try session.sendProviderMessage(payload) { response in
+                    guard let response,
+                          let decoded = try? TunnelIPC.decodeResponse(response),
+                          decoded.ok else {
+                        cont.resume(returning: nil)
+                        return
+                    }
+                    cont.resume(returning: decoded.sessionToken)
+                }
+            } catch {
+                cont.resume(returning: nil)
+            }
+        }
+    }
+
     // MARK: - private
 
     private func attachObserver() {
