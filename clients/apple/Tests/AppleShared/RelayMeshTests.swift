@@ -56,4 +56,30 @@ final class RelayMeshTests: XCTestCase {
         XCTAssertEqual(out.peers, [peer], "token mint fails, so peers stay direct")
         await mesh.stop()
     }
+
+    func testNoRelayMeansNothingToReport() async {
+        let mesh = RelayMesh()
+        _ = await mesh.apply(config(relay: nil, peers: [peer]), auth: nil)
+        let path = await mesh.connectionPath()
+        XCTAssertNil(path)
+    }
+
+    func testHeartbeatCarriesConnectionPathOnlyWhenKnown() throws {
+        func json(_ path: String?) throws -> [String: Any] {
+            let req = BambooClient.HeartbeatRequest(peerId: "p", knownPolicyRevision: 1, connectionPath: path)
+            return try JSONSerialization.jsonObject(with: JSONEncoder().encode(req)) as! [String: Any]
+        }
+        XCTAssertEqual(try json("direct")["connectionPath"] as? String, "direct")
+        XCTAssertNil(try json(nil)["connectionPath"], "unknown must not overwrite the controller's value")
+    }
+
+    func testBandwidthStatsFromOlderExtensionStillDecodes() throws {
+        let old = #"{"bytesSent":5,"bytesReceived":7}"#
+        let bw = try JSONDecoder().decode(TunnelIPC.BandwidthStats.self, from: Data(old.utf8))
+        XCTAssertEqual(bw.bytesSent, 5)
+        XCTAssertNil(bw.connectionPath)
+        let new = TunnelIPC.BandwidthStats(bytesSent: 1, bytesReceived: 2, connectionPath: "relay")
+        let back = try JSONDecoder().decode(TunnelIPC.BandwidthStats.self, from: JSONEncoder().encode(new))
+        XCTAssertEqual(back.connectionPath, "relay")
+    }
 }

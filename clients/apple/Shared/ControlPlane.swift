@@ -237,7 +237,8 @@ public actor ControlPlane {
                 knownPolicyRevision: net.policyRevision,
                 endpoints: endpoints,
                 bytesSent: bw?.bytesSent,
-                bytesReceived: bw?.bytesReceived
+                bytesReceived: bw?.bytesReceived,
+                connectionPath: bw?.connectionPath
             ))
             if let tok = resp.peerSessionToken, !tok.isEmpty { await adopt(token: tok) }
             if resp.policyChanged || resp.peersChanged {

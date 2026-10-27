@@ -175,17 +175,21 @@ public struct BambooClient {
         /// `bandwidthStats`) keep producing a valid request.
         public var bytesSent: UInt64?
         public var bytesReceived: UInt64?
+        /// "direct" / "relay"; nil leaves the controller's value alone.
+        public var connectionPath: String?
 
         public init(peerId: String,
                     knownPolicyRevision: Int64,
                     endpoints: [String]? = nil,
                     bytesSent: UInt64? = nil,
-                    bytesReceived: UInt64? = nil) {
+                    bytesReceived: UInt64? = nil,
+                    connectionPath: String? = nil) {
             self.peerId = peerId
             self.knownPolicyRevision = knownPolicyRevision
             self.endpoints = endpoints
             self.bytesSent = bytesSent
             self.bytesReceived = bytesReceived
+            self.connectionPath = connectionPath
         }
     }
 

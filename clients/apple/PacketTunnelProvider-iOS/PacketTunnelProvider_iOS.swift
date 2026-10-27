@@ -166,7 +166,10 @@ final class PacketTunnelProvider_iOS: NEPacketTunnelProvider {
             adapter.getRuntimeConfiguration { config in
                 guard let config else { cont.resume(returning: nil); return }
                 let (sent, received) = WGStatsParser.sumBytes(config)
-                cont.resume(returning: .init(bytesSent: sent, bytesReceived: received))
+                Task {
+                    cont.resume(returning: .init(bytesSent: sent, bytesReceived: received,
+                                                 connectionPath: await self.mesh.connectionPath()))
+                }
             }
         }
     }
@@ -336,12 +339,14 @@ final class PacketTunnelProvider_iOS: NEPacketTunnelProvider {
             // into HeartbeatLoop's per-tick reporter.
             adapter.getRuntimeConfiguration { [weak self] config in
                 let (sent, received) = config.map(WGStatsParser.sumBytes) ?? (0, 0)
-                let resp = TunnelIPC.Response(
-                    ok: true,
-                    bandwidth: .init(bytesSent: sent, bytesReceived: received)
-                )
-                completionHandler?((try? TunnelIPC.encode(resp)) ?? Data())
-                _ = self
+                Task {
+                    let path = await self?.mesh.connectionPath()
+                    let resp = TunnelIPC.Response(
+                        ok: true,
+                        bandwidth: .init(bytesSent: sent, bytesReceived: received, connectionPath: path)
+                    )
+                    completionHandler?((try? TunnelIPC.encode(resp)) ?? Data())
+                }
             }
         }
     }
