@@ -12,6 +12,9 @@ import OSLog
 public actor HeartbeatLoop {
     public static let interval: TimeInterval = 30
 
+    /// Re-read the peer set every this many heartbeats (2 minutes).
+    public static let peerRefreshEvery = 4
+
     private let log = Logger(subsystem: "dev.hanfour.bamboo.app", category: "heartbeat")
     private var task: Task<Void, Never>?
 
@@ -33,7 +36,10 @@ public actor HeartbeatLoop {
                       bandwidthStats: @Sendable @escaping () async -> TunnelIPC.BandwidthStats? = { nil },
                       onPolicyChanged: @Sendable @escaping (Int64) -> Void = { _ in },
                       onPeersChanged: @Sendable @escaping () -> Void = {},
-                      onSessionRenewed: @Sendable @escaping (String) -> Void = { _ in }) {
+                      onSessionRenewed: @Sendable @escaping (String) -> Void = { _ in },
+                      endpoints discover: @Sendable @escaping () async -> [String]? = {
+                          (try? await STUNClient.discover()).map { [$0] }
+                      }) {
         task?.cancel()
         let log = self.log
         task = Task {
@@ -41,18 +47,14 @@ public actor HeartbeatLoop {
             // inside the last 6h of a 24h session. Without adopting it the
             // session expires and every later heartbeat is rejected.
             var client = client
+            var beats = 0
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: UInt64(HeartbeatLoop.interval * 1_000_000_000))
                 if Task.isCancelled { return }
 
                 // Refresh STUN. Failure is non-fatal — we still
                 // heartbeat with a nil endpoints list.
-                var endpoints: [String]? = nil
-                do {
-                    endpoints = [try await STUNClient.discover()]
-                } catch {
-                    log.debug("heartbeat stun refresh failed: \(String(describing: error), privacy: .public)")
-                }
+                let endpoints = await discover()
 
                 // Pull cumulative wg byte counters from the
                 // extension via TunnelIPC.bandwidthStats. nil ⇒
@@ -74,7 +76,12 @@ public actor HeartbeatLoop {
                     if resp.policyChanged {
                         onPolicyChanged(resp.currentPolicyRevision)
                     }
-                    if resp.peersChanged {
+                    // The watch stream can miss an update (a peer that
+                    // registered just before it connected). Peers dial each
+                    // other's endpoints directly now, so a stale one costs a
+                    // failed probe: refresh the peer set now and then.
+                    beats += 1
+                    if resp.peersChanged || beats % HeartbeatLoop.peerRefreshEvery == 0 {
                         onPeersChanged()
                     }
                     if let tok = resp.peerSessionToken, !tok.isEmpty {

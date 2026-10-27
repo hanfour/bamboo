@@ -15,17 +15,30 @@ public struct BambooPeerConfig: Codable, Equatable {
     public let allowedIPs: [String]       // CIDRs the peer should be reachable on
     public let endpoint: String?          // host:port; nil while STUN/relay isn't wired
     public let persistentKeepalive: UInt16?
+    /// Every direct address the peer advertised, in the order to try them.
+    /// Only RelayMesh reads this, to decide when to leave the relay; the
+    /// config it hands to WireGuard no longer carries it.
+    public let candidates: [String]?
+
+    /// The same peer without its candidate list, for configs that go to
+    /// WireGuard.
+    public func withoutCandidates() -> BambooPeerConfig {
+        BambooPeerConfig(id: id, publicKey: publicKey, allowedIPs: allowedIPs,
+                         endpoint: endpoint, persistentKeepalive: persistentKeepalive)
+    }
 
     public init(id: String,
                 publicKey: String,
                 allowedIPs: [String],
                 endpoint: String? = nil,
-                persistentKeepalive: UInt16? = nil) {
+                persistentKeepalive: UInt16? = nil,
+                candidates: [String]? = nil) {
         self.id = id
         self.publicKey = publicKey
         self.allowedIPs = allowedIPs
         self.endpoint = endpoint
         self.persistentKeepalive = persistentKeepalive
+        self.candidates = candidates
     }
 }
 
@@ -140,5 +153,33 @@ public struct BambooTunnelConfig: Codable, Equatable {
                            dnsServers: dnsServers, mtu: mtu, wgListenPort: wgListenPort,
                            peers: newPeers, presence: presence, relay: relay,
                            controlPlane: controlPlane)
+    }
+
+    /// What WireGuard has to do to go from `old` to `self`. Tokens and relay
+    /// settings ride in the same struct but never reach WireGuard, so they
+    /// are ignored.
+    public enum WGDelta: Equatable {
+        case none
+        /// Only these peers' endpoints moved (peer public key to endpoint).
+        case endpoints([String: String])
+        case full
+    }
+
+    public func wgDelta(from old: BambooTunnelConfig?) -> WGDelta {
+        guard let old, privateKey == old.privateKey, address == old.address,
+              address6 == old.address6, dnsServers == old.dnsServers, mtu == old.mtu,
+              wgListenPort == old.wgListenPort, peers.count == old.peers.count else { return .full }
+        let before = Dictionary(old.peers.map { ($0.publicKey, $0) }, uniquingKeysWith: { a, _ in a })
+        var moved: [String: String] = [:]
+        for p in peers {
+            guard let o = before[p.publicKey], o.id == p.id,
+                  o.allowedIPs == p.allowedIPs,
+                  o.persistentKeepalive == p.persistentKeepalive else { return .full }
+            if o.endpoint != p.endpoint {
+                guard let e = p.endpoint else { return .full }
+                moved[p.publicKey] = e
+            }
+        }
+        return moved.isEmpty ? .none : .endpoints(moved)
     }
 }

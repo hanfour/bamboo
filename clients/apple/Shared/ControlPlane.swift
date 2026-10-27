@@ -217,12 +217,18 @@ public actor ControlPlane {
         }
     }
 
+    private var beats = 0
+
     private func beat() async {
         guard let cfg, let client = client() else { return }
+        beats += 1
         var endpoints: [String]? = nil
-        if let ep = try? await STUNClient.discover() {
-            endpoints = [ep]
-            lastEndpoints = endpoints
+        if let port = base?.wgListenPort {
+            let found = await EndpointDiscovery.candidates(wgPort: port)
+            if !found.isEmpty {
+                endpoints = found
+                lastEndpoints = found
+            }
         }
         let bw = await bandwidth?()
         do {
@@ -236,6 +242,10 @@ public actor ControlPlane {
             if let tok = resp.peerSessionToken, !tok.isEmpty { await adopt(token: tok) }
             if resp.policyChanged || resp.peersChanged {
                 await refresh(reason: resp.policyChanged ? "policy" : "peers")
+            } else if beats % 4 == 0 {
+                // The watch stream can miss an update; peers dial each
+                // other's advertised addresses now, so keep them fresh.
+                await refresh(reason: "periodic")
             }
         } catch {
             log.warning("control-plane: heartbeat failed: \(String(describing: error), privacy: .public)")

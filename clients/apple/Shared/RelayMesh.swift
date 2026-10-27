@@ -25,11 +25,42 @@ public actor RelayMesh {
     private var proxied: [String: String] = [:]   // peer public key (base64) -> proxy endpoint
     private var redialTask: Task<Void, Never>?
 
-    public init() {}
+    // Direct-path upgrade. See PathSelector.
+    private var selector = PathSelector()
+    private var observations: [String: WGPeerObservation] = [:]
+    private var lastPeers: [BambooPeerConfig] = []
+    private var appliedPaths: [String: PeerPath] = [:]
+    private var pathStats: (@Sendable () async -> String?)?
+    private var onPathChange: (@Sendable () async -> Void)?
+    private var onKick: (@Sendable ([String: String]) async -> Void)?
+    private var pathTask: Task<Void, Never>?
+    private let lanAddresses: @Sendable () -> [String]
+    /// Whether this device's router keeps the source port, so a peer can
+    /// reach it at publicIP:wgPort. Without that, a public candidate cannot
+    /// work in either direction and probing only costs packets.
+    private var ownPublicOK = false
+    private var ownPublicIP: String?
+    private var ownPublicCheckedAt = Date.distantPast
+
+    public init(lanAddresses: @escaping @Sendable () -> [String] = { EndpointDiscovery.lanIPv4Addresses() }) {
+        self.lanAddresses = lanAddresses
+    }
+
+    /// Lets the mesh watch WireGuard and move peers between the relay and
+    /// a direct address. `stats` returns the UAPI dump; `changed` asks the
+    /// owner to apply the config again once a peer's path moved.
+    public func enableDirectPaths(stats: @escaping @Sendable () async -> String?,
+                                  changed: @escaping @Sendable () async -> Void,
+                                  kick: @escaping @Sendable ([String: String]) async -> Void) {
+        pathStats = stats
+        onPathChange = changed
+        onKick = kick
+        startPathTask()
+    }
 
     public func apply(_ config: BambooTunnelConfig, auth newAuth: PresenceConfig?) async -> BambooTunnelConfig {
         guard let relayCfg = config.relay, let url = URL(string: relayCfg.url), let newAuth else {
-            await stop()
+            await closeRelay()
             return config
         }
         auth = newAuth
@@ -51,29 +82,116 @@ public actor RelayMesh {
         }
         guard let client else { return config }
 
+        lastPeers = config.peers
+        let paths = resolvePaths(now: Date())
+        appliedPaths = paths
+
         var peers: [BambooPeerConfig] = []
         var live = Set<String>()
         for p in config.peers {
             guard let key = Data(base64Encoded: p.publicKey), key.count == RelayClient.pubKeyLen else {
-                peers.append(p)
+                peers.append(p.withoutCandidates())
                 continue
             }
             live.insert(p.publicKey)
             do {
-                let endpoint = try await client.addPeer(key)
+                var endpoint = try await client.addPeer(key)
                 proxied[p.publicKey] = endpoint
+                if case .direct(let d) = paths[p.publicKey] { endpoint = d }
                 peers.append(BambooPeerConfig(id: p.id, publicKey: p.publicKey, allowedIPs: p.allowedIPs,
                                               endpoint: endpoint, persistentKeepalive: p.persistentKeepalive))
             } catch {
                 log.warning("relay-mesh: addPeer \(p.id, privacy: .public): \(String(describing: error), privacy: .public)")
-                peers.append(p)
+                peers.append(p.withoutCandidates())
             }
         }
         for gone in proxied.keys where !live.contains(gone) {
             if let key = Data(base64Encoded: gone) { await client.removePeer(key) }
             proxied.removeValue(forKey: gone)
         }
+        selector.retain(live)
         return config.replacingPeers(peers)
+    }
+
+    // MARK: - direct paths
+
+    /// The path each relayed peer should use now. Peers with no usable
+    /// direct address, and every peer while this device has no LAN or Wi-Fi
+    /// address (cellular), stay on the relay.
+    private func resolvePaths(now: Date) -> [String: PeerPath] {
+        let lan = lanAddresses()
+        var out: [String: PeerPath] = [:]
+        for p in lastPeers {
+            let usable = lan.isEmpty || pathStats == nil ? [] : (p.candidates ?? []).filter {
+                guard EndpointDiscovery.isReachableLAN($0, from: lan) else { return false }
+                guard let (host, _) = EndpointDiscovery.split($0) else { return false }
+                if EndpointDiscovery.isPrivate(host) { return true }
+                // A peer behind the same router can only be reached on the
+                // LAN; dialling the router's own public address rarely loops back.
+                return ownPublicOK && host != ownPublicIP
+            }
+            out[p.publicKey] = selector.path(peer: p.publicKey, candidates: usable,
+                                             observation: observations[p.publicKey], now: now)
+        }
+        return out
+    }
+
+    private func startPathTask() {
+        pathTask?.cancel()
+        pathTask = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self else { return }
+                let busy = await self.pathTick()
+                // Poll quickly only while a direct address could be tried.
+                try? await Task.sleep(nanoseconds: busy ? 2_000_000_000 : 30_000_000_000)
+            }
+        }
+    }
+
+    /// Returns whether the next tick should come soon.
+    private func pathTick() async -> Bool {
+        guard client != nil, let pathStats, let onPathChange,
+              !lanAddresses().isEmpty,
+              lastPeers.contains(where: { !($0.candidates ?? []).isEmpty }) else { return false }
+        if Date().timeIntervalSince(ownPublicCheckedAt) > 300 {
+            ownPublicCheckedAt = Date()
+            let local = UInt16.random(in: 49152...65000)
+            if let mapped = try? await STUNClient.discover(localPort: local),
+               let (ip, port) = EndpointDiscovery.split(mapped) {
+                ownPublicOK = port == local
+                ownPublicIP = ip
+            } else {
+                ownPublicOK = false
+                ownPublicIP = nil
+            }
+            log.log("relay-mesh: public endpoint usable=\(self.ownPublicOK, privacy: .public)")
+        }
+        guard let dump = await pathStats() else { return true }
+        observations = WGStatsParser.observations(dump)
+        let next = resolvePaths(now: Date())
+        guard next != appliedPaths else {
+            // Two NATs open only when both ends send, so while a candidate
+            // is being tried keep nudging WireGuard to send to it.
+            var probing: [String: String] = [:]
+            for (key, path) in next {
+                if case .direct(let ep) = path, selector.isProbing(key) { probing[key] = ep }
+            }
+            if !probing.isEmpty { await onKick?(probing) }
+            return true
+        }
+        for (key, path) in next where appliedPaths[key] != path {
+            let seen = observations[key]
+            let hs = seen?.lastHandshake.map { Int(Date().timeIntervalSince($0)) }
+            let cands = (lastPeers.first { $0.publicKey == key }?.candidates ?? []).joined(separator: ",")
+            log.log("relay-mesh: path \(String(key.prefix(6)), privacy: .public) -> \(String(describing: path), privacy: .public) endpoint=\(seen?.endpoint ?? "-", privacy: .public) rx=\(seen?.rxBytes ?? 0, privacy: .public) handshakeAge=\(hs ?? -1, privacy: .public) cands=\(cands, privacy: .public) ownPublicOK=\(self.ownPublicOK, privacy: .public)")
+        }
+        await onPathChange()
+        var probing: [String: String] = [:]
+        for (key, path) in next {
+            if case .direct(let ep) = path, selector.isProbing(key) { probing[key] = ep }
+        }
+        if !probing.isEmpty { await onKick?(probing) }
+        return true
     }
 
     /// The session token was renewed; later relay tokens must use it.
@@ -90,6 +208,21 @@ public actor RelayMesh {
     }
 
     public func stop() async {
+        pathTask?.cancel()
+        pathTask = nil
+        pathStats = nil
+        onPathChange = nil
+        onKick = nil
+        await closeRelay()
+    }
+
+    /// Drops the relay connection and everything learned about paths. The
+    /// path hooks stay, so a later config with a relay picks up again.
+    private func closeRelay() async {
+        selector = PathSelector()
+        observations.removeAll()
+        appliedPaths.removeAll()
+        lastPeers.removeAll()
         redialTask?.cancel()
         redialTask = nil
         await closeClient()

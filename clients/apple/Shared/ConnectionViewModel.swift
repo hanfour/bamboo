@@ -405,14 +405,8 @@ public final class ConnectionViewModel: ObservableObject {
             // learn how to reach us. Failure is logged but does not
             // block the tunnel — we still get a working self-tunnel
             // and other peers can dial us once their handshake retries.
-            var discoveredEndpoints: [String] = []
-            do {
-                let endpoint = try await STUNClient.discover(localPort: wgPort)
-                discoveredEndpoints = [endpoint]
-                log.log("stun discovered \(endpoint, privacy: .public)")
-            } catch {
-                log.warning("stun discovery failed: \(String(describing: error), privacy: .public)")
-            }
+            let discoveredEndpoints = await EndpointDiscovery.candidates(wgPort: wgPort)
+            log.log("endpoint candidates \(discoveredEndpoints.joined(separator: ","), privacy: .public)")
 
             let bootstrapClient = BambooClient(
                 baseURL: url,
@@ -582,6 +576,11 @@ public final class ConnectionViewModel: ObservableObject {
                         await self?.refreshPolicyFromController()
                     }
                 },
+                onPeersChanged: { [weak self] in
+                    Task { @MainActor [weak self] in
+                        await self?.refreshPolicyFromController()
+                    }
+                },
                 onSessionRenewed: { [weak self] token in
                     // The controller issued a replacement session. Adopt
                     // it, and push it to the extension through a config
@@ -590,6 +589,10 @@ public final class ConnectionViewModel: ObservableObject {
                         self?.peerSessionBearer = token
                         self?.rebuildAndReapply()
                     }
+                },
+                endpoints: {
+                    let found = await EndpointDiscovery.candidates(wgPort: wgPort)
+                    return found.isEmpty ? nil : found
                 }
             )
             // Watch is peer-bound: prefer the peer-session token the

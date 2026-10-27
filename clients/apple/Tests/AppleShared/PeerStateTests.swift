@@ -134,3 +134,41 @@ final class PeerStateTests: XCTestCase {
         XCTAssertEqual(state.relayEndpoints, ["a": "127.0.0.1:1"])
     }
 }
+
+final class WGDeltaTests: XCTestCase {
+    private func cfg(_ peers: [BambooPeerConfig], mtu: UInt16? = nil, token: String = "t1") -> BambooTunnelConfig {
+        BambooTunnelConfig(privateKey: "k", address: "100.64.0.9/32", address6: nil, dnsServers: [], mtu: mtu,
+                           wgListenPort: 51820, peers: peers,
+                           presence: PresenceConfig(controllerURL: "https://x", tenantSlug: "t", peerID: "p", sessionToken: token),
+                           relay: nil, controlPlane: nil)
+    }
+    private func peer(_ id: String, endpoint: String?, allowed: [String] = ["100.64.0.2/32"], keepalive: UInt16? = 25) -> BambooPeerConfig {
+        BambooPeerConfig(id: id, publicKey: "key-\(id)", allowedIPs: allowed, endpoint: endpoint, persistentKeepalive: keepalive)
+    }
+
+    func testOnlyEndpointMovedIsReported() {
+        let old = cfg([peer("a", endpoint: "127.0.0.1:1"), peer("b", endpoint: "127.0.0.1:2")])
+        let new = cfg([peer("a", endpoint: "203.0.113.5:51820"), peer("b", endpoint: "127.0.0.1:2")])
+        XCTAssertEqual(new.wgDelta(from: old), .endpoints(["key-a": "203.0.113.5:51820"]))
+    }
+
+    func testRenewedTokenAloneChangesNothingForWireGuard() {
+        let a = cfg([peer("a", endpoint: "127.0.0.1:1")], token: "t1")
+        let b = cfg([peer("a", endpoint: "127.0.0.1:1")], token: "t2")
+        XCTAssertNotEqual(a, b)
+        XCTAssertEqual(b.wgDelta(from: a), .none)
+    }
+
+    func testAnythingElseNeedsAFullUpdate() {
+        let old = cfg([peer("a", endpoint: "127.0.0.1:1")])
+        XCTAssertEqual(cfg([peer("a", endpoint: "127.0.0.1:1", allowed: ["100.64.0.3/32"])]).wgDelta(from: old), .full)
+        XCTAssertEqual(cfg([peer("a", endpoint: "127.0.0.1:1", keepalive: nil)]).wgDelta(from: old), .full)
+        XCTAssertEqual(cfg([peer("a", endpoint: "127.0.0.1:1")], mtu: 1280).wgDelta(from: old), .full)
+        XCTAssertEqual(cfg([peer("a", endpoint: "127.0.0.1:1"), peer("b", endpoint: nil)]).wgDelta(from: old), .full)
+        XCTAssertEqual(cfg([peer("c", endpoint: "127.0.0.1:1")]).wgDelta(from: old), .full)
+        // An endpoint that disappears cannot be set in place.
+        XCTAssertEqual(cfg([peer("a", endpoint: nil)]).wgDelta(from: old), .full)
+        // Nothing applied yet.
+        XCTAssertEqual(old.wgDelta(from: nil), .full)
+    }
+}

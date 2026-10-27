@@ -62,7 +62,7 @@ settings:
 packages:
   WireGuardKit:
     url: https://github.com/hanfour/wireguard-apple
-    revision: 12521585b0e4b8ad0aaf05b14458bf11c22fad1f
+    revision: 2cacecb08d4efcbcd302898d0d633fd3af6dadc0
 
 # ----- macOS targets ---------------------------------------------------------
 
@@ -184,6 +184,9 @@ targets:
       - path: Shared/BambooClient.swift
       - path: Shared/RelayClient.swift
       - path: Shared/RelayMesh.swift
+      - path: Shared/STUNClient.swift
+      - path: Shared/PathSelector.swift
+      - path: Shared/EndpointDiscovery.swift
       - path: Shared/BambooTunnelError.swift
       - path: Shared/PresenceHeartbeat.swift
       - path: Shared/BambooTunnelConfig.swift
@@ -373,6 +376,8 @@ targets:
       - path: Shared/PeerState.swift
       - path: Shared/RelayClient.swift
       - path: Shared/RelayMesh.swift
+      - path: Shared/PathSelector.swift
+      - path: Shared/EndpointDiscovery.swift
       - path: Shared/ControlPlane.swift
       - path: Shared/STUNClient.swift
       - path: Shared/TunnelIPC.swift
@@ -458,6 +463,8 @@ targets:
       - path: Shared/BambooClient.swift
       - path: Shared/RelayClient.swift
       - path: Shared/RelayMesh.swift
+      - path: Shared/PathSelector.swift
+      - path: Shared/EndpointDiscovery.swift
       - path: Shared/BambooTunnelError.swift
       - path: Shared/PresenceHeartbeat.swift
       - path: Shared/BambooTunnelConfig.swift
