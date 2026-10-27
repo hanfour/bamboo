@@ -55,6 +55,10 @@ func TestConnectionEvents_ListByPeer(t *testing.T) {
 		{TenantID: tenantID, OccurredAt: now.Add(-1 * time.Hour), SourcePeerID: peerA, EventType: "path_change", Path: "direct", PrevPath: "relay"},
 		// Peer B's event — must not show up in peerA's timeline.
 		{TenantID: tenantID, OccurredAt: now.Add(-90 * time.Minute), SourcePeerID: peerB, EventType: "path_change", Path: "relay", PrevPath: "direct"},
+		// Bandwidth samples land every heartbeat with no path. They are not
+		// transitions and would otherwise fill the page and read as "unknown".
+		{TenantID: tenantID, OccurredAt: now.Add(-30 * time.Minute), SourcePeerID: peerA, EventType: "bandwidth_sample", Path: "", BytesSent: 10, BytesReceived: 10},
+		{TenantID: tenantID, OccurredAt: now.Add(-10 * time.Minute), SourcePeerID: peerA, EventType: "bandwidth_sample", Path: "", BytesSent: 20, BytesReceived: 20},
 		// Older-than-window peerA event — must be filtered by since.
 		{TenantID: tenantID, OccurredAt: now.Add(-48 * time.Hour), SourcePeerID: peerA, EventType: "path_change", Path: "unknown", PrevPath: ""},
 	}
@@ -67,7 +71,7 @@ func TestConnectionEvents_ListByPeer(t *testing.T) {
 		t.Fatalf("ListByPeer: %v", err)
 	}
 	if len(got) != 3 {
-		t.Fatalf("got %d events, want 3 (peerB filtered out, 48h-old row outside since window)", len(got))
+		t.Fatalf("got %d events, want 3 (peerB, bandwidth samples and the 48h-old row filtered out)", len(got))
 	}
 	// Newest-first ordering: path / prev_path should arrive in the
 	// inverse insert order — third, second, first.
