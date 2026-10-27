@@ -12,6 +12,9 @@ import OSLog
 public actor HeartbeatLoop {
     public static let interval: TimeInterval = 30
 
+    /// Re-read the peer set every this many heartbeats (2 minutes).
+    public static let peerRefreshEvery = 4
+
     private let log = Logger(subsystem: "dev.hanfour.bamboo.app", category: "heartbeat")
     private var task: Task<Void, Never>?
 
@@ -44,6 +47,7 @@ public actor HeartbeatLoop {
             // inside the last 6h of a 24h session. Without adopting it the
             // session expires and every later heartbeat is rejected.
             var client = client
+            var beats = 0
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: UInt64(HeartbeatLoop.interval * 1_000_000_000))
                 if Task.isCancelled { return }
@@ -72,7 +76,12 @@ public actor HeartbeatLoop {
                     if resp.policyChanged {
                         onPolicyChanged(resp.currentPolicyRevision)
                     }
-                    if resp.peersChanged {
+                    // The watch stream can miss an update (a peer that
+                    // registered just before it connected). Peers dial each
+                    // other's endpoints directly now, so a stale one costs a
+                    // failed probe: refresh the peer set now and then.
+                    beats += 1
+                    if resp.peersChanged || beats % HeartbeatLoop.peerRefreshEvery == 0 {
                         onPeersChanged()
                     }
                     if let tok = resp.peerSessionToken, !tok.isEmpty {

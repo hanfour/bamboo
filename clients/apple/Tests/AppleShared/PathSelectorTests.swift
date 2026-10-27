@@ -9,26 +9,36 @@ final class PathSelectorTests: XCTestCase {
 
     private func at(_ s: TimeInterval) -> Date { t0.addingTimeInterval(s) }
 
+    /// A selector with the shared grid off and the old retry ladder, so the
+    /// tests below can use plain offsets.
+    private func plainSelector() -> PathSelector {
+        var t = PathSelector.Tuning()
+        t.grid = 0
+        t.probeTimeout = 8
+        t.backoff = [30, 120, 600, 1800]
+        return PathSelector(tuning: t)
+    }
+
     private func obs(_ endpoint: String?, handshake: TimeInterval? = nil, rx: UInt64 = 0) -> WGPeerObservation {
         WGPeerObservation(endpoint: endpoint, lastHandshake: handshake.map(at), rxBytes: rx)
     }
 
     func testStartsOnRelayThenProbes() {
-        var sel = PathSelector()
+        var sel = plainSelector()
         XCTAssertEqual(sel.path(peer: "a", candidates: [direct], observation: nil, now: at(0)), .relay)
         XCTAssertEqual(sel.path(peer: "a", candidates: [direct], observation: nil, now: at(2)), .relay)
         XCTAssertEqual(sel.path(peer: "a", candidates: [direct], observation: nil, now: at(3)), .direct(direct))
     }
 
     func testNoCandidatesStaysOnRelay() {
-        var sel = PathSelector()
+        var sel = plainSelector()
         for s in stride(from: 0.0, to: 60, by: 5) {
             XCTAssertEqual(sel.path(peer: "a", candidates: [], observation: nil, now: at(s)), .relay)
         }
     }
 
     func testProbeSucceedsOnHandshakeAtCandidate() {
-        var sel = PathSelector()
+        var sel = plainSelector()
         _ = sel.path(peer: "a", candidates: [direct], observation: nil, now: at(0))
         _ = sel.path(peer: "a", candidates: [direct], observation: nil, now: at(3))   // probing from 3
         // Endpoint matches but the handshake is older than the switch.
@@ -39,7 +49,7 @@ final class PathSelectorTests: XCTestCase {
     }
 
     func testProbeFailsWhenWireGuardRoamsBackToRelay() {
-        var sel = PathSelector()
+        var sel = plainSelector()
         _ = sel.path(peer: "a", candidates: [direct], observation: nil, now: at(0))
         _ = sel.path(peer: "a", candidates: [direct], observation: nil, now: at(3))
         let proxy = "127.0.0.1:60000"
@@ -50,7 +60,7 @@ final class PathSelectorTests: XCTestCase {
     }
 
     func testBackoffGrowsAndCapsAfterRepeatedFailures() {
-        var sel = PathSelector()
+        var sel = plainSelector()
         var now: TimeInterval = 0
         var waits: [TimeInterval] = []
         for _ in 0..<6 {
@@ -72,7 +82,7 @@ final class PathSelectorTests: XCTestCase {
     }
 
     func testTriesNextCandidateBeforeGivingUp() {
-        var sel = PathSelector()
+        var sel = plainSelector()
         _ = sel.path(peer: "a", candidates: [lan, direct], observation: nil, now: at(0))
         XCTAssertEqual(sel.path(peer: "a", candidates: [lan, direct], observation: nil, now: at(3)), .direct(lan))
         XCTAssertEqual(sel.path(peer: "a", candidates: [lan, direct], observation: nil, now: at(12)), .direct(direct))
@@ -80,7 +90,7 @@ final class PathSelectorTests: XCTestCase {
     }
 
     func testDirectFallsBackWhenEndpointRoamsAway() {
-        var sel = PathSelector()
+        var sel = plainSelector()
         _ = sel.path(peer: "a", candidates: [direct], observation: nil, now: at(0))
         _ = sel.path(peer: "a", candidates: [direct], observation: nil, now: at(3))
         _ = sel.path(peer: "a", candidates: [direct], observation: obs(direct, handshake: 4, rx: 10), now: at(5))
@@ -88,7 +98,7 @@ final class PathSelectorTests: XCTestCase {
     }
 
     func testDirectFallsBackWhenInboundTrafficStops() {
-        var sel = PathSelector()
+        var sel = plainSelector()
         _ = sel.path(peer: "a", candidates: [direct], observation: nil, now: at(0))
         _ = sel.path(peer: "a", candidates: [direct], observation: nil, now: at(3))
         _ = sel.path(peer: "a", candidates: [direct], observation: obs(direct, handshake: 4, rx: 10), now: at(5))
@@ -97,7 +107,7 @@ final class PathSelectorTests: XCTestCase {
     }
 
     func testStableDirectResetsBackoffAfterLateFailure() {
-        var sel = PathSelector()
+        var sel = plainSelector()
         _ = sel.path(peer: "a", candidates: [direct], observation: nil, now: at(0))
         _ = sel.path(peer: "a", candidates: [direct], observation: nil, now: at(3))
         _ = sel.path(peer: "a", candidates: [direct], observation: obs(direct, handshake: 4, rx: 10), now: at(5))
@@ -110,7 +120,7 @@ final class PathSelectorTests: XCTestCase {
     }
 
     func testChangedCandidatesRestartTheAttempt() {
-        var sel = PathSelector()
+        var sel = plainSelector()
         _ = sel.path(peer: "a", candidates: [direct], observation: nil, now: at(0))
         _ = sel.path(peer: "a", candidates: [direct], observation: nil, now: at(3))
         _ = sel.path(peer: "a", candidates: [direct], observation: nil, now: at(12))   // failed, backing off 30s
@@ -120,7 +130,7 @@ final class PathSelectorTests: XCTestCase {
     }
 
     func testPeersAreIndependentAndRetainDropsGoneOnes() {
-        var sel = PathSelector()
+        var sel = plainSelector()
         _ = sel.path(peer: "a", candidates: [direct], observation: nil, now: at(0))
         XCTAssertEqual(sel.path(peer: "a", candidates: [direct], observation: nil, now: at(3)), .direct(direct))
         XCTAssertEqual(sel.path(peer: "b", candidates: [direct], observation: nil, now: at(3)), .relay)
@@ -155,5 +165,95 @@ final class PathSelectorTests: XCTestCase {
         let b = o[Data(repeating: 0xCD, count: 32).base64EncodedString()]
         XCTAssertNil(b?.lastHandshake)
         XCTAssertEqual(b?.endpoint, "127.0.0.1:60000")
+    }
+}
+
+extension PathSelectorTests {
+    func testProbesStartOnTheSharedGridSoBothEndsOverlap() {
+        // Two peers whose clocks differ by 2s and who began at different
+        // moments still start probing in the same 30s slot.
+        var a = PathSelector()
+        var b = PathSelector()
+        let base = Date(timeIntervalSince1970: 3_000_000)   // a multiple of 30
+        let aStart = base.addingTimeInterval(4)
+        let bStart = base.addingTimeInterval(17)
+        _ = a.path(peer: "p", candidates: ["203.0.113.5:1"], observation: nil, now: aStart)
+        _ = b.path(peer: "p", candidates: ["203.0.113.5:1"], observation: nil, now: bStart)
+        let slot = base.addingTimeInterval(30)
+        XCTAssertEqual(a.path(peer: "p", candidates: ["203.0.113.5:1"], observation: nil, now: slot.addingTimeInterval(-1)), .relay)
+        XCTAssertEqual(b.path(peer: "p", candidates: ["203.0.113.5:1"], observation: nil, now: slot.addingTimeInterval(-1)), .relay)
+        XCTAssertEqual(a.path(peer: "p", candidates: ["203.0.113.5:1"], observation: nil, now: slot), .direct("203.0.113.5:1"))
+        XCTAssertEqual(b.path(peer: "p", candidates: ["203.0.113.5:1"], observation: nil, now: slot.addingTimeInterval(1)), .direct("203.0.113.5:1"))
+    }
+
+    func testThreeRetriesOnTheNextSlotBeforeBackingOff() {
+        var sel = PathSelector()
+        let c = ["203.0.113.5:1"]
+        var now = Date(timeIntervalSince1970: 3_000_000)
+        _ = sel.path(peer: "p", candidates: c, observation: nil, now: now)
+        var starts: [TimeInterval] = []
+        for _ in 0..<5 {
+            while sel.path(peer: "p", candidates: c, observation: nil, now: now) == .relay { now = now.addingTimeInterval(1) }
+            starts.append(now.timeIntervalSince1970)
+            now = now.addingTimeInterval(13)   // past the 12s probe timeout
+            XCTAssertEqual(sel.path(peer: "p", candidates: c, observation: nil, now: now), .relay)
+        }
+        let gaps = zip(starts.dropFirst(), starts).map { $0 - $1 }
+        XCTAssertEqual(Array(gaps.prefix(3)), [30, 30, 30])
+        // Then it moves to the 2-minute grid: the 4th start is on it, and
+        // arrives between 2 and 3 minutes after the 3rd.
+        XCTAssertEqual(starts[4].truncatingRemainder(dividingBy: 120), 0)
+        XCTAssertTrue((120...180).contains(gaps[3]), "gap \(gaps[3])")
+    }
+}
+
+extension PathSelectorTests {
+    func testExistingSessionIsPromotedOnInboundBytesWithoutANewHandshake() {
+        var sel = plainSelector()
+        let c = ["203.0.113.5:51820"]
+        _ = sel.path(peer: "a", candidates: c, observation: obs("127.0.0.1:1", handshake: -50, rx: 100), now: at(0))
+        // The probe starts; the old handshake is far older than the switch.
+        XCTAssertEqual(sel.path(peer: "a", candidates: c, observation: obs("127.0.0.1:1", handshake: -50, rx: 100), now: at(3)), .direct(c[0]))
+        // Endpoint is ours but nothing has arrived yet.
+        XCTAssertEqual(sel.path(peer: "a", candidates: c, observation: obs(c[0], handshake: -50, rx: 100), now: at(5)), .direct(c[0]))
+        // Bytes arrived with the endpoint still at the candidate: promoted.
+        XCTAssertEqual(sel.path(peer: "a", candidates: c, observation: obs(c[0], handshake: -50, rx: 180), now: at(6)), .direct(c[0]))
+        XCTAssertEqual(sel.path(peer: "a", candidates: c, observation: obs(c[0], handshake: -50, rx: 260), now: at(40)), .direct(c[0]))
+    }
+
+    func testInboundBytesViaRelayDoNotPromote() {
+        var sel = plainSelector()
+        let c = ["203.0.113.5:51820"]
+        _ = sel.path(peer: "a", candidates: c, observation: obs("127.0.0.1:1", rx: 100), now: at(0))
+        _ = sel.path(peer: "a", candidates: c, observation: obs("127.0.0.1:1", rx: 100), now: at(3))
+        // WireGuard roamed back to the relay proxy while bytes kept arriving.
+        XCTAssertEqual(sel.path(peer: "a", candidates: c, observation: obs("127.0.0.1:1", rx: 400), now: at(6)), .direct(c[0]))
+        XCTAssertEqual(sel.path(peer: "a", candidates: c, observation: obs("127.0.0.1:1", rx: 500), now: at(12)), .relay)
+    }
+}
+
+extension PathSelectorTests {
+    func testEndsWithDifferentFailureCountsMeetOnTheTwoMinuteGrid() {
+        let c = ["203.0.113.5:1"]
+        func nextProbe(failures: Int) -> TimeInterval {
+            var sel = PathSelector()
+            var now = Date(timeIntervalSince1970: 3_000_000)
+            _ = sel.path(peer: "p", candidates: c, observation: nil, now: now)
+            var t: [TimeInterval] = []
+            for _ in 0...failures {
+                while sel.path(peer: "p", candidates: c, observation: nil, now: now) == .relay { now = now.addingTimeInterval(1) }
+                t.append(now.timeIntervalSince1970)
+                now = now.addingTimeInterval(13)
+                _ = sel.path(peer: "p", candidates: c, observation: nil, now: now)
+            }
+            // Where its next probe lands.
+            while sel.path(peer: "p", candidates: c, observation: nil, now: now) == .relay { now = now.addingTimeInterval(1) }
+            return now.timeIntervalSince1970
+        }
+        // After 3 and after 4 failures the waits are 120s and 600s: both land on
+        // a multiple of 120s, so the slow end's next attempt is one the fast end hits too.
+        XCTAssertEqual(nextProbe(failures: 3).truncatingRemainder(dividingBy: 120), 0)
+        XCTAssertEqual(nextProbe(failures: 4).truncatingRemainder(dividingBy: 120), 0)
+        XCTAssertEqual(nextProbe(failures: 5).truncatingRemainder(dividingBy: 120), 0)
     }
 }

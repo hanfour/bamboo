@@ -52,17 +52,18 @@ final class PacketTunnelProvider_iOS: NEPacketTunnelProvider {
     private var stopping = false
     private var recovering = false
 
-    private func runtimeDump() async -> String? {
-        await withCheckedContinuation { cont in
-            adapter.getRuntimeConfiguration { cont.resume(returning: $0) }
+    /// While a direct address is being tried, make WireGuard send to it now
+    /// (a keepalive) so this end's NAT opens toward the peer.
+    private func kickPaths(_ endpoints: [String: String]) async {
+        guard !recovering else { return }
+        var byKey: [PublicKey: String] = [:]
+        for (b64, endpoint) in endpoints {
+            if let k = PublicKey(base64Key: b64) { byKey[k] = endpoint }
         }
-    }
-
-    /// A peer moved between the relay and a direct address: apply the same
-    /// base config again so the mesh hands WireGuard the new endpoints.
-    private func reapplyForPathChange() async {
-        guard let base = lastBase else { return }
-        await applyFromControlPlane(base)
+        guard !byKey.isEmpty else { return }
+        let _: Error? = await withCheckedContinuation { cont in
+            adapter.updateEndpoints(byKey, keepalive: 25) { cont.resume(returning: $0) }
+        }
     }
 
     /// WireGuard closes its device for good when reading the tun fails
@@ -93,6 +94,51 @@ final class PacketTunnelProvider_iOS: NEPacketTunnelProvider {
             log.error("backend recover: build failed: \(String(describing: error), privacy: .public)")
             cancelTunnelWithError(error)
         }
+    }
+
+    private func runtimeDump() async -> String? {
+        await withCheckedContinuation { cont in
+            adapter.getRuntimeConfiguration { cont.resume(returning: $0) }
+        }
+    }
+
+    /// A peer moved between the relay and a direct address: apply the same
+    /// base config again so the mesh hands WireGuard the new endpoints.
+    /// Gives WireGuard what changed since `lastApplied` and nothing more:
+    /// nothing when only tokens moved, an in-place endpoint update when only
+    /// endpoints moved, a full update otherwise.
+    private func applyPrepared(_ prepared: (effective: BambooTunnelConfig, tunnel: TunnelConfiguration)) async -> Error? {
+        switch prepared.effective.wgDelta(from: lastApplied) {
+        case .none:
+            lastApplied = prepared.effective
+            return nil
+        case .endpoints(let moved):
+            var byKey: [PublicKey: String] = [:]
+            for (b64, endpoint) in moved {
+                if let k = PublicKey(base64Key: b64) { byKey[k] = endpoint }
+            }
+            if byKey.count == moved.count {
+                let err: Error? = await withCheckedContinuation { cont in
+                    adapter.updateEndpoints(byKey) { cont.resume(returning: $0) }
+                }
+                if err == nil { lastApplied = prepared.effective }
+                return err
+            }
+        case .full:
+            break
+        }
+        let err: Error? = await withCheckedContinuation { cont in
+            adapter.update(tunnelConfiguration: prepared.tunnel) { cont.resume(returning: $0) }
+        }
+        if err == nil { lastApplied = prepared.effective }
+        return err
+    }
+
+    /// A peer moved between the relay and a direct address: apply the same
+    /// base config again so the mesh hands WireGuard the new endpoints.
+    private func reapplyForPathChange() async {
+        guard !recovering, let base = lastBase else { return }
+        await applyFromControlPlane(base)
     }
 
     /// Starts the control plane, or hands a running one the app's new base.
@@ -130,15 +176,11 @@ final class PacketTunnelProvider_iOS: NEPacketTunnelProvider {
         lastBase = config
         do {
             let prepared = try await prepare(config)
-            if prepared.effective == lastApplied { return }
-            let err: Error? = await withCheckedContinuation { cont in
-                adapter.update(tunnelConfiguration: prepared.tunnel) { cont.resume(returning: $0) }
-            }
-            if let err {
+            let delta = prepared.effective.wgDelta(from: lastApplied)
+            if let err = await applyPrepared(prepared) {
                 log.error("control-plane apply: \(String(describing: err), privacy: .public)")
                 await recoverBackend(reason: "apply failed")
-            } else {
-                lastApplied = prepared.effective
+            } else if delta != .none {
                 log.log("control-plane apply ok peers=\(config.peers.count, privacy: .public)")
             }
         } catch {
@@ -199,7 +241,8 @@ final class PacketTunnelProvider_iOS: NEPacketTunnelProvider {
                     guard let self else { return }
                     await self.mesh.enableDirectPaths(
                         stats: { [weak self] in await self?.runtimeDump() },
-                        changed: { [weak self] in await self?.reapplyForPathChange() }
+                        changed: { [weak self] in await self?.reapplyForPathChange() },
+                        kick: { [weak self] endpoints in await self?.kickPaths(endpoints) }
                     )
                     await self.runControlPlane(for: appConfig)
                 }
@@ -258,17 +301,15 @@ final class PacketTunnelProvider_iOS: NEPacketTunnelProvider {
                     completionHandler?(self.encodeError("build: \(error)"))
                     return
                 }
-                self.adapter.update(tunnelConfiguration: prepared.tunnel) { [weak self] error in
-                    if let error = error {
-                        self?.log.error("adapter.update: \(String(describing: error), privacy: .public)")
-                        completionHandler?(self?.encodeError("update: \(error)"))
-                        return
-                    }
-                    self?.lastApplied = prepared.effective
-                    self?.lastBase = appConfig
-                    self?.log.log("applyConfig ok peers=\(appConfig.peers.count, privacy: .public)")
-                    completionHandler?(self?.encodeOK())
+                if let error = await self.applyPrepared(prepared) {
+                    self.log.error("adapter.update: \(String(describing: error), privacy: .public)")
+                    completionHandler?(self.encodeError("update: \(error)"))
+                    await self.recoverBackend(reason: "applyConfig failed")
+                    return
                 }
+                self.lastBase = appConfig
+                self.log.log("applyConfig ok peers=\(appConfig.peers.count, privacy: .public)")
+                completionHandler?(self.encodeOK())
             }
 
         case .status:

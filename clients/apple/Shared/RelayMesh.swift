@@ -32,8 +32,15 @@ public actor RelayMesh {
     private var appliedPaths: [String: PeerPath] = [:]
     private var pathStats: (@Sendable () async -> String?)?
     private var onPathChange: (@Sendable () async -> Void)?
+    private var onKick: (@Sendable ([String: String]) async -> Void)?
     private var pathTask: Task<Void, Never>?
     private let lanAddresses: @Sendable () -> [String]
+    /// Whether this device's router keeps the source port, so a peer can
+    /// reach it at publicIP:wgPort. Without that, a public candidate cannot
+    /// work in either direction and probing only costs packets.
+    private var ownPublicOK = false
+    private var ownPublicIP: String?
+    private var ownPublicCheckedAt = Date.distantPast
 
     public init(lanAddresses: @escaping @Sendable () -> [String] = { EndpointDiscovery.lanIPv4Addresses() }) {
         self.lanAddresses = lanAddresses
@@ -43,9 +50,11 @@ public actor RelayMesh {
     /// a direct address. `stats` returns the UAPI dump; `changed` asks the
     /// owner to apply the config again once a peer's path moved.
     public func enableDirectPaths(stats: @escaping @Sendable () async -> String?,
-                                  changed: @escaping @Sendable () async -> Void) {
+                                  changed: @escaping @Sendable () async -> Void,
+                                  kick: @escaping @Sendable ([String: String]) async -> Void) {
         pathStats = stats
         onPathChange = changed
+        onKick = kick
         startPathTask()
     }
 
@@ -114,7 +123,12 @@ public actor RelayMesh {
         var out: [String: PeerPath] = [:]
         for p in lastPeers {
             let usable = lan.isEmpty || pathStats == nil ? [] : (p.candidates ?? []).filter {
-                EndpointDiscovery.isReachableLAN($0, from: lan)
+                guard EndpointDiscovery.isReachableLAN($0, from: lan) else { return false }
+                guard let (host, _) = EndpointDiscovery.split($0) else { return false }
+                if EndpointDiscovery.isPrivate(host) { return true }
+                // A peer behind the same router can only be reached on the
+                // LAN; dialling the router's own public address rarely loops back.
+                return ownPublicOK && host != ownPublicIP
             }
             out[p.publicKey] = selector.path(peer: p.publicKey, candidates: usable,
                                              observation: observations[p.publicKey], now: now)
@@ -126,24 +140,58 @@ public actor RelayMesh {
         pathTask?.cancel()
         pathTask = Task { [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 5_000_000_000)
                 guard let self else { return }
-                await self.pathTick()
+                let busy = await self.pathTick()
+                // Poll quickly only while a direct address could be tried.
+                try? await Task.sleep(nanoseconds: busy ? 2_000_000_000 : 30_000_000_000)
             }
         }
     }
 
-    private func pathTick() async {
+    /// Returns whether the next tick should come soon.
+    private func pathTick() async -> Bool {
         guard client != nil, let pathStats, let onPathChange,
-              lastPeers.contains(where: { !($0.candidates ?? []).isEmpty }),
-              let dump = await pathStats() else { return }
+              !lanAddresses().isEmpty,
+              lastPeers.contains(where: { !($0.candidates ?? []).isEmpty }) else { return false }
+        if Date().timeIntervalSince(ownPublicCheckedAt) > 300 {
+            ownPublicCheckedAt = Date()
+            let local = UInt16.random(in: 49152...65000)
+            if let mapped = try? await STUNClient.discover(localPort: local),
+               let (ip, port) = EndpointDiscovery.split(mapped) {
+                ownPublicOK = port == local
+                ownPublicIP = ip
+            } else {
+                ownPublicOK = false
+                ownPublicIP = nil
+            }
+            log.log("relay-mesh: public endpoint usable=\(self.ownPublicOK, privacy: .public)")
+        }
+        guard let dump = await pathStats() else { return true }
         observations = WGStatsParser.observations(dump)
         let next = resolvePaths(now: Date())
-        guard next != appliedPaths else { return }
+        guard next != appliedPaths else {
+            // Two NATs open only when both ends send, so while a candidate
+            // is being tried keep nudging WireGuard to send to it.
+            var probing: [String: String] = [:]
+            for (key, path) in next {
+                if case .direct(let ep) = path, selector.isProbing(key) { probing[key] = ep }
+            }
+            if !probing.isEmpty { await onKick?(probing) }
+            return true
+        }
         for (key, path) in next where appliedPaths[key] != path {
-            log.log("relay-mesh: path \(String(key.prefix(6)), privacy: .public) -> \(String(describing: path), privacy: .public)")
+            let seen = observations[key]
+            let hs = seen?.lastHandshake.map { Int(Date().timeIntervalSince($0)) }
+            let cands = (lastPeers.first { $0.publicKey == key }?.candidates ?? []).joined(separator: ",")
+            log.log("relay-mesh: path \(String(key.prefix(6)), privacy: .public) -> \(String(describing: path), privacy: .public) endpoint=\(seen?.endpoint ?? "-", privacy: .public) rx=\(seen?.rxBytes ?? 0, privacy: .public) handshakeAge=\(hs ?? -1, privacy: .public) cands=\(cands, privacy: .public) ownPublicOK=\(self.ownPublicOK, privacy: .public)")
         }
         await onPathChange()
+        var probing: [String: String] = [:]
+        for (key, path) in next {
+            if case .direct(let ep) = path, selector.isProbing(key) { probing[key] = ep }
+        }
+        if !probing.isEmpty { await onKick?(probing) }
+        return true
     }
 
     /// The session token was renewed; later relay tokens must use it.
@@ -164,6 +212,7 @@ public actor RelayMesh {
         pathTask = nil
         pathStats = nil
         onPathChange = nil
+        onKick = nil
         await closeRelay()
     }
 

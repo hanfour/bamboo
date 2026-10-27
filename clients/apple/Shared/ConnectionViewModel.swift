@@ -576,6 +576,11 @@ public final class ConnectionViewModel: ObservableObject {
                         await self?.refreshPolicyFromController()
                     }
                 },
+                onPeersChanged: { [weak self] in
+                    Task { @MainActor [weak self] in
+                        await self?.refreshPolicyFromController()
+                    }
+                },
                 onSessionRenewed: { [weak self] token in
                     // The controller issued a replacement session. Adopt
                     // it, and push it to the extension through a config

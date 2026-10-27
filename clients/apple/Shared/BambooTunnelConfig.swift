@@ -154,4 +154,32 @@ public struct BambooTunnelConfig: Codable, Equatable {
                            peers: newPeers, presence: presence, relay: relay,
                            controlPlane: controlPlane)
     }
+
+    /// What WireGuard has to do to go from `old` to `self`. Tokens and relay
+    /// settings ride in the same struct but never reach WireGuard, so they
+    /// are ignored.
+    public enum WGDelta: Equatable {
+        case none
+        /// Only these peers' endpoints moved (peer public key to endpoint).
+        case endpoints([String: String])
+        case full
+    }
+
+    public func wgDelta(from old: BambooTunnelConfig?) -> WGDelta {
+        guard let old, privateKey == old.privateKey, address == old.address,
+              address6 == old.address6, dnsServers == old.dnsServers, mtu == old.mtu,
+              wgListenPort == old.wgListenPort, peers.count == old.peers.count else { return .full }
+        let before = Dictionary(old.peers.map { ($0.publicKey, $0) }, uniquingKeysWith: { a, _ in a })
+        var moved: [String: String] = [:]
+        for p in peers {
+            guard let o = before[p.publicKey], o.id == p.id,
+                  o.allowedIPs == p.allowedIPs,
+                  o.persistentKeepalive == p.persistentKeepalive else { return .full }
+            if o.endpoint != p.endpoint {
+                guard let e = p.endpoint else { return .full }
+                moved[p.publicKey] = e
+            }
+        }
+        return moved.isEmpty ? .none : .endpoints(moved)
+    }
 }
