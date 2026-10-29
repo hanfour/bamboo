@@ -193,6 +193,9 @@ public actor RelayClient {
             try await Task.sleep(nanoseconds: 20_000_000)
         }
         let endpoint = ps.endpointString()
+        if settled, case let .hostPort(_, port) = conn.currentPath?.localEndpoint ?? .hostPort(host: "127.0.0.1", port: .any) {
+            ps.boundPort = port
+        }
         if !settled {
             // 2s budget exhausted. Future "mesh isn't forwarding"
             // debug should see this rather than chase a phantom
@@ -228,7 +231,8 @@ public actor RelayClient {
     }
 
     private func receiveOutbound(ps: PeerSocket) {
-        ps.conn.receiveMessage { [weak self] data, _, _, error in
+        let conn = ps.conn
+        conn.receiveMessage { [weak self] data, _, _, error in
             guard let self = self else { return }
             if let err = error {
                 Task { await self.logReceiveError(ps: ps, err: err) }
@@ -238,8 +242,44 @@ public actor RelayClient {
             }
             if error == nil {
                 self.receiveOutbound(ps: ps)
+            } else {
+                // WireGuard rebinds its UDP socket on every network change,
+                // and a packet sent into that gap is answered with
+                // "connection refused". Reading must not stop there, or this
+                // peer never reaches the relay again until the tunnel is
+                // rebuilt.
+                Task { await self.rebind(ps: ps, failed: conn) }
             }
         }
+    }
+
+    /// Replace a proxy socket that errored with a new one on the same local
+    /// port, so WireGuard's endpoint for the peer stays valid.
+    private func rebind(ps: PeerSocket, failed: NWConnection) async {
+        guard peers[ps.pubkey] === ps, ps.conn === failed, !ps.rebinding, let port = ps.boundPort else { return }
+        // Cancelling the old connection fails its pending read, which lands
+        // back here; the flag keeps that from starting a second rebind.
+        ps.rebinding = true
+        defer { ps.rebinding = false }
+        failed.cancel()
+        for attempt in 0..<10 {
+            try? await Task.sleep(nanoseconds: UInt64(min(attempt + 1, 5)) * 200_000_000)
+            guard peers[ps.pubkey] === ps else { return }
+            let parameters = NWParameters.udp
+            parameters.requiredLocalEndpoint = NWEndpoint.hostPort(host: NWEndpoint.Host("127.0.0.1"), port: port)
+            let conn = NWConnection(to: wgListenAddr, using: parameters)
+            conn.start(queue: DispatchQueue(label: "dev.hanfour.bamboo.relay.peer"))
+            for _ in 0..<50 {
+                if case .ready = conn.state { break }
+                try? await Task.sleep(nanoseconds: 20_000_000)
+            }
+            guard case .ready = conn.state else { conn.cancel(); continue }
+            ps.conn = conn
+            log.log("relay.rebind: peer=\(ps.pubkey.prefix(6).map { String(format: "%02x", $0) }.joined(), privacy: .public) port=\(port.rawValue, privacy: .public)")
+            receiveOutbound(ps: ps)
+            return
+        }
+        log.warning("relay.rebind: gave up peer=\(ps.pubkey.prefix(6).map { String(format: "%02x", $0) }.joined(), privacy: .public)")
     }
 
     private func logReceiveError(ps: PeerSocket, err: NWError) {
@@ -319,7 +359,10 @@ public actor RelayClient {
 
 private final class PeerSocket {
     let pubkey: Data
-    let conn: NWConnection
+    var conn: NWConnection
+    /// The local proxy port WireGuard's endpoint points at; kept across rebinds.
+    var boundPort: NWEndpoint.Port?
+    var rebinding = false
 
     init(pubkey: Data, conn: NWConnection) {
         self.pubkey = pubkey
