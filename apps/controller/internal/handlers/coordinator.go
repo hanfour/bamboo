@@ -537,6 +537,9 @@ func (h *CoordinatorHandler) Register(ctx context.Context, req *bamboov1.Registe
 			}
 			if changed {
 				self.Endpoints = eps
+				// Same publisher as the heartbeat path: other peers
+				// learn the new endpoints now, gated on visibility.
+				h.PublishPeerUpdatedIfVisible(ctx, tenant.ID, self)
 			}
 		}
 		// Refresh the client version and OS. Without this a client that
