@@ -29,7 +29,7 @@ type Limits struct {
 	IdleTimeout         time.Duration
 }
 
-// DefaultLimits: 120/min per service, 300/min per client IP, 8 MiB body,
+// DefaultLimits returns 120/min per service, 300/min per client IP, 8 MiB body,
 // 5 s dial, 10 min idle stream.
 func DefaultLimits() Limits {
 	return Limits{

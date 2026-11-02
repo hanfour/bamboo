@@ -222,7 +222,7 @@ func (s *Sink) post(ctx context.Context, body []byte) error {
 	if err != nil {
 		return fmt.Errorf("post events: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4<<10))
 	if resp.StatusCode != http.StatusAccepted {
 		return fmt.Errorf("controller responded %d", resp.StatusCode)

@@ -102,7 +102,7 @@ func (p *Poller) refresh(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("routes: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	switch resp.StatusCode {
 	case http.StatusNotModified:
 		return nil
