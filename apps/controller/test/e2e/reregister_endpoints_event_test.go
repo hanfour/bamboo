@@ -50,8 +50,11 @@ func TestReRegister_EndpointChangePublishesPeerUpdated(t *testing.T) {
 
 	count := func(evs []*bamboov1.WatchPeersEvent) (updated, policy int) {
 		for _, e := range evs {
-			if e.GetPeerUpdated() != nil {
+			if pu := e.GetPeerUpdated(); pu != nil {
 				updated++
+				if got := pu.GetPeer().GetEndpoints(); len(got) != 1 || got[0] != "203.0.113.7:51820" {
+					t.Errorf("PeerUpdated endpoints = %v, want [203.0.113.7:51820]", got)
+				}
 			}
 			if e.GetPolicyChanged() != nil {
 				policy++
