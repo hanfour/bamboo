@@ -36,7 +36,7 @@ func loadConfig(getenv func(string) string) (config, error) {
 		Listen:        envOr(getenv, "BAMBOO_INGRESS_LISTEN", "172.17.0.1:8090"),
 		AdminListen:   envOr(getenv, "BAMBOO_INGRESS_ADMIN_LISTEN", "127.0.0.1:8091"),
 		ControllerURL: envOr(getenv, "BAMBOO_CONTROLLER_URL", "http://127.0.0.1:8081"),
-		TokenFile:     envOr(getenv, "BAMBOO_INGRESS_TOKEN_FILE", "/run/bamboo/ingress.token"),
+		TokenFile:     envOr(getenv, "BAMBOO_INGRESS_TOKEN_FILE", "/etc/bamboo-ingress/ingress.token"),
 	}
 	if c.Suffix == "" || strings.HasPrefix(c.Suffix, ".") || !strings.Contains(c.Suffix, ".") {
 		return c, errors.New("BAMBOO_INGRESS_SUFFIX must be a domain such as svc.miilink.net")
@@ -69,7 +69,24 @@ func parsePrefixes(s string) ([]netip.Prefix, error) {
 		if err != nil {
 			return nil, fmt.Errorf("%q is not a CIDR (write a single address as a.b.c.d/32)", item)
 		}
+		if p, err = unmapPrefix(p); err != nil {
+			return nil, fmt.Errorf("%q: %w", item, err)
+		}
 		out = append(out, p.Masked())
 	}
 	return out, nil
+}
+
+// unmapPrefix turns an IPv4-mapped prefix (::ffff:a.b.c.d/n) into the
+// IPv4 prefix it denotes, because the proxy compares unmapped peer
+// addresses and a mapped prefix would never match. A mapped prefix
+// shorter than /96 also spans non-mapped IPv6 space, so it is refused.
+func unmapPrefix(p netip.Prefix) (netip.Prefix, error) {
+	if !p.Addr().Is4In6() {
+		return p, nil
+	}
+	if p.Bits() < 96 {
+		return netip.Prefix{}, errors.New("IPv4-mapped prefix shorter than /96 is ambiguous; use an IPv4 CIDR")
+	}
+	return netip.PrefixFrom(p.Addr().Unmap(), p.Bits()-96), nil
 }

@@ -4637,7 +4637,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
   - `telemetry.SinkOptions{ ControllerURL, TokenPath string; Client *http.Client; QueueSize, BatchSize int; FlushEvery time.Duration; Log *slog.Logger; OnDrop func(n int) }`
   - `telemetry.NewSink(o SinkOptions) *Sink`; `(*Sink).Record(proxy.Record)` (non-blocking), `(*Sink).Run(ctx)`, `(*Sink).Dropped() uint64`
   - `metrics.New(version string) *Metrics`; fields `Requests *prometheus.CounterVec`, `Routes prometheus.Gauge`, `RefreshFailures prometheus.Counter`, `LastRefresh prometheus.Gauge`, `TelemetryDropped prometheus.Counter`; `(*Metrics).Handler() http.Handler`; `(*Metrics).Recorder(next proxy.Recorder) proxy.Recorder`; `(*Metrics).OnRefresh(n int, err error)`
-  - binary `bamboo-ingress`, env: `BAMBOO_INGRESS_SUFFIX` (required), `BAMBOO_INGRESS_LISTEN` (default `172.17.0.1:8090`), `BAMBOO_INGRESS_ADMIN_LISTEN` (default `127.0.0.1:8091`), `BAMBOO_CONTROLLER_URL` (default `http://127.0.0.1:8081`), `BAMBOO_INGRESS_TOKEN_FILE` (default `/run/bamboo/ingress.token`)
+  - binary `bamboo-ingress`, env: `BAMBOO_INGRESS_SUFFIX` (required), `BAMBOO_INGRESS_LISTEN` (default `172.17.0.1:8090`), `BAMBOO_INGRESS_ADMIN_LISTEN` (default `127.0.0.1:8091`), `BAMBOO_CONTROLLER_URL` (default `http://127.0.0.1:8081`), `BAMBOO_INGRESS_TOKEN_FILE` (default `/etc/bamboo-ingress/ingress.token`)
   - image `ghcr.io/hanfour/bamboo-ingress:<tag>`
 
 - [ ] **Step 1: Add the prometheus dependency**
@@ -5065,7 +5065,7 @@ func TestLoadConfig_Defaults(t *testing.T) {
 		t.Fatal(err)
 	}
 	if c.Suffix != "svc.miilink.net" || c.Listen != "172.17.0.1:8090" || c.AdminListen != "127.0.0.1:8091" ||
-		c.ControllerURL != "http://127.0.0.1:8081" || c.TokenFile != "/run/bamboo/ingress.token" {
+		c.ControllerURL != "http://127.0.0.1:8081" || c.TokenFile != "/etc/bamboo-ingress/ingress.token" {
 		t.Errorf("config = %+v", c)
 	}
 }
@@ -5126,7 +5126,7 @@ func loadConfig(getenv func(string) string) (config, error) {
 		Listen:        envOr(getenv, "BAMBOO_INGRESS_LISTEN", "172.17.0.1:8090"),
 		AdminListen:   envOr(getenv, "BAMBOO_INGRESS_ADMIN_LISTEN", "127.0.0.1:8091"),
 		ControllerURL: envOr(getenv, "BAMBOO_CONTROLLER_URL", "http://127.0.0.1:8081"),
-		TokenFile:     envOr(getenv, "BAMBOO_INGRESS_TOKEN_FILE", "/run/bamboo/ingress.token"),
+		TokenFile:     envOr(getenv, "BAMBOO_INGRESS_TOKEN_FILE", "/etc/bamboo-ingress/ingress.token"),
 	}
 	if c.Suffix == "" || strings.HasPrefix(c.Suffix, ".") || !strings.Contains(c.Suffix, ".") {
 		return c, errors.New("BAMBOO_INGRESS_SUFFIX must be a domain such as svc.miilink.net")
