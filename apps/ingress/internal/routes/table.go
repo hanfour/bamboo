@@ -130,6 +130,9 @@ func (t *Table) Replace(rs []Route) {
 	}
 }
 
+// Suffix is the normalized public suffix (lowercase, no trailing dot).
+func (t *Table) Suffix() string { return t.suffix }
+
 // Len reports the number of routes.
 func (t *Table) Len() int { return len(*t.byLabel.Load()) }
 

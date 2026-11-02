@@ -118,3 +118,9 @@ func TestTable_ConcurrentReplaceIsAtomic(t *testing.T) {
 	close(stop)
 	wg.Wait()
 }
+
+func TestTable_SuffixIsNormalized(t *testing.T) {
+	if got := NewTable(" SVC.Example.Test. ").Suffix(); got != "svc.example.test" {
+		t.Errorf("Suffix = %q", got)
+	}
+}
