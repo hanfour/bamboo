@@ -19,6 +19,10 @@ type deviceReapplier struct {
 	base       *wg.DeviceConfig
 	overrides  map[string]string
 	generation uint64
+	// rotator picks each peer's direct endpoint from its candidates
+	// (see clientsync.CandidateRotator). Nil keeps the controller's
+	// first endpoint. Relay overrides are layered on top of its choice.
+	rotator *clientsync.CandidateRotator
 }
 
 func cloneDesired(cfg *wg.DeviceConfig) *wg.DeviceConfig {
@@ -26,6 +30,7 @@ func cloneDesired(cfg *wg.DeviceConfig) *wg.DeviceConfig {
 	out.Peers = append([]wg.PeerConfig(nil), cfg.Peers...)
 	for i := range out.Peers {
 		out.Peers[i].AllowedIPs = append([]netip.Prefix(nil), cfg.Peers[i].AllowedIPs...)
+		out.Peers[i].Candidates = append([]string(nil), cfg.Peers[i].Candidates...)
 	}
 	return &out
 }
@@ -35,7 +40,37 @@ func (r *deviceReapplier) Apply(ctx context.Context, cfg *wg.DeviceConfig) error
 	defer r.mu.Unlock()
 	r.base = cloneDesired(cfg)
 	r.overrides = r.filter(r.overrides)
-	return r.dev.Apply(ctx, clientsync.ApplyEndpointOverrides(r.base, r.overrides))
+	return r.dev.Apply(ctx, r.desired(r.overrides))
+}
+
+// desired layers relay overrides on the rotator's direct endpoints.
+// Select is idempotent for an unchanged base, so every apply path can
+// call it.
+func (r *deviceReapplier) desired(overrides map[string]string) *wg.DeviceConfig {
+	cfg := r.base
+	if r.rotator != nil {
+		cfg = r.rotator.Select(cfg)
+	}
+	return clientsync.ApplyEndpointOverrides(cfg, overrides)
+}
+
+// rotate feeds device stats to the rotator and re-applies when a peer
+// moved to its next candidate. Peers on a relay override are passed as
+// relayed so the rotator leaves them alone.
+func (r *deviceReapplier) rotate(ctx context.Context) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.rotator == nil || r.base == nil {
+		return nil
+	}
+	stats, err := r.dev.Stats()
+	if err != nil {
+		return fmt.Errorf("wg stats: %w", err)
+	}
+	if !r.rotator.Observe(stats, r.overrides) {
+		return nil
+	}
+	return r.reapply(ctx, r.overrides)
 }
 
 func (r *deviceReapplier) filter(overrides map[string]string) map[string]string {
@@ -57,7 +92,7 @@ func (r *deviceReapplier) reapply(ctx context.Context, overrides map[string]stri
 		return fmt.Errorf("device configuration unavailable")
 	}
 	next := r.filter(overrides)
-	if err := r.dev.Apply(ctx, clientsync.ApplyEndpointOverrides(r.base, next)); err != nil {
+	if err := r.dev.Apply(ctx, r.desired(next)); err != nil {
 		return err
 	}
 	r.overrides = next

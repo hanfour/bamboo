@@ -199,7 +199,11 @@ func runUp(cmd *cobra.Command, _ []string) error {
 		}
 	}()
 
-	reapply := &deviceReapplier{dev: dev}
+	// The rotator replaces "controller's first endpoint" with the first
+	// usable one (no remote-LAN addresses on a host outside that LAN)
+	// and steps through the rest while a peer stays silent. Relay
+	// fallback still applies on top; see clientsync.CandidateRotator.
+	reapply := &deviceReapplier{dev: dev, rotator: clientsync.NewCandidateRotator(wg.InterfacePrefixes, time.Now)}
 	transition := &relayTransition{owner: reapply}
 	defer func() {
 		if err := transition.Close(); err != nil {
@@ -366,6 +370,7 @@ func runUp(cmd *cobra.Command, _ []string) error {
 		go clientsync.RunRelayFallback(fallbackCtx, dev, reapply.bound(), relayProxies, time.Now())
 	}
 
+	go clientsync.RunEndpointRotation(daemonCtx, reapply.rotate)
 	go clientsync.RunHeartbeat(daemonCtx, heartbeater, resp.GetSelf().GetId(), discover, reportBytes, egress.ActiveHealth)
 	go clientsync.RunWatchPeers(daemonCtx, adapter, reapply, priv, cache, resp.GetSelf().GetId(), refresh, onRelaysChanged, func(resp *bamboov1.RegisterResponse) { reconcileEgress(egress, resp) })
 
