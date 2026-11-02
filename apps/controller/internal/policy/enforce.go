@@ -28,7 +28,7 @@ type PeerView struct {
 // would satisfy an allow rule that is not shadowed by an earlier deny.
 // Host-level port enforcement is the caller's responsibility.
 func Allow(p *Policy, src, dst PeerView) bool {
-	if p == nil || len(p.Rules) == 0 {
+	if AllowsAll(p) {
 		return true
 	}
 	base := EvalRequest{
@@ -88,3 +88,7 @@ func matchDestinationL3(m Matcher, req EvalRequest) bool {
 		return false
 	}
 }
+
+// AllowsAll reports whether p is the full-mesh fallback: no policy
+// authored, or one without rules.
+func AllowsAll(p *Policy) bool { return p == nil || len(p.Rules) == 0 }

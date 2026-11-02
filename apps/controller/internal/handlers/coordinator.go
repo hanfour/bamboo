@@ -652,8 +652,11 @@ func (h *CoordinatorHandler) Register(ctx context.Context, req *bamboov1.Registe
 
 	policyDoc, currentRev := h.loadPolicyAndRevision(ctx, tenant.ID)
 	// Public services ingress: generated tag:ingress rules for live
-	// services. Never persisted in HCL (spec §4.4).
-	policyDoc = h.withIngressRules(ctx, tenant.ID, policyDoc)
+	// services. Never persisted in HCL (spec §4.4). ingress gates the
+	// ingress peer in tenants without authored rules.
+	liveRoutes := h.liveIngressRoutes(ctx, tenant.ID, allPeers)
+	policyDoc = policy.WithIngressRules(policyDoc, ingressTargets(liveRoutes))
+	ingress := newIngressView(liveRoutes)
 
 	resp := &bamboov1.RegisterResponse{
 		Self:              toProtoPeer(self),
@@ -708,7 +711,7 @@ func (h *CoordinatorHandler) Register(ctx context.Context, req *bamboov1.Registe
 			continue
 		}
 		pp := toProtoPeer(p)
-		pp.AllowedIps = allowedIPsFor(policyDoc, self, p, egressRoute)
+		pp.AllowedIps = ingress.allowedIPs(policyDoc, self, p, egressRoute)
 		resp.Peers = append(resp.Peers, pp)
 	}
 
@@ -1295,6 +1298,8 @@ func computeNAT64EgressRoute(tenant *repo.Tenant, peers []*repo.Peer, now time.T
 //  4. 0.0.0.0/0 (and ::/0) when src has elected dst as its exit
 //     node (issue #137) and dst is exit_node_approved. Default-route
 //     reachability lets src forward public traffic through dst.
+//
+// When either side carries tag:ingress, only (1) is emitted.
 func allowedIPsFor(p *policy.Policy, src, dst *repo.Peer, egress nat64EgressRoute) []string {
 	if !policy.Allow(p, peerView(src, p), peerView(dst, p)) {
 		return nil
@@ -1311,6 +1316,12 @@ func allowedIPsFor(p *policy.Policy, src, dst *repo.Peer, egress nat64EgressRout
 	// above) emitting a single entry.
 	if dst.IP6 != "" {
 		out = append(out, dst.IP6+"/128")
+	}
+	// Public services ingress (spec §4.4): the ingress peer and its
+	// targets exchange bare addresses only. No subnet, exit, or NAT64
+	// route ever runs through or toward the internet-facing peer.
+	if isIngressPeer(src) || isIngressPeer(dst) {
+		return out
 	}
 	// Subnet router (issue #136): merge admin-approved CIDRs.
 	out = append(out, dst.ApprovedRoutes...)
