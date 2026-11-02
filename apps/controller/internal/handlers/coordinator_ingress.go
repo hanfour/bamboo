@@ -114,3 +114,27 @@ func liftRevisionForIngressTx(ctx context.Context, q db.Querier, tenantID uuid.U
 	}
 	return policies.Bump(ctx, tenantID)
 }
+
+// bumpIfIngressLivenessChangedTx bumps the policy revision, inside the
+// status change's transaction, when moving peer into or out of
+// "disabled" changes public-service liveness: peer is the ingress peer,
+// or it hosts an enabled, approved service. online <-> offline never
+// does. Returns the new revision, or 0 when it did not bump; the caller
+// publishes PolicyChanged after commit.
+func bumpIfIngressLivenessChangedTx(ctx context.Context, q db.Querier, peer *repo.Peer, newStatus string) (int64, error) {
+	if (peer.Status == "disabled") == (newStatus == "disabled") {
+		return 0, nil
+	}
+	affects := isIngressPeer(peer)
+	if !affects {
+		hosts, err := repo.NewIngressServices(q).EnabledApprovedForPeer(ctx, peer.ID)
+		if err != nil {
+			return 0, err
+		}
+		affects = hosts
+	}
+	if !affects {
+		return 0, nil
+	}
+	return repo.NewPolicies(q).Bump(ctx, peer.TenantID)
+}

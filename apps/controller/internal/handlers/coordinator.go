@@ -169,7 +169,10 @@ func (h *CoordinatorHandler) SetPeerStatus(ctx context.Context, peerID uuid.UUID
 	if current.Status == newStatus {
 		return current, false, nil
 	}
-	var updated *repo.Peer
+	var (
+		updated   *repo.Peer
+		bumpedRev int64
+	)
 	err = db.WithTenant(ctx, h.pool, current.TenantID, func(q db.Querier) error {
 		peers := repo.NewPeers(q)
 		if _, serr := peers.SetStatus(ctx, peerID, newStatus); serr != nil {
@@ -180,10 +183,15 @@ func (h *CoordinatorHandler) SetPeerStatus(ctx context.Context, peerID uuid.UUID
 			return gerr
 		}
 		updated = u
-		return nil
+		rev, berr := bumpIfIngressLivenessChangedTx(ctx, q, current, newStatus)
+		bumpedRev = rev
+		return berr
 	})
 	if err != nil {
 		return nil, false, err
+	}
+	if bumpedRev > 0 {
+		h.publishPolicyChanged(updated.TenantID, bumpedRev)
 	}
 
 	var event *bamboov1.WatchPeersEvent

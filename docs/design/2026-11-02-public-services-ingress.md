@@ -74,7 +74,7 @@ bootstrap function, following the RLS rules in
 `www`, `api`, `admin`, `relay`, `controller`, `ingress`, `mail`.
 
 A service is **live** when `enabled AND approved_by IS NOT NULL` and its peer
-is approved and not deleted.
+is approved, not disabled, and not deleted.
 
 ### 4.2 REST (admin)
 

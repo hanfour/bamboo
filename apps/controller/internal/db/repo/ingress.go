@@ -33,19 +33,20 @@ type IngressService struct {
 	PeerHostname       string
 	PeerIP             string
 	PeerApprovalStatus string
+	PeerStatus         string // online / offline / disabled
 }
 
 // Approved reports whether an admin has approved the service.
 func (s *IngressService) Approved() bool { return s.ApprovedBy != nil }
 
 // Live reports whether the public name should route: enabled, approved,
-// and on an approved peer. A deleted peer cascades the row away; a nil
+// and on an approved peer that is not disabled. A deleted peer cascades the row away; a nil
 // service (deleted) is not live.
 func (s *IngressService) Live() bool {
 	if s == nil {
 		return false // deleted
 	}
-	return s.Enabled && s.ApprovedBy != nil && s.PeerApprovalStatus == "approved"
+	return s.Enabled && s.ApprovedBy != nil && s.PeerApprovalStatus == "approved" && s.PeerStatus != "disabled"
 }
 
 // IngressRoute is one live service as the ingress proxy and the ACL
@@ -102,7 +103,7 @@ func NewIngressServices(q db.Querier) *IngressServices { return &IngressServices
 const ingressSelect = `
 	SELECT s.id, s.tenant_id, s.peer_id, s.label, s.target_port, s.enabled,
 	       s.approved_by, s.approved_at, s.created_by, s.created_at, s.updated_at,
-	       p.hostname, host(p.ip), p.approval_status
+	       p.hostname, host(p.ip), p.approval_status, p.status
 	  FROM ingress_services s
 	  JOIN peers p ON p.id = s.peer_id`
 
@@ -115,7 +116,7 @@ func scanIngress(row rowScanner) (*IngressService, error) {
 	err := row.Scan(
 		&s.ID, &s.TenantID, &s.PeerID, &s.Label, &s.TargetPort, &s.Enabled,
 		&s.ApprovedBy, &s.ApprovedAt, &s.CreatedBy, &s.CreatedAt, &s.UpdatedAt,
-		&s.PeerHostname, &s.PeerIP, &s.PeerApprovalStatus,
+		&s.PeerHostname, &s.PeerIP, &s.PeerApprovalStatus, &s.PeerStatus,
 	)
 	if err != nil {
 		return nil, err
@@ -186,6 +187,18 @@ func (r *IngressServices) ExistsForPeer(ctx context.Context, peerID uuid.UUID) (
 	return exists, nil
 }
 
+// EnabledApprovedForPeer reports whether the peer hosts a service that
+// is enabled and approved, i.e. one whose liveness follows the peer's own
+// state (approval, disabled).
+func (r *IngressServices) EnabledApprovedForPeer(ctx context.Context, peerID uuid.UUID) (bool, error) {
+	var exists bool
+	if err := r.q.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM ingress_services
+		WHERE peer_id = $1 AND enabled AND approved_by IS NOT NULL)`, peerID).Scan(&exists); err != nil {
+		return false, fmt.Errorf("enabled ingress services for peer: %w", err)
+	}
+	return exists, nil
+}
+
 // Approve records the approver. Returns rows affected.
 func (r *IngressServices) Approve(ctx context.Context, id, approver uuid.UUID) (int64, error) {
 	return r.exec(ctx, `UPDATE ingress_services
@@ -232,6 +245,7 @@ func (r *IngressServices) ListLiveRoutes(ctx context.Context, tenantID uuid.UUID
 		 WHERE s.tenant_id = $1
 		   AND s.enabled AND s.approved_by IS NOT NULL
 		   AND p.approval_status = 'approved'
+		   AND p.status <> 'disabled'
 		 ORDER BY s.label`, tenantID)
 	if err != nil {
 		return nil, fmt.Errorf("list live ingress routes: %w", err)

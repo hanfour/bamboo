@@ -365,3 +365,39 @@ func TestIngressRegister_TaggedPreAuthKeyEnforces(t *testing.T) {
 		t.Error("bystander's view lists the ingress peer")
 	}
 }
+
+// TestIngressLiveness_PeerDisableBumpsRevision: disabling or re-enabling
+// a peer that hosts a live service (or the ingress peer) changes
+// liveness, so peers re-register; online/offline flips and unrelated
+// peers keep today's behaviour (no bump).
+func TestIngressLiveness_PeerDisableBumpsRevision(t *testing.T) {
+	f := startFixture(t)
+	target := registerIngressTestPeer(t, f, "target")
+	unrelated := registerIngressTestPeer(t, f, "unrelated")
+	vps := registerIngressTestPeer(t, f, "vps")
+	tagPeer(t, f, vps.id, "ingress")
+	makeLiveService(t, f, target.id)
+	steps := []struct {
+		peer     string
+		status   string
+		wantBump bool
+	}{
+		{unrelated.id, "disabled", false},
+		{unrelated.id, "online", false},
+		{target.id, "offline", false},
+		{target.id, "disabled", true},
+		{target.id, "online", true},
+		{vps.id, "disabled", true},
+		{vps.id, "offline", true},
+	}
+	for _, s := range steps {
+		before := policyRevision(t, f)
+		r := ingressCall(t, http.MethodPatch, f.httpURL+"/api/v1/peers/"+s.peer, "", f.tenantSlug, map[string]any{"status": s.status})
+		if r.status != http.StatusOK {
+			t.Fatalf("PATCH status=%s: %d %s", s.status, r.status, r.body)
+		}
+		if bumped := policyRevision(t, f) > before; bumped != s.wantBump {
+			t.Errorf("peer %s -> %s: bump=%v, want %v", s.peer[:8], s.status, bumped, s.wantBump)
+		}
+	}
+}

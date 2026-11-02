@@ -514,3 +514,44 @@ func TestIngress_LabelLiveRequiresValidToken(t *testing.T) {
 		t.Errorf("valid token: LabelLive = %v, %v; want true", live, err)
 	}
 }
+
+// TestIngress_DisabledPeerIsNotLive: an admin-disabled peer drops out of
+// every mesh view, so its services stop being live everywhere: the TLS
+// ask, the routes table, and IngressService.Live.
+func TestIngress_DisabledPeerIsNotLive(t *testing.T) {
+	admin := requireDB(t)
+	app := requireAppDB(t)
+	ctx := context.Background()
+	fx := seedIngressTenant(t, admin, 213)
+	label := makeRepoLiveService(t, app, fx)
+	putIngressToken(t, admin, fx, time.Hour)
+	if live, err := repo.NewIngressServices(app).LabelLive(ctx, label); err != nil || !live {
+		t.Fatalf("before disable: LabelLive = %v, %v; want true", live, err)
+	}
+	if _, err := admin.Exec(ctx, `UPDATE peers SET status = 'disabled' WHERE id = $1`, fx.peerID); err != nil {
+		t.Fatalf("disable peer: %v", err)
+	}
+	if live, err := repo.NewIngressServices(app).LabelLive(ctx, label); err != nil || live {
+		t.Errorf("LabelLive = %v, %v; want false", live, err)
+	}
+	if err := db.WithTenant(ctx, app, fx.tenantID, func(q db.Querier) error {
+		svcs := repo.NewIngressServices(q)
+		routes, err := svcs.ListLiveRoutes(ctx, fx.tenantID)
+		if err != nil {
+			return err
+		}
+		if len(routes) != 0 {
+			t.Errorf("live routes on a disabled peer: %+v", routes)
+		}
+		list, err := svcs.ListByTenant(ctx, fx.tenantID)
+		if err != nil {
+			return err
+		}
+		if len(list) != 1 || list[0].Live() {
+			t.Errorf("ListByTenant Live() on a disabled peer: %+v", list)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("tx: %v", err)
+	}
+}
