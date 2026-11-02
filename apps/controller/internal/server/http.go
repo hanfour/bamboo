@@ -80,9 +80,15 @@ type HTTPServer struct {
 	// a relay-host compromise can't forge tokens (audit C-1 root fix).
 	// Nil ⇒ fall back to HMAC (relayTokenSecret). Set via SetRelaySigningKey.
 	relaySigningKey ed25519.PrivateKey
-	baseURL         string
-	ttl             time.Duration
-	requireAuth     bool
+	// ingressSigningKey signs and verifies ingress service tokens
+	// (public services ingress). Nil ⇒ token issue and the internal
+	// routes/events endpoints answer 503. ingressSuffix is the public
+	// DNS suffix ("svc.miilink.net"); empty ⇒ ask always answers 404.
+	ingressSigningKey ed25519.PrivateKey
+	ingressSuffix     string
+	baseURL           string
+	ttl               time.Duration
+	requireAuth       bool
 	// rateLimit holds per-IP token-bucket limiters for the brute-force
 	// surfaces (login / register / relay-token). Nil ⇒ limiting off (the
 	// default; tests and the e2e fixture never enable it). Set via
@@ -430,6 +436,14 @@ func (h *HTTPServer) SetRelaySecret(secret []byte) {
 // auth.ParseRelaySigningKey (env: BAMBOO_RELAY_SIGNING_KEY).
 func (h *HTTPServer) SetRelaySigningKey(key ed25519.PrivateKey) {
 	h.relaySigningKey = key
+}
+
+// SetIngressConfig wires public services ingress. key may be nil; suffix
+// may be empty. Both are read per request, so tests may call this after
+// NewHTTPServer.
+func (h *HTTPServer) SetIngressConfig(key ed25519.PrivateKey, suffix string) {
+	h.ingressSigningKey = key
+	h.ingressSuffix = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(suffix)), ".")
 }
 
 // relayTokenSecret returns the key used to sign relay tokens: the

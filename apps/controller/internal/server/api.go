@@ -99,6 +99,7 @@ func (h *HTTPServer) routeAPI(w http.ResponseWriter, r *http.Request) {
 	case h.routeInvitations(w, r, authn, tenant):
 	case h.routeAPITokens(w, r, authn, tenant):
 	case h.routeWebhooks(w, r, authn, tenant):
+	case h.routeIngress(w, r, authn, tenant):
 	case h.routePolicy(w, r, authn, tenant):
 	default:
 		h.routeReadOnlyAndDNS(w, r, authn, tenant)

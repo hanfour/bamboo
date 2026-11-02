@@ -6,6 +6,7 @@ package server
 
 import (
 	"context"
+	"crypto/ed25519"
 	"fmt"
 	"log/slog"
 	"net"
@@ -82,6 +83,17 @@ func New(cfg *config.Config, pool *db.Pool, ch *clickhouse.Conn) (*Server, error
 		}
 		httpSrv.SetRelaySigningKey(signKey)
 	}
+	// Public services ingress. A malformed key fails startup, like the
+	// relay key; an empty one leaves the feature off.
+	var ingressKey ed25519.PrivateKey
+	if cfg.Ingress.SigningKey != "" {
+		k, err := auth.ParseRelaySigningKey(cfg.Ingress.SigningKey)
+		if err != nil {
+			return nil, fmt.Errorf("parse BAMBOO_INGRESS_SIGNING_KEY: %w", err)
+		}
+		ingressKey = k
+	}
+	httpSrv.SetIngressConfig(ingressKey, cfg.Ingress.Suffix)
 	// Per-IP brute-force limiting on login / register / relay-token
 	// (audit H-4). On by default; set BAMBOO_RATE_LIMIT_DISABLED=true to
 	// opt out (e.g. load testing).
