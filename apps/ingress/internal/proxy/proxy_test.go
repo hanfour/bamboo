@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"strconv"
 	"strings"
 	"sync"
@@ -47,15 +48,25 @@ func routeTo(t *testing.T, upstreamURL string) routes.Route {
 	return routes.Route{ServiceID: "svc-1", Label: "app", PeerIP: host, TargetPort: port}
 }
 
-// setup returns a front server running the proxy for one route.
+// loopback is the test client's socket address range; setup trusts it
+// as if it were Caddy, so X-Forwarded-For in tests is honoured.
+var loopback = []netip.Prefix{netip.MustParsePrefix("127.0.0.0/8"), netip.MustParsePrefix("::1/128")}
+
+// setup returns a front server running the proxy for one route, with the
+// test client trusted as the TLS-terminating proxy.
 func setup(t *testing.T, upstream http.Handler, limits Limits) (*httptest.Server, *routes.Table, *memRecorder) {
+	t.Helper()
+	return setupTrusting(t, upstream, limits, loopback)
+}
+
+func setupTrusting(t *testing.T, upstream http.Handler, limits Limits, trusted []netip.Prefix) (*httptest.Server, *routes.Table, *memRecorder) {
 	t.Helper()
 	up := httptest.NewServer(upstream)
 	t.Cleanup(up.Close)
 	tb := routes.NewTable("svc.test")
 	tb.Replace([]routes.Route{routeTo(t, up.URL)})
 	rec := &memRecorder{}
-	front := httptest.NewServer(New(Options{Table: tb, Limits: limits, Recorder: rec}))
+	front := httptest.NewServer(New(Options{Table: tb, Limits: limits, Recorder: rec, TrustedProxies: trusted}))
 	t.Cleanup(front.Close)
 	return front, tb, rec
 }

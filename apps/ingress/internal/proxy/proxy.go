@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httputil"
+	"net/netip"
 	"strconv"
 	"strings"
 	"sync"
@@ -59,11 +60,14 @@ type Recorder interface {
 }
 
 // Options configure a Handler. Recorder and Transport are optional.
+// TrustedProxies lists the socket peers (Caddy) whose X-Forwarded-For is
+// believed; empty trusts nobody, so every client is its socket address.
 type Options struct {
-	Table     *routes.Table
-	Limits    Limits
-	Recorder  Recorder
-	Transport http.RoundTripper
+	Table          *routes.Table
+	Limits         Limits
+	Recorder       Recorder
+	Transport      http.RoundTripper
+	TrustedProxies []netip.Prefix
 }
 
 // Handler is the public-facing http.Handler. It never logs: the only
@@ -74,6 +78,7 @@ type Handler struct {
 	rec        Recorder
 	perService *ratelimit.Limiter
 	perClient  *ratelimit.Limiter
+	trusted    []netip.Prefix
 	rp         *httputil.ReverseProxy
 }
 
@@ -97,6 +102,7 @@ func New(o Options) *Handler {
 		rec:        o.Recorder,
 		perService: ratelimit.New(o.Limits.PerServicePerMinute, o.Limits.PerServicePerMinute),
 		perClient:  ratelimit.New(o.Limits.PerClientPerMinute, o.Limits.PerClientPerMinute),
+		trusted:    append([]netip.Prefix(nil), o.TrustedProxies...),
 	}
 	transport := o.Transport
 	if transport == nil {
@@ -145,6 +151,12 @@ func errorHandler(w http.ResponseWriter, r *http.Request, err error) {
 
 // ServeHTTP routes one request.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if isUpgrade(r) {
+		// Spec §5 covers HTTP and SSE only; a hijacked connection would
+		// escape the idle timer, byte counts and route retirement.
+		http.Error(w, "protocol upgrade not supported", http.StatusBadRequest)
+		return
+	}
 	entry, ok := h.table.Lookup(r.Host)
 	if !ok {
 		http.Error(w, "unknown service", http.StatusNotFound)
@@ -152,16 +164,17 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	start := time.Now()
 	rw := &recorder{ResponseWriter: w}
-	clientIP := ClientIP(r)
+	trusted := h.peerTrusted(r)
+	clientIP := ClientIP(r, trusted)
 	st := &reqState{
 		entry:        entry,
 		publicHost:   entry.Route.Label + "." + h.table.Suffix(),
 		clientIP:     clientIP,
-		forwardedFor: forwardedFor(r, clientIP),
+		forwardedFor: forwardedFor(r, clientIP, trusted),
 	}
 	defer h.report(st, rw, start)
 
-	if !h.allow(rw, h.perClient, "ip:"+clientIP) || !h.allow(rw, h.perService, "svc:"+entry.Route.ServiceID) {
+	if !h.allow(rw, h.perClient, limiterKey(clientIP)) || !h.allow(rw, h.perService, "svc:"+entry.Route.ServiceID) {
 		return
 	}
 	if r.ContentLength > h.limits.MaxBodyBytes {
@@ -260,17 +273,39 @@ func (h *Handler) CleanupLimiters(idle time.Duration) {
 	h.perClient.Cleanup(idle)
 }
 
-// ClientIP is the client address. The listener sits on the docker bridge
-// and is reachable only from Caddy, which puts the address it saw last in
-// X-Forwarded-For, so the rightmost entry is trusted; anything to its left
-// is client-supplied. RemoteAddr is the fallback.
-func ClientIP(r *http.Request) string {
-	parts := xffEntries(r)
-	if len(parts) > 0 {
-		if ip := net.ParseIP(parts[len(parts)-1]); ip != nil {
-			return ip.String()
+// isUpgrade reports a protocol-switch request: any Upgrade header, or an
+// "upgrade" token in Connection.
+func isUpgrade(r *http.Request) bool {
+	if r.Header.Get("Upgrade") != "" {
+		return true
+	}
+	for _, line := range r.Header.Values("Connection") {
+		for _, tok := range strings.Split(line, ",") {
+			if strings.EqualFold(strings.TrimSpace(tok), "upgrade") {
+				return true
+			}
 		}
 	}
+	return false
+}
+
+// peerTrusted reports whether the socket peer is a trusted proxy.
+func (h *Handler) peerTrusted(r *http.Request) bool {
+	addr, err := netip.ParseAddr(socketIP(r))
+	if err != nil {
+		return false
+	}
+	addr = addr.Unmap()
+	for _, p := range h.trusted {
+		if p.Contains(addr) {
+			return true
+		}
+	}
+	return false
+}
+
+// socketIP is the RemoteAddr host.
+func socketIP(r *http.Request) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return r.RemoteAddr
@@ -278,14 +313,47 @@ func ClientIP(r *http.Request) string {
 	return host
 }
 
-// forwardedFor is the outbound X-Forwarded-For: the inbound chain with
-// clientIP as its rightmost entry. Caddy's own address is never added.
-func forwardedFor(r *http.Request, clientIP string) string {
+// ClientIP is the client address. When the socket peer is a trusted
+// proxy (Caddy, which puts the address it saw last in X-Forwarded-For),
+// the rightmost entry is the client; anything to its left is
+// client-supplied. Otherwise, and as the fallback, it is the socket
+// address.
+func ClientIP(r *http.Request, trustedPeer bool) string {
+	if parts := xffEntries(r); trustedPeer && len(parts) > 0 {
+		if ip := net.ParseIP(parts[len(parts)-1]); ip != nil {
+			return ip.String()
+		}
+	}
+	return canonicalOr(socketIP(r))
+}
+
+// forwardedFor is the outbound X-Forwarded-For. From a trusted peer it is
+// the inbound chain with clientIP as its rightmost entry (Caddy's own
+// address is never added); from anyone else it is clientIP alone.
+func forwardedFor(r *http.Request, clientIP string, trustedPeer bool) string {
+	if !trustedPeer {
+		return clientIP
+	}
 	parts := xffEntries(r)
 	if n := len(parts); n == 0 || canonicalIP(parts[n-1]) != clientIP {
 		parts = append(parts, clientIP)
 	}
 	return strings.Join(parts, ", ")
+}
+
+// limiterKey is the per-client bucket: IPv4 by address, IPv6 by /64 (one
+// host commonly holds a whole /64, so per-address keys are free to
+// rotate).
+func limiterKey(clientIP string) string {
+	addr, err := netip.ParseAddr(clientIP)
+	if err != nil {
+		return "ip:" + clientIP
+	}
+	addr = addr.WithZone("").Unmap()
+	if addr.Is6() {
+		return "ip:" + netip.PrefixFrom(addr, 64).Masked().String()
+	}
+	return "ip:" + addr.String()
 }
 
 // xffEntries flattens every X-Forwarded-For line into trimmed, non-empty
@@ -307,4 +375,11 @@ func canonicalIP(s string) string {
 		return ip.String()
 	}
 	return ""
+}
+
+func canonicalOr(s string) string {
+	if c := canonicalIP(s); c != "" {
+		return c
+	}
+	return s
 }
