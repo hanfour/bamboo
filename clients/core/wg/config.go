@@ -38,6 +38,11 @@ type PeerConfig struct {
 	// Endpoint is the candidate ip:port to connect to. Empty if we expect
 	// the peer to initiate.
 	Endpoint string
+	// Candidates is every non-empty endpoint the controller advertised
+	// for this peer, in controller order. Endpoint is the first of
+	// them; callers that can see local interfaces narrow the list with
+	// UsableCandidates and rotate through it.
+	Candidates []string
 	// PersistentKeepalive forces a keepalive packet every N seconds. Zero
 	// to disable.
 	PersistentKeepalive time.Duration
@@ -48,8 +53,8 @@ type PeerConfig struct {
 //
 // Responsibilities:
 //   - The local Address is taken from resp.Self.Ip (host route, /32).
-//   - Endpoints are taken from peer.Endpoints (first non-empty wins
-//     for now; ICE-driven path selection lands in a follow-up).
+//   - Endpoint is peer.Endpoints[0]; Candidates keeps every non-empty
+//     entry so the CLI can filter and rotate them (UsableCandidates).
 //   - AllowedIPs come from one of two paths, decided by PolicyRevision:
 //
 // When resp.PolicyRevision > 0 the controller is enforcing an authored
@@ -146,10 +151,21 @@ func BuildDeviceConfig(privKey PrivateKey, resp *bamboov1.RegisterResponse) (*De
 		}
 		if eps := p.GetEndpoints(); len(eps) > 0 {
 			pc.Endpoint = eps[0]
+			pc.Candidates = nonEmpty(eps)
 		}
 		cfg.Peers = append(cfg.Peers, pc)
 	}
 	return cfg, nil
+}
+
+func nonEmpty(s []string) []string {
+	var out []string
+	for _, v := range s {
+		if v != "" {
+			out = append(out, v)
+		}
+	}
+	return out
 }
 
 // WGQuick renders cfg as a wg-quick(8) compatible config file. Useful for
