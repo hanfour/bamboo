@@ -187,6 +187,10 @@ func NewHTTPServer(
 	mux.HandleFunc("/api/v1/admin/audit-log.csv", h.routeAdminAuditExport)
 	mux.HandleFunc("/api/v1/relay-token", h.routeRelayToken)
 	mux.HandleFunc("/api/v1/", h.routeAPI)
+	// Public services ingress <-> controller. Reached only from inside the
+	// compose network / host loopback; never routed by the public Caddy
+	// sites (spec §4.3).
+	mux.HandleFunc("/internal/v1/ingress/", h.routeInternalIngress)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))

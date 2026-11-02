@@ -91,6 +91,7 @@ func TestRouterContract_AllRoutes(t *testing.T) {
 		{http.MethodPost, "/api/v1/ingress/" + id + "/approve", false},
 		{http.MethodPatch, "/api/v1/ingress/" + id, true},
 		{http.MethodDelete, "/api/v1/ingress/" + id, false},
+		{http.MethodPost, "/api/v1/ingress/token", true},
 		// Policy + tooling.
 		{http.MethodGet, "/api/v1/policy", false},
 		{http.MethodPut, "/api/v1/policy", true},
@@ -138,6 +139,7 @@ func TestRouterContract_AllRoutes(t *testing.T) {
 		{http.MethodPut, "/api/v1/ingress", true},                         // GET-only
 		{http.MethodGet, "/api/v1/ingress/" + id + "/approve", false},     // POST-only
 		{http.MethodGet, "/api/v1/peers/" + id + "/ingress", false},       // POST-only
+		{http.MethodGet, "/api/v1/ingress/token", false},                  // POST-only
 	}
 	for _, r := range wrongMethod {
 		t.Run("405 "+r.method+" "+r.path, func(t *testing.T) {

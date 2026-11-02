@@ -108,7 +108,7 @@ func ingressApproverID(authn *authnContext) uuid.UUID {
 	return uuid.Nil
 }
 
-// routeIngress handles /api/v1/ingress[/{sid}[/approve]].
+// routeIngress handles /api/v1/ingress[/token|/{sid}[/approve]].
 func (h *HTTPServer) routeIngress(w http.ResponseWriter, r *http.Request, authn *authnContext, tenant *repo.Tenant) bool {
 	if r.URL.Path == "/api/v1/ingress" {
 		if r.Method != http.MethodGet {
@@ -121,6 +121,14 @@ func (h *HTTPServer) routeIngress(w http.ResponseWriter, r *http.Request, authn 
 	rest, ok := strings.CutPrefix(r.URL.Path, "/api/v1/ingress/")
 	if !ok || rest == "" {
 		return false
+	}
+	if rest == "token" {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return true
+		}
+		h.apiIssueIngressToken(w, r, authn, tenant)
+		return true
 	}
 	if sid, found := strings.CutSuffix(rest, "/approve"); found && sid != "" && !strings.Contains(sid, "/") {
 		if r.Method != http.MethodPost {
