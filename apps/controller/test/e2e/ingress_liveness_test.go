@@ -4,6 +4,7 @@ package e2e
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"slices"
 	"testing"
@@ -306,5 +307,50 @@ func TestRESTIngress_ReapproveIsNoOp(t *testing.T) {
 	}
 	if got := policyRevision(t, f); got != rev {
 		t.Errorf("policy revision %d -> %d; re-approve must not bump", rev, got)
+	}
+}
+
+// TestIngressRegister_TaggedPreAuthKeyEnforces: a peer that registers with
+// a pre-auth key tagged ingress on a fresh tenant (revision 0) lifts the
+// tenant to revision >= 1, so clients enforce AllowedIps and bystanders
+// drop the ingress peer instead of falling back to its /32.
+func TestIngressRegister_TaggedPreAuthKeyEnforces(t *testing.T) {
+	f := startFixture(t)
+	bystander := registerIngressTestPeer(t, f, "bystander")
+	if rev := policyRevision(t, f); rev != 0 {
+		t.Fatalf("fresh tenant revision = %d, want 0", rev)
+	}
+	key := ingressCall(t, http.MethodPost, f.httpURL+"/api/v1/preauth-keys", "", f.tenantSlug,
+		map[string]any{"description": "vps", "autoApprove": true, "tags": []string{"ingress"}})
+	if key.status != http.StatusOK && key.status != http.StatusCreated {
+		t.Fatalf("mint key: %d %s", key.status, key.body)
+	}
+	var k struct {
+		Secret string `json:"secret"`
+	}
+	if err := json.Unmarshal(key.body, &k); err != nil || k.Secret == "" {
+		t.Fatalf("decode key: %v %s", err, key.body)
+	}
+	reg := postJSON(t, f.httpURL+"/api/v1/peers/register", map[string]any{
+		"hostname": "vps", "wireguardPublicKey": randomPubKey(t), "preAuthKeySecret": k.Secret,
+	})
+	if reg.status != http.StatusOK {
+		t.Fatalf("register vps: %d %s", reg.status, reg.body)
+	}
+	var got struct {
+		Self struct {
+			ID   string   `json:"id"`
+			IP   string   `json:"ip"`
+			Tags []string `json:"tags"`
+		} `json:"self"`
+	}
+	if err := json.Unmarshal(reg.body, &got); err != nil {
+		t.Fatalf("decode register: %v", err)
+	}
+	if rev := policyRevision(t, f); rev < 1 {
+		t.Errorf("revision after tagged register = %d, want >= 1", rev)
+	}
+	if gwAllowedIPsContain(t, reRegisterBody(t, f, bystander.id), got.Self.ID, got.Self.IP+"/32") {
+		t.Error("bystander's view lists the ingress peer")
 	}
 }

@@ -694,6 +694,18 @@ func (h *CoordinatorHandler) Register(ctx context.Context, req *bamboov1.Registe
 	}
 
 	policyDoc, currentRev := h.loadPolicyAndRevision(ctx, tenant.ID)
+	// An ingress peer in a tenant at revision 0 would be invisible to the
+	// ingress gate on clients: at revision 0 they fall back to a peer's
+	// /32 when AllowedIps is empty. Lift the tenant to revision >= 1 so
+	// every client enforces AllowedIps (the bump's PolicyChanged makes
+	// connected peers re-register now).
+	if currentRev == 0 && isIngressPeer(self) {
+		rev, berr := h.BumpPolicyRevision(ctx, tenant.ID)
+		if berr != nil {
+			return nil, status.Errorf(codes.Internal, "bump policy revision for ingress peer: %v", berr)
+		}
+		currentRev = rev
+	}
 	// Public services ingress: generated tag:ingress rules for live
 	// services. Never persisted in HCL (spec §4.4). ingress gates the
 	// ingress peer in tenants without authored rules.
