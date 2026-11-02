@@ -651,6 +651,9 @@ func (h *CoordinatorHandler) Register(ctx context.Context, req *bamboov1.Registe
 	}
 
 	policyDoc, currentRev := h.loadPolicyAndRevision(ctx, tenant.ID)
+	// Public services ingress: generated tag:ingress rules for live
+	// services. Never persisted in HCL (spec §4.4).
+	policyDoc = h.withIngressRules(ctx, tenant.ID, policyDoc)
 
 	resp := &bamboov1.RegisterResponse{
 		Self:              toProtoPeer(self),
