@@ -37,39 +37,52 @@ var candidateBackoff = []time.Duration{30 * time.Second, 60 * time.Second, 120 *
 // CandidateRotator chooses each peer's direct endpoint from the
 // controller's candidates and moves on when one stays silent.
 //
-// Selection: wg.UsableCandidates drops private candidates that are not
-// on a local subnet and puts same-LAN ones first.
+// Order: wg.OrderCandidates puts same-LAN private candidates first,
+// then public ones, then off-subnet private ones (still worth a probe
+// over a VPN or other routed private network).
 //
 // Rotation: a peer with no live handshake CandidateProbeTimeout after
 // a candidate was assigned moves to the next; after the last it waits
-// candidateBackoff and restarts at the first. A peer stops rotating
-// for good, until the controller sends a different candidate list,
-// once either of these holds:
+// candidateBackoff and restarts at the first.
+//
+// A peer stops rotating once either of these holds:
 //   - it has a live handshake. If WireGuard roamed to an endpoint it
 //     learned from the peer, that endpoint is kept: the rotator's
 //     intent no longer changes, and the device leaves an endpoint
 //     alone while the intent is unchanged (#309).
 //   - the relay fallback moved it to a relay proxy. The relay owns the
-//     endpoint from then on; rotation would only fight it.
+//     endpoint from then on; rotation would only fight it. A relayed
+//     peer never resumes.
 //
-// With the default timings a peer with two dead candidates is still
-// probing (or backing off) when RunRelayFallback's 60s threshold
-// fires, so the relay takes over and rotation stops for it.
+// A stopped, non-relayed peer resumes when its last handshake is older
+// than HandshakeFreshness and over one CandidateProbeTimeout window it
+// sent bytes but received none: the path died under it. Resumption
+// starts at the candidate after the current one, and the endpoint
+// WireGuard had learned joins the end of the list. An idle peer (no
+// bytes sent) stays put.
+//
+// Everything restarts at the best candidate when the controller sends
+// a different candidate list, or when a change in this host's subnets
+// reorders that peer's candidates (the host moved onto or off the
+// peer's LAN). A restart can overwrite a learned endpoint, as any
+// changed intent does.
+//
+// Rotation only changes where WireGuard sends; it sends nothing itself.
+// A peer with no keepalive and no traffic cycles candidates without a
+// handshake attempt on any of them, which costs only latency: the
+// first packet goes to whichever candidate is current. BuildDeviceConfig
+// sets a 25s keepalive on every peer, so in practice each candidate
+// gets real attempts.
+//
+// With the default timings a peer with dead candidates is still probing
+// (or backing off) when RunRelayFallback's 60s threshold fires, so the
+// relay takes over and rotation stops for it.
 type CandidateRotator struct {
-	mu    stdsync.Mutex
-	local func() []netip.Prefix
-	now   func() time.Time
-	peers map[string]rotation
-}
-
-type rotation struct {
-	candidates []string // controller list, compared to detect changes
-	usable     []string
-	index      int
-	since      time.Time // when usable[index] was assigned
-	retryAt    time.Time // non-zero while backing off
-	failures   int
-	stopped    bool
+	mu       stdsync.Mutex
+	local    func() []netip.Prefix
+	now      func() time.Time
+	prefixes []netip.Prefix // last local subnets seen, normalized
+	peers    map[string]rotation
 }
 
 // NewCandidateRotator returns a rotator that reads this host's subnets
@@ -80,9 +93,9 @@ func NewCandidateRotator(local func() []netip.Prefix, now func() time.Time) *Can
 
 // Select returns a copy of cfg with each peer's Endpoint set to its
 // current candidate. A peer whose candidate list differs from the last
-// call starts over at its first usable candidate; unchanged peers keep
-// their rotation state, so calling Select again with the same config
-// returns the same endpoints. Peers absent from cfg are forgotten.
+// call starts over at its best candidate; unchanged peers keep their
+// rotation state, so calling Select again with the same config returns
+// the same endpoints. Peers absent from cfg are forgotten.
 func (r *CandidateRotator) Select(cfg *wg.DeviceConfig) *wg.DeviceConfig {
 	if cfg == nil {
 		return nil
@@ -90,6 +103,7 @@ func (r *CandidateRotator) Select(cfg *wg.DeviceConfig) *wg.DeviceConfig {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	now := r.now()
+	r.refreshLocal(now)
 	out := *cfg
 	out.Peers = slices.Clone(cfg.Peers)
 	next := make(map[string]rotation, len(out.Peers))
@@ -98,7 +112,7 @@ func (r *CandidateRotator) Select(cfg *wg.DeviceConfig) *wg.DeviceConfig {
 		key := p.PublicKey.Base64()
 		st, ok := r.peers[key]
 		if !ok || !slices.Equal(st.candidates, p.Candidates) {
-			st = newRotation(p.Candidates, r.local(), now)
+			st = newRotation(p.Candidates, r.prefixes, now)
 		}
 		next[key] = st
 		if ep := st.current(); ep != "" {
@@ -116,10 +130,10 @@ func (r *CandidateRotator) Observe(stats []device.PeerStats, relayed map[string]
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	now := r.now()
-	changed := false
+	changed := r.refreshLocal(now)
 	for _, s := range stats {
 		st, ok := r.peers[s.PublicKey]
-		if !ok {
+		if !ok || len(st.list()) == 0 {
 			continue
 		}
 		_, onRelay := relayed[s.PublicKey]
@@ -133,58 +147,39 @@ func (r *CandidateRotator) Observe(stats []device.PeerStats, relayed map[string]
 	return changed
 }
 
-func newRotation(candidates []string, local []netip.Prefix, now time.Time) rotation {
-	return rotation{
-		candidates: slices.Clone(candidates),
-		usable:     wg.UsableCandidates(candidates, local),
-		since:      now,
+// refreshLocal re-reads this host's subnets. When they changed, every
+// peer whose candidate order changed with them restarts. Reports
+// whether any peer's current endpoint moved.
+func (r *CandidateRotator) refreshLocal(now time.Time) bool {
+	prefixes := normalizePrefixes(r.local())
+	if slices.Equal(prefixes, r.prefixes) {
+		return false
 	}
-}
-
-func (s rotation) current() string {
-	if len(s.usable) == 0 {
-		return ""
-	}
-	return s.usable[s.index]
-}
-
-func (s rotation) step(now time.Time, stats device.PeerStats, onRelay bool) rotation {
-	switch {
-	case s.stopped:
-		return s
-	case onRelay || liveHandshake(stats, now):
-		s.stopped = true
-		return s
-	case !s.retryAt.IsZero():
-		if now.Before(s.retryAt) {
-			return s
+	r.prefixes = prefixes
+	changed := false
+	for key, st := range r.peers {
+		if slices.Equal(wg.OrderCandidates(st.candidates, prefixes), st.ordered) {
+			continue
 		}
-		return s.assign(0, now)
-	case now.Sub(s.since) < CandidateProbeTimeout:
-		return s
-	case s.index+1 < len(s.usable):
-		return s.assign(s.index+1, now)
-	default:
-		return s.backOff(now)
+		next := newRotation(st.candidates, prefixes, now)
+		changed = changed || next.current() != st.current()
+		r.peers[key] = next
 	}
+	return changed
 }
 
-func (s rotation) assign(index int, now time.Time) rotation {
-	s.index = index
-	s.since = now
-	s.retryAt = time.Time{}
-	return s
-}
-
-func (s rotation) backOff(now time.Time) rotation {
-	wait := candidateBackoff[min(s.failures, len(candidateBackoff)-1)]
-	s.failures++
-	s.retryAt = now.Add(wait)
-	return s
-}
-
-func liveHandshake(stats device.PeerStats, now time.Time) bool {
-	return !stats.LastHandshakeTime.IsZero() && now.Sub(stats.LastHandshakeTime) < HandshakeFreshness
+func normalizePrefixes(in []netip.Prefix) []netip.Prefix {
+	out := make([]netip.Prefix, 0, len(in))
+	for _, p := range in {
+		out = append(out, p.Masked())
+	}
+	slices.SortFunc(out, func(a, b netip.Prefix) int {
+		if c := a.Addr().Compare(b.Addr()); c != 0 {
+			return c
+		}
+		return a.Bits() - b.Bits()
+	})
+	return slices.Compact(out)
 }
 
 // RunEndpointRotation calls step every RotationInterval until ctx is

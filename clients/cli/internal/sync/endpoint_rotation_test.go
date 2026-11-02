@@ -20,18 +20,27 @@ const (
 	remote  = "10.9.9.9:51820"
 )
 
-type fakeClock struct{ t time.Time }
+// fakeClock also carries the fake local subnets so tests can move the
+// host between networks.
+type fakeClock struct {
+	t     time.Time
+	local []netip.Prefix
+}
 
 func (c *fakeClock) now() time.Time          { return c.t }
 func (c *fakeClock) advance(d time.Duration) { c.t = c.t.Add(d) }
 
 func rotationFixture(local ...string) (*CandidateRotator, *fakeClock) {
-	clock := &fakeClock{t: time.Unix(1_700_000_000, 0)}
-	prefixes := make([]netip.Prefix, 0, len(local))
-	for _, p := range local {
-		prefixes = append(prefixes, netip.MustParsePrefix(p))
+	clock := &fakeClock{t: time.Unix(1_700_000_000, 0), local: mustPrefixes(local...)}
+	return NewCandidateRotator(func() []netip.Prefix { return clock.local }, clock.now), clock
+}
+
+func mustPrefixes(s ...string) []netip.Prefix {
+	out := make([]netip.Prefix, 0, len(s))
+	for _, p := range s {
+		out = append(out, netip.MustParsePrefix(p))
 	}
-	return NewCandidateRotator(func() []netip.Prefix { return prefixes }, clock.now), clock
+	return out
 }
 
 func rotationConfig(cands ...string) *wg.DeviceConfig {
@@ -69,10 +78,117 @@ func TestRotatorSelectKeepsSameLANFirst(t *testing.T) {
 	}
 }
 
-func TestRotatorSelectFallsBackToFirstCandidate(t *testing.T) {
+func TestRotatorSelectOffSubnetPrivateKeepsControllerOrder(t *testing.T) {
 	r, _ := rotationFixture("172.16.0.0/16")
 	if got := selected(t, r, rotationConfig(lanBad, remote)); got != lanBad {
 		t.Fatalf("got %s, want controller first", got)
+	}
+}
+
+func TestRotatorTriesOffSubnetPrivateAfterPublic(t *testing.T) {
+	r, clock := rotationFixture("203.0.113.0/24")
+	cfg := rotationConfig(lanBad, public)
+	if got := selected(t, r, cfg); got != public {
+		t.Fatalf("vps started on %s", got)
+	}
+	clock.advance(CandidateProbeTimeout)
+	if !r.Observe(noHandshake(public), nil) || selected(t, r, cfg) != lanBad {
+		t.Fatal("routed private candidate never tried")
+	}
+}
+
+func TestRotatorResetsWhenLocalSubnetsChange(t *testing.T) {
+	r, clock := rotationFixture("203.0.113.0/24")
+	cfg := rotationConfig(lanBad, public)
+	selected(t, r, cfg)
+	clock.advance(CandidateProbeTimeout)
+	r.Observe([]device.PeerStats{{PublicKey: peerKey(), Endpoint: public, LastHandshakeTime: clock.now()}}, nil)
+	clock.local = mustPrefixes("192.168.1.0/24")
+	if !r.Observe(noHandshake(public), nil) || selected(t, r, cfg) != lanBad {
+		t.Fatal("moving onto the peer's LAN did not restart at the LAN candidate")
+	}
+	clock.advance(CandidateProbeTimeout)
+	if !r.Observe(noHandshake(lanBad), nil) || selected(t, r, cfg) != public {
+		t.Fatal("restarted peer stayed stopped")
+	}
+}
+
+func TestRotatorIgnoresSubnetChangeThatKeepsOrder(t *testing.T) {
+	r, clock := rotationFixture("203.0.113.0/24")
+	cfg := rotationConfig(lanBad, public)
+	selected(t, r, cfg)
+	clock.advance(CandidateProbeTimeout)
+	r.Observe(noHandshake(public), nil)
+	clock.local = mustPrefixes("198.18.0.0/15")
+	if got := selected(t, r, cfg); got != lanBad {
+		t.Fatalf("unrelated subnet change reset rotation: %s", got)
+	}
+}
+
+func stalledStats(endpoint string, handshake time.Time, tx, rx uint64) []device.PeerStats {
+	return []device.PeerStats{{PublicKey: peerKey(), Endpoint: endpoint, LastHandshakeTime: handshake, TxBytes: tx, RxBytes: rx}}
+}
+
+func settled(t *testing.T, cands ...string) (*CandidateRotator, *fakeClock, *wg.DeviceConfig, time.Time) {
+	t.Helper()
+	r, clock := rotationFixture("192.168.1.0/24")
+	cfg := rotationConfig(cands...)
+	selected(t, r, cfg)
+	hs := clock.now()
+	r.Observe(stalledStats(learnedEP, hs, 100, 100), nil)
+	clock.advance(HandshakeFreshness + time.Second)
+	return r, clock, cfg, hs
+}
+
+const learnedEP = "198.51.100.40:41000"
+
+func TestRotatorResumesWhenSendingIntoSilence(t *testing.T) {
+	r, clock, cfg, hs := settled(t, lanBad, public)
+	if r.Observe(stalledStats(learnedEP, hs, 200, 150), nil) {
+		t.Fatal("resumed without a full window")
+	}
+	clock.advance(CandidateProbeTimeout)
+	if !r.Observe(stalledStats(learnedEP, hs, 400, 150), nil) {
+		t.Fatal("peer sending into silence did not resume rotation")
+	}
+	if got := selected(t, r, cfg); got != public {
+		t.Fatalf("resume went to %s, want the candidate after the current intent", got)
+	}
+	clock.advance(CandidateProbeTimeout)
+	if !r.Observe(stalledStats(public, hs, 500, 150), nil) || selected(t, r, cfg) != learnedEP {
+		t.Fatal("learned endpoint not among rotated entries")
+	}
+}
+
+func TestRotatorIdlePeerWithOldHandshakeStaysPut(t *testing.T) {
+	r, clock, cfg, hs := settled(t, lanBad, public)
+	for range 5 {
+		if r.Observe(stalledStats(learnedEP, hs, 200, 150), nil) {
+			t.Fatal("idle peer rotated")
+		}
+		clock.advance(CandidateProbeTimeout)
+	}
+	if got := selected(t, r, cfg); got != lanBad {
+		t.Fatalf("idle peer intent moved to %s", got)
+	}
+}
+
+func TestRotatorReceivingPeerStaysPut(t *testing.T) {
+	r, clock, _, hs := settled(t, lanBad, public)
+	r.Observe(stalledStats(learnedEP, hs, 200, 150), nil)
+	clock.advance(CandidateProbeTimeout)
+	if r.Observe(stalledStats(learnedEP, hs, 400, 160), nil) {
+		t.Fatal("peer still receiving was rotated")
+	}
+}
+
+func TestRotatorRelayedPeerNeverResumes(t *testing.T) {
+	r, clock, _, hs := settled(t, lanBad, public)
+	relayed := map[string]string{peerKey(): "127.0.0.1:40000"}
+	r.Observe(stalledStats("127.0.0.1:40000", hs, 200, 150), relayed)
+	clock.advance(CandidateProbeTimeout)
+	if r.Observe(stalledStats("127.0.0.1:40000", hs, 400, 150), relayed) {
+		t.Fatal("relayed peer resumed rotation")
 	}
 }
 

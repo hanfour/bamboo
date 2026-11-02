@@ -46,6 +46,12 @@ func (r *deviceReapplier) Apply(ctx context.Context, cfg *wg.DeviceConfig) error
 // desired layers relay overrides on the rotator's direct endpoints.
 // Select is idempotent for an unchanged base, so every apply path can
 // call it.
+//
+// The rotator's state is not rolled back when dev.Apply fails: after a
+// failed rotate() it is one candidate ahead of the kernel. That is
+// harmless. Every later apply (the next rotation, a controller update,
+// a relay change) sends Select's current choice, so the kernel catches
+// up, and the probe window for that candidate started slightly early.
 func (r *deviceReapplier) desired(overrides map[string]string) *wg.DeviceConfig {
 	cfg := r.base
 	if r.rotator != nil {

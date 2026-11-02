@@ -199,9 +199,10 @@ func runUp(cmd *cobra.Command, _ []string) error {
 		}
 	}()
 
-	// The rotator replaces "controller's first endpoint" with the first
-	// usable one (no remote-LAN addresses on a host outside that LAN)
-	// and steps through the rest while a peer stays silent. Relay
+	// The rotator replaces "controller's first endpoint" with the best
+	// one for this host (a remote LAN address goes behind the public
+	// ones unless we are on that LAN) and steps through the rest while
+	// a peer stays silent. Relay
 	// fallback still applies on top; see clientsync.CandidateRotator.
 	reapply := &deviceReapplier{dev: dev, rotator: clientsync.NewCandidateRotator(wg.InterfacePrefixes, time.Now)}
 	transition := &relayTransition{owner: reapply}

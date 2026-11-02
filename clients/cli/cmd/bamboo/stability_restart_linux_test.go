@@ -72,9 +72,10 @@ func TestKernelRestartMac(t *testing.T) {
 }
 
 // TestKernelRestartVPS plays the public host whose bamboo restarts.
-// The Mac advertises [off-subnet private, dead same-subnet, reachable].
-// Each bring-up must skip the first, time out on the second and reach
-// the third, with no help from the Mac.
+// The Mac advertises [off-subnet private, dead same-subnet, reachable],
+// which OrderCandidates ranks [dead same-subnet, reachable, off-subnet].
+// Each bring-up must start on the dead one, time out and reach
+// the reachable one, with no help from the Mac.
 func TestKernelRestartVPS(t *testing.T) {
 	stabilityRole(t, "client")
 	var mac stabilityHello
@@ -142,7 +143,7 @@ func restartBringUp(t *testing.T, priv wg.PrivateKey, macKey string, cands []str
 		peersync.RunEndpointRotation(ctx, owner.rotate)
 	}()
 	if first := stabilityStats(t, d).Endpoint; first != cands[1] {
-		t.Fatalf("first endpoint %s, want same-subnet %s (off-subnet private skipped)", first, cands[1])
+		t.Fatalf("first endpoint %s, want same-subnet %s (off-subnet private demoted to last)", first, cands[1])
 	}
 	elapsed := restartAwaitHandshake(t, d, start)
 	if got := stabilityStats(t, d).Endpoint; got != cands[2] {
