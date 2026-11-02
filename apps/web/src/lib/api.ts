@@ -21,6 +21,7 @@
 
 import { cookies } from 'next/headers';
 
+import type { IngressList } from './ingress';
 import type { PresenceEntry } from './presence';
 import type {
   AclPolicy,
@@ -377,6 +378,17 @@ export async function fetchRelays(): Promise<FetchResult<Relay[]>> {
   const r = await fetchResult<{ relays: Relay[] }>('/api/v1/admin/relays');
   if (r.kind !== 'ok') return r;
   return { kind: 'ok', value: r.value.relays ?? [] };
+}
+
+// fetchIngress lists the tenant's public services plus the suffix and
+// the current ingress token's metadata (never the token itself).
+export async function fetchIngress(): Promise<FetchResult<IngressList>> {
+  const r = await fetchResult<IngressList>('/api/v1/ingress');
+  if (r.kind !== 'ok') return r;
+  return {
+    kind: 'ok',
+    value: { services: r.value.services ?? [], suffix: r.value.suffix ?? '', token: r.value.token ?? null },
+  };
 }
 
 // fetchPolicyRevisions backs the /acl Versions tab (issue #134).

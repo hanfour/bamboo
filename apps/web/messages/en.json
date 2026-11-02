@@ -703,6 +703,44 @@
       "never": "Never probed"
     }
   },
+  "ingress": {
+    "title": "Public services",
+    "subtitle": "Publish a service running on a peer at https://<label>.<suffix>. Each service needs admin approval; the ingress peer forwards requests to it over the mesh.",
+    "empty": "No public services yet.",
+    "errorPrefix": "Error:",
+    "generatedRule": "Generated ACL rule, not editable in the policy editor",
+    "columns": { "label": "Label", "url": "URL", "peer": "Peer", "port": "Port", "state": "State", "actions": "Actions" },
+    "state": { "pending": "Pending approval", "approved": "Approved, disabled", "live": "Live", "peerPending": "Peer not approved" },
+    "actions": { "approve": "Approve", "enable": "Enable", "disable": "Disable", "delete": "Delete", "confirmDelete": "Confirm delete", "cancel": "Cancel" },
+    "form": {
+      "openButton": "Add service",
+      "cancel": "Cancel",
+      "peerLabel": "Peer",
+      "labelLabel": "Label",
+      "labelHint": "Lowercase letters, digits and inner hyphens, up to 32 characters.",
+      "portLabel": "Target port",
+      "portHint": "1024–65535 on the peer's mesh IP.",
+      "submit": "Create",
+      "invalidLabel": "Use 1–32 lowercase letters, digits or inner hyphens.",
+      "reservedLabel": "This label is reserved.",
+      "invalidPort": "Port must be between 1024 and 65535.",
+      "peerRequired": "Choose a peer."
+    },
+    "token": {
+      "title": "Ingress service token",
+      "description": "The ingress peer uses this token to fetch routes and send request logs. Issuing a new token revokes the old one.",
+      "peerLabel": "Ingress peer (tagged ingress)",
+      "issue": "Issue token",
+      "rotate": "Rotate token",
+      "current": "Current token:",
+      "none": "No token issued.",
+      "noIngressPeers": "No approved peer has the ingress tag.",
+      "revealTitle": "Copy this token now",
+      "revealHint": "Save it on the VPS as /etc/bamboo-ingress/ingress.token. It is not shown again.",
+      "copy": "Copy",
+      "close": "Done"
+    }
+  },
   "settings": {
     "title": "Settings",
     "subtitle": "Manage tenant and account settings.",
@@ -748,6 +786,11 @@
       "title": "Relay servers",
       "description": "Shared infrastructure that forwards WireGuard packets for peers behind symmetric NAT. The controller probes each one every 30s and flags unreachable ones.",
       "link": "Go to Relay servers"
+    },
+    "ingressCard": {
+      "title": "Public services",
+      "description": "Publish peer services on the internet through the ingress peer, with admin approval.",
+      "link": "Go to Public services"
     },
     "auditExportCard": {
       "title": "Audit log export",
