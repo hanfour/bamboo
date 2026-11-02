@@ -112,6 +112,10 @@ build: ## Build all binaries into ./bin
 	  echo "==> build relay"; \
 	  (cd apps/relay && go build -o ../../bin/relay ./cmd/relay); \
 	fi
+	@if [ -d apps/ingress/cmd/bamboo-ingress ]; then \
+	  echo "==> build bamboo-ingress"; \
+	  (cd apps/ingress && go build -o ../../bin/bamboo-ingress ./cmd/bamboo-ingress); \
+	fi
 	@echo "==> done. binaries in ./bin"
 
 # ----- AI (Python) -----------------------------------------------------------
