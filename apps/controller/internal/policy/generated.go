@@ -44,6 +44,11 @@ func IngressRules(targets []IngressTarget) []Rule {
 				Sources:      []Matcher{{Kind: MatcherTag, Name: IngressTag}},
 				Destinations: []Matcher{{Kind: MatcherCIDR, CIDR: host, Ports: ports}},
 			},
+			// Enforcement is L3 only, so the port on this return rule is
+			// never matched against packets: it only gives the L3
+			// evaluator a concrete port to probe the pair with. Real
+			// return packets go to the ingress peer's ephemeral source
+			// port, not to t.Port.
 			Rule{
 				ID:           id + ":return",
 				Action:       ActionAllow,
