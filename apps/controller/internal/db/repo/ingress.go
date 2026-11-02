@@ -59,11 +59,16 @@ type IngressRoute struct {
 	TargetPort int
 }
 
+// Validation and uniqueness errors returned by the ingress service repo.
 var (
-	ErrIngressLabelTaken    = errors.New("ingress label is already in use")
-	ErrIngressLabelInvalid  = errors.New("label must be 1-32 lowercase letters, digits, or inner hyphens")
+	// ErrIngressLabelTaken means another service (in any tenant) already uses the label.
+	ErrIngressLabelTaken = errors.New("ingress label is already in use")
+	// ErrIngressLabelInvalid means the label does not match the allowed pattern.
+	ErrIngressLabelInvalid = errors.New("label must be 1-32 lowercase letters, digits, or inner hyphens")
+	// ErrIngressLabelReserved means the label is on the reserved list.
 	ErrIngressLabelReserved = errors.New("label is reserved")
-	ErrIngressPortInvalid   = errors.New("target_port must be between 1024 and 65535")
+	// ErrIngressPortInvalid means target_port is outside 1024-65535.
+	ErrIngressPortInvalid = errors.New("target_port must be between 1024 and 65535")
 )
 
 var ingressLabelRE = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,30}[a-z0-9])?$`)
