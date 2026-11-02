@@ -33,8 +33,11 @@ type PollerOptions struct {
 	OnResult      func(n int, err error)
 }
 
-// Poller refreshes a Table from the controller. On any failure the table
-// is left as it was (spec: keep the last good table).
+// Poller refreshes a Table from the controller. On network errors, 5xx,
+// and bad payloads the table is left as it was (spec: keep the last good
+// table). A 401 or 403 means the controller rejected this ingress's
+// token (rotated, expired, peer no longer eligible), so the table is
+// cleared instead: a revoked ingress must stop serving.
 type Poller struct {
 	o    PollerOptions
 	mu   sync.Mutex // serialises refreshes and guards etag
@@ -104,6 +107,10 @@ func (p *Poller) refresh(ctx context.Context) error {
 	case http.StatusNotModified:
 		return nil
 	case http.StatusOK:
+	case http.StatusUnauthorized, http.StatusForbidden:
+		p.o.Table.Replace([]Route{})
+		p.etag = ""
+		return fmt.Errorf("routes: controller rejected the token (%d); routes cleared", resp.StatusCode)
 	default:
 		return fmt.Errorf("routes: controller responded %d", resp.StatusCode)
 	}
@@ -143,7 +150,7 @@ func (p *Poller) Run(ctx context.Context) {
 	defer tick.Stop()
 	for {
 		if err := p.Refresh(ctx); err != nil && ctx.Err() == nil {
-			p.o.Log.Warn("routes refresh failed; keeping last table", "err", err, "routes", p.o.Table.Len())
+			p.o.Log.Warn("routes refresh failed", "err", err, "routes", p.o.Table.Len())
 		}
 		select {
 		case <-ctx.Done():

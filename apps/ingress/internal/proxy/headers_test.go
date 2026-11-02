@@ -208,3 +208,22 @@ func TestProxy_RouteRemovalEndsInFlightUpload(t *testing.T) {
 		t.Fatal("upload kept running after the route was removed")
 	}
 }
+
+// TestProxy_StripsClientIdentityHeaders: upstream frameworks often trust
+// X-Real-IP, True-Client-IP, or Forwarded for the client address; a
+// client must not be able to set them through the ingress.
+func TestProxy_StripsClientIdentityHeaders(t *testing.T) {
+	up := &captureUpstream{}
+	front, _, _ := setup(t, up, DefaultLimits())
+	get(t, front, testHost, map[string]string{
+		"X-Real-IP":      "6.6.6.6",
+		"True-Client-IP": "6.6.6.6",
+		"Forwarded":      "for=6.6.6.6;proto=http",
+	})
+	got := up.last()
+	for _, k := range []string{"X-Real-Ip", "True-Client-Ip", "Forwarded"} {
+		if v := got.Header.Values(k); len(v) != 0 {
+			t.Errorf("client header %s reached the upstream: %q", k, v)
+		}
+	}
+}

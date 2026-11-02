@@ -299,3 +299,36 @@ func TestPoller_RunPicksUpChangesAndRecovers(t *testing.T) {
 		t.Fatal("304 after recovery must keep the table")
 	}
 }
+
+// TestPoller_ClearsTableWhenTokenRejected: 401/403 means the controller
+// revoked this ingress (token rotated, expired, peer untagged). Keeping
+// the last table would keep serving services the operator turned off, so
+// the table and the ETag are dropped; the error still surfaces.
+func TestPoller_ClearsTableWhenTokenRejected(t *testing.T) {
+	for _, code := range []int{http.StatusUnauthorized, http.StatusForbidden} {
+		fc := &fakeController{routes: oneRoute()}
+		srv := httptest.NewServer(fc)
+		p, tb := newTestPoller(t, srv.URL)
+		if err := p.Refresh(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		fc.status.Store(int32(code))
+		if err := p.Refresh(context.Background()); err == nil {
+			t.Errorf("%d must be an error", code)
+		}
+		if tb.Len() != 0 {
+			t.Errorf("%d: table has %d routes, want cleared", code, tb.Len())
+		}
+		fc.status.Store(0)
+		if err := p.Refresh(context.Background()); err != nil {
+			t.Fatalf("%d: recover: %v", code, err)
+		}
+		if got := fc.sawIfNone.Load(); got != "" {
+			t.Errorf("%d: If-None-Match after clear = %v, want none", code, got)
+		}
+		if tb.Len() != 1 {
+			t.Errorf("%d: table not reloaded after recovery", code)
+		}
+		srv.Close()
+	}
+}

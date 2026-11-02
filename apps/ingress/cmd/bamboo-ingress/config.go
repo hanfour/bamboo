@@ -33,7 +33,7 @@ func envOr(getenv func(string) string, key, def string) string {
 func loadConfig(getenv func(string) string) (config, error) {
 	c := config{
 		Suffix:        strings.TrimSuffix(strings.ToLower(strings.TrimSpace(getenv("BAMBOO_INGRESS_SUFFIX"))), "."),
-		Listen:        envOr(getenv, "BAMBOO_INGRESS_LISTEN", "172.17.0.1:8090"),
+		Listen:        envOr(getenv, "BAMBOO_INGRESS_LISTEN", "10.213.0.1:8090"),
 		AdminListen:   envOr(getenv, "BAMBOO_INGRESS_ADMIN_LISTEN", "127.0.0.1:8091"),
 		ControllerURL: envOr(getenv, "BAMBOO_CONTROLLER_URL", "http://127.0.0.1:8081"),
 		TokenFile:     envOr(getenv, "BAMBOO_INGRESS_TOKEN_FILE", "/etc/bamboo-ingress/ingress.token"),

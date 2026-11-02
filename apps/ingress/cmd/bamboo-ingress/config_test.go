@@ -14,7 +14,7 @@ func TestLoadConfig_Defaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Suffix != "svc.miilink.net" || c.Listen != "172.17.0.1:8090" || c.AdminListen != "127.0.0.1:8091" ||
+	if c.Suffix != "svc.miilink.net" || c.Listen != "10.213.0.1:8090" || c.AdminListen != "127.0.0.1:8091" ||
 		c.ControllerURL != "http://127.0.0.1:8081" || c.TokenFile != "/etc/bamboo-ingress/ingress.token" {
 		t.Errorf("config = %+v", c)
 	}

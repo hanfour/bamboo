@@ -121,8 +121,14 @@ func New(o Options) *Handler {
 	return h
 }
 
+// clientIdentityHeaders are client-address headers upstream frameworks
+// commonly trust. The ingress sets only X-Forwarded-For, so any inbound
+// copy is client-supplied and dropped.
+var clientIdentityHeaders = []string{"X-Real-Ip", "True-Client-Ip", "Forwarded"}
+
 // rewrite runs after ReverseProxy has stripped hop-by-hop headers and the
-// inbound Forwarded / X-Forwarded-* headers from pr.Out.
+// inbound Forwarded / X-Forwarded-* headers from pr.Out. It deletes
+// Forwarded again explicitly so the guarantee does not rest on that.
 func rewrite(pr *httputil.ProxyRequest) {
 	st := pr.In.Context().Value(stateKey{}).(*reqState)
 	pr.Out.URL.Scheme = "http"
@@ -132,6 +138,9 @@ func rewrite(pr *httputil.ProxyRequest) {
 		if strings.HasPrefix(k, "X-Bamboo-") {
 			pr.Out.Header.Del(k)
 		}
+	}
+	for _, k := range clientIdentityHeaders {
+		pr.Out.Header.Del(k)
 	}
 	pr.Out.Header.Set("X-Forwarded-For", st.forwardedFor)
 	pr.Out.Header.Set("X-Forwarded-Proto", "https")
