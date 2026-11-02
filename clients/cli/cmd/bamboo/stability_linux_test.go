@@ -206,7 +206,7 @@ func (a *stabilityApplier) Apply(ctx context.Context, cfg *wg.DeviceConfig) erro
 	err := a.target.Apply(ctx, cfg)
 	result := stabilityObservation{err: err}
 	if err == nil {
-		result.stats, result.err = a.Device.Stats()
+		result.stats, result.err = a.Stats()
 	}
 	a.applied <- result
 	return err
