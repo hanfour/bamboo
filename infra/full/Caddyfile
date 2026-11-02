@@ -9,6 +9,18 @@
 # production deployment moves the relay to its own host (Vultr
 # Tokyo / Hetzner Helsinki) so relay bandwidth doesn't compete with
 # control-plane traffic.
+#
+# A third site, *.<INGRESS_SUFFIX>, serves public services (see the end
+# of this file); it gets certificates only on demand.
+
+# Global options. on_demand_tls only affects sites that opt in with
+# `tls { on_demand }` — today just the public-services site below. The
+# ask URL is the controller's REST listener inside the compose network.
+{
+    on_demand_tls {
+        ask http://controller:8081/internal/v1/ingress/ask
+    }
+}
 
 {$DOMAIN} {
     # HSTS: after the first HTTPS visit, browsers refuse plain-HTTP to
@@ -16,6 +28,13 @@
     # session cookie (audit H-2). Drop includeSubDomains if you host
     # unrelated services on sibling subdomains you don't want pinned.
     header Strict-Transport-Security "max-age=31536000; includeSubDomains"
+
+    # Ingress ↔ controller endpoints are internal only (public services
+    # ingress spec §4.3). Never forward them from a public site.
+    @internal path /internal/*
+    handle @internal {
+        respond 404
+    }
 
     # Controller endpoints — REST + OIDC + healthz + the client installer.
     @controller path /api/* /auth/* /healthz /install.sh
@@ -45,4 +64,33 @@
     # Relay WebSocket. Caddy preserves the WS upgrade handshake by
     # default; no extra config needed.
     reverse_proxy relay:8443
+}
+
+# Public services (docs/design/2026-11-02-public-services-ingress.md).
+# One certificate per name, issued on demand only after the controller's
+# ask endpoint confirms the name is a live service. No wildcard cert.
+# bamboo-ingress runs on the host network and listens on the ingress_edge
+# bridge gateway (host.docker.internal, see docker-compose.yml).
+# INGRESS_SUFFIX unset ⇒ *.svc.invalid, which nothing resolves to.
+*.{$INGRESS_SUFFIX:svc.invalid} {
+    tls {
+        on_demand
+    }
+    # Same HSTS as the control-plane site, without includeSubDomains (a
+    # service name has no subdomains). `?` keeps a service's own header.
+    header ?Strict-Transport-Security "max-age=31536000"
+
+    # The ingress only proxies to peer services, never to the controller,
+    # so this is defence in depth: no misrouted name can ever reach the
+    # controller's internal endpoints. It also means a public service
+    # cannot serve paths under /internal/.
+    @internal path /internal/*
+    handle @internal {
+        respond 404
+    }
+    handle {
+        reverse_proxy host.docker.internal:8090 {
+            flush_interval -1
+        }
+    }
 }

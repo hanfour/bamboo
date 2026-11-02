@@ -82,6 +82,15 @@ docker compose run --rm controller migrate up
 log "recreating controller + web + relay"
 docker compose up -d controller web relay
 
+# Public services ingress is opt-in (COMPOSE_PROFILES=ingress in .env).
+# `up -d ingress` also applies a changed caddy service definition, since
+# the ingress depends on Caddy's ingress_edge bridge.
+if grep -Eq '^COMPOSE_PROFILES=.*\bingress\b' .env; then
+    log "pulling + recreating ingress"
+    docker compose pull ingress && docker compose up -d ingress \
+        || echo "warning: ingress did not start; check 'docker compose ps caddy ingress' and 'docker compose logs ingress'"
+fi
+
 # The Caddyfile is a bind mount, so a changed file does not restart Caddy.
 # Reload it in place so route changes (for example the gRPC path) apply.
 if docker compose ps --status running --services 2>/dev/null | grep -qx caddy; then
