@@ -47,6 +47,8 @@ func TestReRegister_EndpointChangePublishesPeerUpdated(t *testing.T) {
 		t.Fatalf("subscribe: %v", err)
 	}
 	defer cancel()
+	// Let follow-ups from the setup registrations and bump settle.
+	nextPeerEvents(ch, 300*time.Millisecond)
 
 	count := func(evs []*bamboov1.WatchPeersEvent) (updated, policy int) {
 		for _, e := range evs {
