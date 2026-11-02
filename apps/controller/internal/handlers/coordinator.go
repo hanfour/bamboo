@@ -97,7 +97,7 @@ func (h *CoordinatorHandler) ApprovePeer(ctx context.Context, peerID uuid.UUID, 
 		// terminal state). No event to publish.
 		return updated, false, nil
 	}
-	h.bus.Publish(updated.TenantID, &bamboov1.WatchPeersEvent{
+	h.publishPeerEvent(ctx, updated.TenantID, &bamboov1.WatchPeersEvent{
 		Event: &bamboov1.WatchPeersEvent_PeerAdded{
 			PeerAdded: &bamboov1.PeerAdded{Peer: toProtoPeer(updated)},
 		},
@@ -216,7 +216,7 @@ func (h *CoordinatorHandler) SetPeerStatus(ctx context.Context, peerID uuid.UUID
 		}
 	}
 	if event != nil {
-		h.bus.Publish(updated.TenantID, event)
+		h.publishPeerEvent(ctx, updated.TenantID, event)
 	}
 	return updated, true, nil
 }
@@ -231,18 +231,61 @@ func (h *CoordinatorHandler) SetPeerStatus(ctx context.Context, peerID uuid.UUID
 // Used by HTTP PATCH for hostname / dnsName / tags changes that
 // don't transition status (status transitions have their own event
 // via SetPeerStatus and shouldn't double-emit).
-func (h *CoordinatorHandler) PublishPeerUpdatedIfVisible(tenantID uuid.UUID, peer *repo.Peer) {
+func (h *CoordinatorHandler) PublishPeerUpdatedIfVisible(ctx context.Context, tenantID uuid.UUID, peer *repo.Peer) {
 	if peer.ApprovalStatus != "approved" {
 		return
 	}
 	if peer.Status == "disabled" {
 		return
 	}
-	h.bus.Publish(tenantID, &bamboov1.WatchPeersEvent{
+	h.publishPeerEvent(ctx, tenantID, &bamboov1.WatchPeersEvent{
 		Event: &bamboov1.WatchPeersEvent_PeerUpdated{
 			PeerUpdated: &bamboov1.PeerUpdated{Peer: toProtoPeer(peer)},
 		},
 	})
+}
+
+// publishPeerEvent is the single publisher for peer membership events.
+// PeerAdded and PeerUpdated carry no AllowedIps (the bus is tenant-wide
+// and AllowedIps differ per recipient), and a client enforcing ACLs
+// (policy revision > 0) reads a peer without AllowedIps as denied. So in
+// an enforcing tenant the event is followed by PolicyChanged at the
+// current revision, and clients re-register for fresh AllowedIps. No bump
+// is needed: the CLI daemon and the Apple clients re-register on any
+// PolicyChanged regardless of its revision. At revision 0 clients fall
+// back to the peer's /32 and nothing extra is published.
+func (h *CoordinatorHandler) publishPeerEvent(ctx context.Context, tenantID uuid.UUID, event *bamboov1.WatchPeersEvent) {
+	h.bus.Publish(tenantID, event)
+	if event.GetPeerAdded() == nil && event.GetPeerUpdated() == nil {
+		return
+	}
+	rev := h.policyRevision(ctx, tenantID)
+	if rev == 0 {
+		return
+	}
+	h.bus.Publish(tenantID, &bamboov1.WatchPeersEvent{
+		Event: &bamboov1.WatchPeersEvent_PolicyChanged{
+			PolicyChanged: &bamboov1.PolicyChanged{PolicyRevision: rev},
+		},
+	})
+}
+
+// policyRevision returns the tenant's policy revision; 0 when no row
+// exists or the lookup fails (the pre-existing, non-enforcing view).
+func (h *CoordinatorHandler) policyRevision(ctx context.Context, tenantID uuid.UUID) int64 {
+	var rev int64
+	err := db.WithTenant(ctx, h.pool, tenantID, func(q db.Querier) error {
+		rec, gerr := repo.NewPolicies(q).Get(ctx, tenantID)
+		if gerr != nil {
+			return gerr
+		}
+		rev = rec.Revision
+		return nil
+	})
+	if err != nil && !errors.Is(err, repo.ErrNotFound) {
+		slog.Warn("load policy revision for peer event", "tenant_id", tenantID, "err", err)
+	}
+	return rev
 }
 
 // PublishRelaysChanged broadcasts the fresh eligible-relay list to
@@ -724,7 +767,7 @@ func (h *CoordinatorHandler) Register(ctx context.Context, req *bamboov1.Registe
 	// the PeerAdded when the admin flips the gate. Rejected peers
 	// (re-registering after rejection) likewise produce no event.
 	if isNewPeer && selfApproved {
-		h.bus.Publish(tenant.ID, &bamboov1.WatchPeersEvent{
+		h.publishPeerEvent(ctx, tenant.ID, &bamboov1.WatchPeersEvent{
 			Event: &bamboov1.WatchPeersEvent_PeerAdded{
 				PeerAdded: &bamboov1.PeerAdded{Peer: resp.Self},
 			},
@@ -817,7 +860,7 @@ func (h *CoordinatorHandler) Heartbeat(ctx context.Context, req *bamboov1.Heartb
 			// SetPeerStatus PeerRemoved (or never added it for a
 			// still-pending registration). Raw bus.Publish would
 			// re-introduce the peer in their view of the mesh.
-			h.PublishPeerUpdatedIfVisible(updated.TenantID, updated)
+			h.PublishPeerUpdatedIfVisible(ctx, updated.TenantID, updated)
 		}
 	}
 

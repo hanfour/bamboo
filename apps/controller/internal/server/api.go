@@ -981,7 +981,7 @@ func (h *HTTPServer) apiPeerPatch(w http.ResponseWriter, r *http.Request, authn 
 	// transition, would even mislead subscribers into re-adding a
 	// peer the PeerRemoved just told them to drop.
 	if len(diff) > 0 && !statusChanged {
-		h.coord.PublishPeerUpdatedIfVisible(tenant.ID, updated)
+		h.coord.PublishPeerUpdatedIfVisible(r.Context(), tenant.ID, updated)
 	}
 	// Public services ingress: attaching or removing tag:ingress changes
 	// who the ingress peer is, so every peer re-pulls its AllowedIPs.
