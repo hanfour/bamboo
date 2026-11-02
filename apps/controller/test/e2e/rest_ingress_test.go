@@ -260,3 +260,29 @@ func TestRESTIngress_LivenessBumpsPolicyAndOpensACL(t *testing.T) {
 		t.Error("disabling the service must remove the generated rule")
 	}
 }
+
+// TestRESTIngress_IngressPeerCannotBeTarget: the internet-facing ingress
+// peer must not expose its own ports through itself. Filing a service on
+// it, or approving one filed before it was tagged, answers 400.
+func TestRESTIngress_IngressPeerCannotBeTarget(t *testing.T) {
+	f := startFixture(t)
+	vps := registerIngressTestPeer(t, f, "vps")
+	base := f.httpURL + "/api/v1"
+	created := ingressCall(t, http.MethodPost, base+"/peers/"+vps.id+"/ingress", "", f.tenantSlug,
+		map[string]any{"label": "svc-" + uuid.NewString()[:8], "target_port": 47800})
+	if created.status != http.StatusCreated {
+		t.Fatalf("create before tagging: %d %s", created.status, created.body)
+	}
+	sid := decodeIngressSvc(t, created).ID
+	tagPeer(t, f, vps.id, "ingress")
+
+	r := ingressCall(t, http.MethodPost, base+"/peers/"+vps.id+"/ingress", "", f.tenantSlug,
+		map[string]any{"label": "svc-" + uuid.NewString()[:8], "target_port": 47801})
+	if r.status != http.StatusBadRequest || !strings.Contains(string(r.body), "tag:ingress") {
+		t.Errorf("create on ingress peer: %d %s, want 400 naming tag:ingress", r.status, r.body)
+	}
+	r = ingressCall(t, http.MethodPost, base+"/ingress/"+sid+"/approve", "", f.tenantSlug, nil)
+	if r.status != http.StatusBadRequest || !strings.Contains(string(r.body), "tag:ingress") {
+		t.Errorf("approve on ingress peer: %d %s, want 400 naming tag:ingress", r.status, r.body)
+	}
+}

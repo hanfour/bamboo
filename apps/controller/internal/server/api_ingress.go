@@ -69,6 +69,26 @@ type apiPatchIngressReq struct {
 // another tenant"; both answer 404.
 var errIngressNotFound = errors.New("ingress service not found")
 
+// errIngressTargetIsIngress rejects a service on the ingress peer itself:
+// the internet-facing peer must not publish its own ports through itself.
+var errIngressTargetIsIngress = errors.New("the target peer carries tag:ingress; a public service must run on another peer")
+
+// checkIngressTarget loads the target peer in the tenant tx and rejects
+// the ingress peer.
+func checkIngressTarget(ctx context.Context, q db.Querier, tenantID, peerID uuid.UUID) (*repo.Peer, error) {
+	peer, ok, err := getPeerInTenant(ctx, q, tenantID, peerID)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, errIngressNotFound
+	}
+	if slices.Contains(peer.Tags, policy.IngressTag) {
+		return nil, errIngressTargetIsIngress
+	}
+	return peer, nil
+}
+
 func (h *HTTPServer) ingressServiceToJSON(s *repo.IngressService) ingressServiceJSON {
 	out := ingressServiceJSON{
 		ID: s.ID.String(), PeerID: s.PeerID.String(), PeerHostname: s.PeerHostname, PeerIP: s.PeerIP,
@@ -208,12 +228,9 @@ func (h *HTTPServer) apiCreateIngress(w http.ResponseWriter, r *http.Request, au
 		auditOK bool
 	)
 	txErr := db.WithTenant(ctx, h.pool, tenant.ID, func(q db.Querier) error {
-		peer, ok, gerr := getPeerInTenant(ctx, q, tenant.ID, peerID)
+		peer, gerr := checkIngressTarget(ctx, q, tenant.ID, peerID)
 		if gerr != nil {
 			return gerr
-		}
-		if !ok {
-			return errIngressNotFound
 		}
 		svcs := repo.NewIngressServices(q)
 		taken, terr := svcs.LabelTaken(ctx, req.Label)
@@ -239,6 +256,9 @@ func (h *HTTPServer) apiCreateIngress(w http.ResponseWriter, r *http.Request, au
 		return
 	case errors.Is(txErr, repo.ErrIngressLabelTaken):
 		writeError(w, http.StatusConflict, txErr)
+		return
+	case errors.Is(txErr, errIngressTargetIsIngress):
+		writeError(w, http.StatusBadRequest, errIngressTargetIsIngress)
 		return
 	case txErr != nil:
 		writeError(w, http.StatusInternalServerError, txErr)
@@ -267,6 +287,9 @@ func (h *HTTPServer) apiApproveIngress(w http.ResponseWriter, r *http.Request, a
 	h.mutateIngress(w, r, tenant, sidStr, func(ctx context.Context, q db.Querier, svcs *repo.IngressServices, cur *repo.IngressService) ([]*repo.AuditEvent, []bool, error) {
 		if cur.Approved() {
 			return nil, nil, nil // keep the original approver; no audit, no bump
+		}
+		if _, err := checkIngressTarget(ctx, q, tenant.ID, cur.PeerID); err != nil {
+			return nil, nil, err
 		}
 		if _, err := svcs.Approve(ctx, cur.ID, ingressApproverID(authn)); err != nil {
 			return nil, nil, err
@@ -382,6 +405,10 @@ func (h *HTTPServer) mutateIngress(w http.ResponseWriter, r *http.Request, tenan
 	})
 	if errors.Is(txErr, errIngressNotFound) {
 		http.NotFound(w, r)
+		return
+	}
+	if errors.Is(txErr, errIngressTargetIsIngress) {
+		writeError(w, http.StatusBadRequest, errIngressTargetIsIngress)
 		return
 	}
 	if txErr != nil {
