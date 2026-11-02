@@ -19,7 +19,7 @@ func prefixes(s ...string) []netip.Prefix {
 	return out
 }
 
-func TestUsableCandidates(t *testing.T) {
+func TestOrderCandidates(t *testing.T) {
 	cases := []struct {
 		name  string
 		cands []string
@@ -27,10 +27,10 @@ func TestUsableCandidates(t *testing.T) {
 		want  []string
 	}{
 		{
-			name:  "vps skips remote LAN and picks public",
+			name:  "vps tries public before remote LAN",
 			cands: []string{"192.168.1.108:51820", "220.135.1.2:51820"},
 			local: prefixes("203.0.113.0/24", "10.0.0.0/8"),
-			want:  []string{"220.135.1.2:51820"},
+			want:  []string{"220.135.1.2:51820", "192.168.1.108:51820"},
 		},
 		{
 			name:  "same LAN goes direct first",
@@ -39,25 +39,29 @@ func TestUsableCandidates(t *testing.T) {
 			want:  []string{"192.168.1.108:51820", "220.135.1.2:51820"},
 		},
 		{
-			name:  "all private unreachable falls back to first",
+			name:  "off-subnet private kept in controller order",
 			cands: []string{"192.168.1.108:51820", "10.1.2.3:51820"},
 			local: prefixes("172.16.0.0/16"),
-			want:  []string{"192.168.1.108:51820"},
+			want:  []string{"192.168.1.108:51820", "10.1.2.3:51820"},
 		},
 		{
-			name: "CGNAT, link-local, ULA and IPv6 link-local skipped",
+			name: "routed private (CGNAT, ULA) demoted behind public",
 			cands: []string{
-				"100.64.1.1:1", "169.254.1.1:2", "[fd00::1]:3", "[fe80::1]:4",
-				"[2001:db8::1]:5", "198.51.100.7:6",
+				"100.64.1.1:1", "[fd00::1]:3", "[2001:db8::1]:5", "198.51.100.7:6",
 			},
-			local: nil,
-			want:  []string{"[2001:db8::1]:5", "198.51.100.7:6"},
+			want: []string{"[2001:db8::1]:5", "198.51.100.7:6", "100.64.1.1:1", "[fd00::1]:3"},
 		},
 		{
-			name:  "public keeps controller order and hostnames count as public",
-			cands: []string{"198.51.100.7:1", "10.9.9.9:2", "relay.example.com:3", "203.0.113.9:4"},
+			name:  "link-local never counts as same LAN",
+			cands: []string{"169.254.1.1:2", "[fe80::1%eth0]:4", "198.51.100.7:6"},
+			local: prefixes("169.254.0.0/16", "fe80::/64"),
+			want:  []string{"198.51.100.7:6", "169.254.1.1:2", "[fe80::1%eth0]:4"},
+		},
+		{
+			name:  "groups: same LAN, public and hostnames, then off-subnet private",
+			cands: []string{"10.9.9.9:2", "198.51.100.7:1", "192.168.0.5:7", "relay.example.com:3", "203.0.113.9:4"},
 			local: prefixes("192.168.0.0/16"),
-			want:  []string{"198.51.100.7:1", "relay.example.com:3", "203.0.113.9:4"},
+			want:  []string{"192.168.0.5:7", "198.51.100.7:1", "relay.example.com:3", "203.0.113.9:4", "10.9.9.9:2"},
 		},
 		{
 			name:  "empty entries ignored",
@@ -72,7 +76,7 @@ func TestUsableCandidates(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := wg.UsableCandidates(tc.cands, tc.local)
+			got := wg.OrderCandidates(tc.cands, tc.local)
 			if !slices.Equal(got, tc.want) {
 				t.Fatalf("got %v want %v", got, tc.want)
 			}
@@ -80,9 +84,9 @@ func TestUsableCandidates(t *testing.T) {
 	}
 }
 
-func TestUsableCandidatesDoesNotMutateInput(t *testing.T) {
+func TestOrderCandidatesDoesNotMutateInput(t *testing.T) {
 	in := []string{"220.135.1.2:51820", "192.168.1.108:51820"}
-	_ = wg.UsableCandidates(in, prefixes("192.168.1.0/24"))
+	_ = wg.OrderCandidates(in, prefixes("192.168.1.0/24"))
 	if in[0] != "220.135.1.2:51820" {
 		t.Fatal("input reordered")
 	}
