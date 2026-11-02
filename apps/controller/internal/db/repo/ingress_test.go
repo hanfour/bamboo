@@ -239,6 +239,7 @@ func TestIngress_LabelUniqueAcrossTenants(t *testing.T) {
 		t.Fatalf("create in A: %v", err)
 	}
 
+	putIngressToken(t, admin, a, time.Hour)
 	unscoped := repo.NewIngressServices(app)
 	taken, err := unscoped.LabelTaken(ctx, label)
 	if err != nil || !taken {
@@ -450,5 +451,66 @@ func TestIngress_ExistsForPeer(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("tx: %v", err)
+	}
+}
+
+// putIngressToken stores a current ingress token for fx's tenant that
+// expires after ttl (negative: already expired).
+func putIngressToken(t *testing.T, admin *db.Pool, fx ingressFixture, ttl time.Duration) {
+	t.Helper()
+	ctx := context.Background()
+	if err := db.WithTenant(ctx, admin, fx.tenantID, func(q db.Querier) error {
+		return repo.NewIngressTokens(q).Put(ctx, repo.IngressToken{
+			TenantID: fx.tenantID, PeerID: fx.peerID, JTI: uuid.New(), ExpiresAt: time.Now().Add(ttl),
+		})
+	}); err != nil {
+		t.Fatalf("put ingress token: %v", err)
+	}
+}
+
+// makeRepoLiveService creates, approves, and enables a service on fx's
+// peer and returns its label.
+func makeRepoLiveService(t *testing.T, app *db.Pool, fx ingressFixture) string {
+	t.Helper()
+	ctx := context.Background()
+	label := randomLabel()
+	if err := db.WithTenant(ctx, app, fx.tenantID, func(q db.Querier) error {
+		svcs := repo.NewIngressServices(q)
+		s, err := svcs.Create(ctx, fx.tenantID, fx.peerID, label, 47800, nil)
+		if err != nil {
+			return err
+		}
+		if _, err := svcs.Approve(ctx, s.ID, uuid.New()); err != nil {
+			return err
+		}
+		_, err = svcs.SetEnabled(ctx, s.ID, true)
+		return err
+	}); err != nil {
+		t.Fatalf("make live service: %v", err)
+	}
+	return label
+}
+
+// TestIngress_LabelLiveRequiresValidToken: the on-demand TLS ask only
+// answers live for a tenant that holds an unexpired ingress token, so a
+// tenant without a deployed ingress cannot spend certificate quota.
+func TestIngress_LabelLiveRequiresValidToken(t *testing.T) {
+	admin := requireDB(t)
+	app := requireAppDB(t)
+	ctx := context.Background()
+	fx := seedIngressTenant(t, admin, 212)
+	label := makeRepoLiveService(t, app, fx)
+	svcs := repo.NewIngressServices(app)
+
+	if live, err := svcs.LabelLive(ctx, label); err != nil || live {
+		t.Errorf("no token: LabelLive = %v, %v; want false", live, err)
+	}
+	putIngressToken(t, admin, fx, -time.Minute)
+	if live, err := svcs.LabelLive(ctx, label); err != nil || live {
+		t.Errorf("expired token: LabelLive = %v, %v; want false", live, err)
+	}
+	putIngressToken(t, admin, fx, time.Hour)
+	if live, err := svcs.LabelLive(ctx, label); err != nil || !live {
+		t.Errorf("valid token: LabelLive = %v, %v; want true", live, err)
 	}
 }

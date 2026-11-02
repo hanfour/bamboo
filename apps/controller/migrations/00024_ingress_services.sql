@@ -96,6 +96,11 @@ AS $fn$
            AND s.enabled
            AND s.approved_by IS NOT NULL
            AND p.approval_status = 'approved'
+           -- Caddy asks before issuing a certificate. Only a tenant with
+           -- a deployed ingress (a current, unexpired token) can spend
+           -- certificate quota; issuing a new token replaces the row.
+           AND EXISTS (SELECT 1 FROM ingress_tokens k
+                        WHERE k.tenant_id = s.tenant_id AND k.expires_at > now())
     );
 $fn$;
 

@@ -194,7 +194,9 @@ func issueIngressTokenSameKey(t *testing.T, f *fixture, peerID string) string {
 func TestInternalIngress_AskStrictDomain(t *testing.T) {
 	f := startFixture(t)
 	mac := registerIngressTestPeer(t, f, "mac")
-	f.httpAPI.SetIngressConfig(nil, "svc.example.test")
+	vps := registerIngressTestPeer(t, f, "vps")
+	tagPeer(t, f, vps.id, "ingress")
+	issueIngressToken(t, f, vps.id) // ask answers live only with a current token
 	_, label := makeLabeledLiveService(t, f, mac.id)
 	base := f.httpURL + "/internal/v1/ingress/ask"
 
@@ -408,5 +410,24 @@ func TestInternalIngress_EventsTenantScoped(t *testing.T) {
 	r := postIngressEvents(t, b.httpURL+"/internal/v1/ingress/events", tokenB, map[string]any{"events": []any{ingressEvent(svcA)}})
 	if r.status != http.StatusAccepted || string(bytes.TrimSpace(r.body)) != `{"accepted":0}` {
 		t.Errorf("cross-tenant: %d %s, want 202 {\"accepted\":0}", r.status, r.body)
+	}
+}
+
+// TestInternalIngress_AskRequiresIngressToken: a live service in a tenant
+// that never issued an ingress token gets no certificate.
+func TestInternalIngress_AskRequiresIngressToken(t *testing.T) {
+	f := startFixture(t)
+	mac := registerIngressTestPeer(t, f, "mac")
+	vps := registerIngressTestPeer(t, f, "vps")
+	tagPeer(t, f, vps.id, "ingress")
+	f.httpAPI.SetIngressConfig(nil, "svc.example.test")
+	_, label := makeLabeledLiveService(t, f, mac.id)
+	ask := f.httpURL + "/internal/v1/ingress/ask?domain=" + label + ".svc.example.test"
+	if resp, _ := internalGet(t, ask, "", ""); resp.StatusCode != http.StatusNotFound {
+		t.Errorf("ask without token: %d, want 404", resp.StatusCode)
+	}
+	issueIngressToken(t, f, vps.id)
+	if resp, _ := internalGet(t, ask, "", ""); resp.StatusCode != http.StatusOK {
+		t.Errorf("ask with token: %d, want 200", resp.StatusCode)
 	}
 }

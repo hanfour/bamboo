@@ -98,7 +98,8 @@ Authenticated with an Ed25519 service token in the same format as relay tokens
 admin UI, stored on the VPS as a file.
 
 - `GET /internal/v1/ingress/ask?domain=<fqdn>` — Caddy on-demand TLS `ask`.
-  200 if `<label>.svc.miilink.net` is live (any tenant), else 404. Caddy's `ask`
+  200 if `<label>.svc.miilink.net` is live (any tenant) and that tenant holds a
+  current, unexpired ingress token (a deployed ingress), else 404. Caddy's `ask`
   cannot send headers, so this endpoint takes no token; it answers only a yes/no
   for a name and is reachable only inside the compose network — the public
   Caddy site never proxies `/internal/*` (add an explicit `respond 404` matcher).

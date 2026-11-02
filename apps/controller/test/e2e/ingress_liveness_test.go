@@ -113,9 +113,13 @@ func TestIngressLiveness_ServiceMutationsBumpRevision(t *testing.T) {
 		return ingressCall(t, http.MethodPost, base+"/ingress/"+sid+"/approve", "", f.tenantSlug, nil)
 	}
 	patch := func(body map[string]any) func() jsonResponse {
-		return func() jsonResponse { return ingressCall(t, http.MethodPatch, base+"/ingress/"+sid, "", f.tenantSlug, body) }
+		return func() jsonResponse {
+			return ingressCall(t, http.MethodPatch, base+"/ingress/"+sid, "", f.tenantSlug, body)
+		}
 	}
-	del := func() jsonResponse { return ingressCall(t, http.MethodDelete, base+"/ingress/"+sid, "", f.tenantSlug, nil) }
+	del := func() jsonResponse {
+		return ingressCall(t, http.MethodDelete, base+"/ingress/"+sid, "", f.tenantSlug, nil)
+	}
 	create := func() jsonResponse {
 		r := ingressCall(t, http.MethodPost, base+"/peers/"+mac.id+"/ingress", "", f.tenantSlug,
 			map[string]any{"label": "svc-" + uuid.NewString()[:8], "target_port": 47800})
