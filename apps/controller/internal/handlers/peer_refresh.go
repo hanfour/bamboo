@@ -37,8 +37,12 @@ func newPeerRefreshCoalescer(window time.Duration, revision func(uuid.UUID) int6
 	}
 }
 
-// Schedule opens a window for tenantID unless one is already open.
+// Schedule opens a window for tenantID unless one is already open. A nil
+// coalescer (handler built without NewCoordinatorHandler) does nothing.
 func (c *peerRefreshCoalescer) Schedule(tenantID uuid.UUID) {
+	if c == nil {
+		return
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.closed {
@@ -68,14 +72,20 @@ func (c *peerRefreshCoalescer) fire(tenantID uuid.UUID) {
 
 // SetWindow changes the window for windows opened afterwards (tests).
 func (c *peerRefreshCoalescer) SetWindow(d time.Duration) {
+	if c == nil {
+		return
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.window = d
 }
 
 // Close stops pending timers, waits for sends already running, and
-// ignores later Schedule calls. Safe to call more than once.
+// ignores later Schedule calls. Safe to call more than once and on nil.
 func (c *peerRefreshCoalescer) Close() {
+	if c == nil {
+		return
+	}
 	c.mu.Lock()
 	c.closed = true
 	for id, t := range c.pending {

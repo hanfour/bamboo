@@ -126,3 +126,16 @@ func TestPeerRefresh_CloseStopsPendingTimers(t *testing.T) {
 	}
 	c.Close() // idempotent
 }
+
+// TestPeerRefresh_NilReceiverIsSafe: a CoordinatorHandler built without
+// NewCoordinatorHandler (tests, partial wiring) has no coalescer; peer
+// events and shutdown must not panic.
+func TestPeerRefresh_NilReceiverIsSafe(t *testing.T) {
+	var c *peerRefreshCoalescer
+	c.Schedule(uuid.New())
+	c.SetWindow(time.Second)
+	c.Close()
+	h := &CoordinatorHandler{}
+	h.Close()
+	h.SetPeerRefreshWindow(time.Second)
+}

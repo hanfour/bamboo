@@ -4,6 +4,7 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/netip"
 	"slices"
@@ -88,4 +89,28 @@ func (v ingressView) allowedIPs(p *policy.Policy, src, dst *repo.Peer, egress na
 
 func (v ingressView) allowAllPermits(src, dst *repo.Peer) bool {
 	return (!isIngressPeer(src) || v.isLiveTarget(dst)) && (!isIngressPeer(dst) || v.isLiveTarget(src))
+}
+
+// liftRevisionForIngressTx lifts the tenant to policy revision >= 1 when
+// a new peer carries tag:ingress and the tenant is still at revision 0.
+// An ingress peer at revision 0 would be invisible to the ingress gate on
+// clients: at revision 0 they fall back to a peer's /32 when AllowedIps
+// is empty. It runs inside the peer's insert transaction, so a failure
+// rolls the peer (and the pre-auth key redemption) back. Returns the new
+// revision, or 0 when it did not bump; the caller publishes
+// PolicyChanged after commit.
+func liftRevisionForIngressTx(ctx context.Context, q db.Querier, tenantID uuid.UUID, p *repo.Peer) (int64, error) {
+	if !isIngressPeer(p) {
+		return 0, nil
+	}
+	policies := repo.NewPolicies(q)
+	rec, err := policies.Get(ctx, tenantID)
+	switch {
+	case errors.Is(err, repo.ErrNotFound):
+	case err != nil:
+		return 0, err
+	case rec.Revision > 0:
+		return 0, nil
+	}
+	return policies.Bump(ctx, tenantID)
 }

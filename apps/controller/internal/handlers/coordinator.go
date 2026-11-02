@@ -453,7 +453,7 @@ func (h *CoordinatorHandler) Register(ctx context.Context, req *bamboov1.Registe
 		return nil, status.Error(codes.InvalidArgument, "hostname is required")
 	}
 
-	tenant, ownerUserID, autoApprove, initialTags, renewOnly, err := h.resolveCredential(ctx, req)
+	tenant, ownerUserID, autoApprove, initialTags, renewOnly, preAuthKey, err := h.resolveCredential(ctx, req)
 	if err != nil {
 		return nil, err
 	}
@@ -478,8 +478,21 @@ func (h *CoordinatorHandler) Register(ctx context.Context, req *bamboov1.Registe
 	var (
 		self      *repo.Peer
 		isNewPeer bool
+		// bumpedRev is the revision a new ingress peer's insert
+		// transaction lifted the tenant to; 0 when it did not bump.
+		bumpedRev int64
 	)
 	if existing != nil {
+		// Re-registration still spends one redemption of a presented
+		// key, as before; a new peer spends it in its insert tx.
+		if preAuthKey != nil {
+			err = db.WithTenant(ctx, h.pool, tenant.ID, func(q db.Querier) error {
+				return h.auth.consumePreAuthKeyTx(ctx, q, preAuthKey)
+			})
+			if err != nil {
+				return nil, err
+			}
+		}
 		self = existing
 		// A peer enrolled before its credential carried a user keeps
 		// that user on the next register. An already-attributed peer
@@ -616,6 +629,11 @@ func (h *CoordinatorHandler) Register(ctx context.Context, req *bamboov1.Registe
 			initialApproval = "approved"
 		}
 		err = db.WithTenant(ctx, h.pool, tenant.ID, func(q db.Querier) error {
+			if preAuthKey != nil {
+				if kerr := h.auth.consumePreAuthKeyTx(ctx, q, preAuthKey); kerr != nil {
+					return kerr
+				}
+			}
 			peers := repo.NewPeers(q)
 			used, uerr := peers.UsedIPs(ctx, tenant.ID)
 			if uerr != nil {
@@ -650,6 +668,11 @@ func (h *CoordinatorHandler) Register(ctx context.Context, req *bamboov1.Registe
 				}
 				self.Tags = applied
 			}
+			rev, berr := liftRevisionForIngressTx(ctx, q, tenant.ID, self)
+			if berr != nil {
+				return status.Errorf(codes.Internal, "bump policy revision for ingress peer: %v", berr)
+			}
+			bumpedRev = rev
 			auditDiff := map[string]any{"hostname": self.Hostname, "ip": self.IP, "os": self.OS, "approval_status": self.ApprovalStatus}
 			if dnsName != "" {
 				auditDiff["peer_dns_name"] = dnsName
@@ -678,6 +701,9 @@ func (h *CoordinatorHandler) Register(ctx context.Context, req *bamboov1.Registe
 			"approval_status", self.ApprovalStatus,
 		)
 		isNewPeer = true
+		if bumpedRev > 0 {
+			h.publishPolicyChanged(tenant.ID, bumpedRev)
+		}
 	}
 
 	// Compose response.
@@ -716,11 +742,9 @@ func (h *CoordinatorHandler) Register(ctx context.Context, req *bamboov1.Registe
 	}
 
 	policyDoc, currentRev := h.loadPolicyAndRevision(ctx, tenant.ID)
-	// An ingress peer in a tenant at revision 0 would be invisible to the
-	// ingress gate on clients: at revision 0 they fall back to a peer's
-	// /32 when AllowedIps is empty. Lift the tenant to revision >= 1 so
-	// every client enforces AllowedIps (the bump's PolicyChanged makes
-	// connected peers re-register now).
+	// A new ingress peer lifted the revision in its insert tx
+	// (liftRevisionForIngressTx). This covers an existing peer that
+	// carries tag:ingress at revision 0, so it stays a fallback.
 	if currentRev == 0 && isIngressPeer(self) {
 		rev, berr := h.BumpPolicyRevision(ctx, tenant.ID)
 		if berr != nil {
@@ -1103,50 +1127,52 @@ func (h *CoordinatorHandler) loadPeerForMutation(ctx context.Context, peerID uui
 // onboarding credential) or a bearer/session token issued by the
 // controller. The REST adapter has its own corresponding check; this
 // path covers gRPC Register.
-func (h *CoordinatorHandler) resolveCredential(ctx context.Context, req *bamboov1.RegisterRequest) (tenant *repo.Tenant, ownerUserID *uuid.UUID, autoApprove bool, initialTags []string, renewOnly bool, err error) {
+func (h *CoordinatorHandler) resolveCredential(ctx context.Context, req *bamboov1.RegisterRequest) (tenant *repo.Tenant, ownerUserID *uuid.UUID, autoApprove bool, initialTags []string, renewOnly bool, preAuthKey *repo.PreAuthKey, err error) {
 	if tenant, owner, ok, perr := h.reusePeerSession(ctx, req); perr != nil {
-		return nil, nil, false, nil, false, perr
+		return nil, nil, false, nil, false, nil, perr
 	} else if ok {
-		return tenant, owner, true, nil, true, nil
+		return tenant, owner, true, nil, true, nil, nil
 	}
 
 	if secret := req.GetPreAuthKeySecret(); secret != "" {
-		key, err := h.auth.redeemAndReturnKey(ctx, secret)
+		// Validated, not consumed: Register consumes it in the
+		// transaction that writes the peer (consumePreAuthKeyTx).
+		key, err := h.auth.checkPreAuthKey(ctx, secret)
 		if err != nil {
-			return nil, nil, false, nil, false, err
+			return nil, nil, false, nil, false, nil, err
 		}
 		t, err := h.tenants.GetByID(ctx, key.TenantID)
 		if err != nil {
-			return nil, nil, false, nil, false, status.Errorf(codes.Internal, "tenant by id: %v", err)
+			return nil, nil, false, nil, false, nil, status.Errorf(codes.Internal, "tenant by id: %v", err)
 		}
-		return t, key.CreatedBy, key.AutoApprove, key.Tags, false, nil
+		return t, key.CreatedBy, key.AutoApprove, key.Tags, false, key, nil
 	}
 
 	if token := req.GetBearerToken(); token != "" {
 		t, userID, err := h.auth.resolveBearerToken(ctx, token)
 		if err != nil {
-			return nil, nil, false, nil, false, err
+			return nil, nil, false, nil, false, nil, err
 		}
 		// Bearer-token register implies an authenticated user —
 		// auto-approve so a person signing in to add their own laptop
 		// doesn't have to click "approve" on their own device.
-		return t, &userID, true, nil, false, nil
+		return t, &userID, true, nil, false, nil, nil
 	}
 
 	if h.requireAuth {
-		return nil, nil, false, nil, false, status.Error(codes.PermissionDenied, "Register requires a pre-auth key or bearer credential when require_auth is enabled")
+		return nil, nil, false, nil, false, nil, status.Error(codes.PermissionDenied, "Register requires a pre-auth key or bearer credential when require_auth is enabled")
 	}
 
 	slug := tenantSlugFromMetadata(ctx)
 	t, terr := h.tenants.GetOrCreate(ctx, slug, "Default Tenant", repo.DefaultTenantCIDR)
 	if terr != nil {
-		return nil, nil, false, nil, false, status.Errorf(codes.Internal, "tenant resolve: %v", terr)
+		return nil, nil, false, nil, false, nil, status.Errorf(codes.Internal, "tenant resolve: %v", terr)
 	}
 	// Dev-fallback path: no admin context, auto-approve so make
 	// local-up + make local-bootstrap keep working without a manual
 	// approval click in the middle. The peer has no owner, so only
 	// tag: and cidr: rules can match it.
-	return t, nil, true, nil, false, nil
+	return t, nil, true, nil, false, nil, nil
 }
 
 // reusePeerSession returns the tenant of a peer-session bearer that
