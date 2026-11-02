@@ -112,7 +112,10 @@ When a service becomes live, the controller adds a generated rule
 `tag:ingress -> <peer>:<target_port>` (marked generated, not editable in the
 HCL editor); removing liveness removes it. Enforcement is L3 only
 (`apps/controller/internal/policy/enforce.go`), so the target service must
-also restrict the source to the ingress peer's mesh IP.
+also restrict the source to the ingress peer's mesh IP. An admin-approved
+public service's generated allow rules are placed before authored rules, so
+they take precedence over an authored deny for the same pair; disable the
+service to revoke.
 
 ## 5. `bamboo-ingress` (new, `apps/ingress`, AGPLv3)
 

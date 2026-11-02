@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -982,6 +983,12 @@ func (h *HTTPServer) apiPeerPatch(w http.ResponseWriter, r *http.Request, authn 
 	if len(diff) > 0 && !statusChanged {
 		h.coord.PublishPeerUpdatedIfVisible(tenant.ID, updated)
 	}
+	// Public services ingress: attaching or removing tag:ingress changes
+	// who the ingress peer is, so every peer re-pulls its AllowedIPs.
+	if slices.Contains(current.Tags, policy.IngressTag) != slices.Contains(updated.Tags, policy.IngressTag) &&
+		!h.bumpIngressPolicy(r.Context(), w, tenant.ID) {
+		return
+	}
 
 	writeJSON(w, http.StatusOK, peerToJSON(updated))
 }
@@ -1116,7 +1123,7 @@ func (h *HTTPServer) apiPeerApprove(w http.ResponseWriter, r *http.Request, auth
 		return
 	}
 	var current *repo.Peer
-	var notFound bool
+	var notFound, affectsIngress bool
 	if txErr := db.WithTenant(r.Context(), h.pool, tenant.ID, func(q db.Querier) error {
 		got, ok, gerr := getPeerInTenant(r.Context(), q, tenant.ID, id)
 		if gerr != nil {
@@ -1127,7 +1134,9 @@ func (h *HTTPServer) apiPeerApprove(w http.ResponseWriter, r *http.Request, auth
 			return nil
 		}
 		current = got
-		return nil
+		affects, aerr := peerAffectsIngress(r.Context(), q, got)
+		affectsIngress = affects
+		return aerr
 	}); txErr != nil {
 		writeError(w, http.StatusInternalServerError, txErr)
 		return
@@ -1166,6 +1175,11 @@ func (h *HTTPServer) apiPeerApprove(w http.ResponseWriter, r *http.Request, auth
 		} else {
 			h.emitAuditHook(r.Context(), auditEv, auditOK)
 		}
+		// Public services ingress: the peer's services or its ingress
+		// role just changed state; peers must re-register.
+		if affectsIngress && !h.bumpIngressPolicy(r.Context(), w, tenant.ID) {
+			return
+		}
 	}
 	writeJSON(w, http.StatusOK, peerToJSON(updated))
 }
@@ -1186,7 +1200,7 @@ func (h *HTTPServer) apiPeerReject(w http.ResponseWriter, r *http.Request, authn
 		return
 	}
 	var current *repo.Peer
-	var notFound bool
+	var notFound, affectsIngress bool
 	if txErr := db.WithTenant(r.Context(), h.pool, tenant.ID, func(q db.Querier) error {
 		got, ok, gerr := getPeerInTenant(r.Context(), q, tenant.ID, id)
 		if gerr != nil {
@@ -1197,7 +1211,9 @@ func (h *HTTPServer) apiPeerReject(w http.ResponseWriter, r *http.Request, authn
 			return nil
 		}
 		current = got
-		return nil
+		affects, aerr := peerAffectsIngress(r.Context(), q, got)
+		affectsIngress = affects
+		return aerr
 	}); txErr != nil {
 		writeError(w, http.StatusInternalServerError, txErr)
 		return
@@ -1229,6 +1245,11 @@ func (h *HTTPServer) apiPeerReject(w http.ResponseWriter, r *http.Request, authn
 			slog.Warn("peer.reject audit tx failed", "peer_id", id, "err", txErr)
 		} else {
 			h.emitAuditHook(r.Context(), auditEv, auditOK)
+		}
+		// Public services ingress: the peer's services or its ingress
+		// role just changed state; peers must re-register.
+		if affectsIngress && !h.bumpIngressPolicy(r.Context(), w, tenant.ID) {
+			return
 		}
 	}
 	writeJSON(w, http.StatusOK, peerToJSON(updated))
@@ -1659,9 +1680,10 @@ func (h *HTTPServer) apiPeerDelete(w http.ResponseWriter, r *http.Request, authn
 		return
 	}
 	var (
-		notFound bool
-		auditEv  *repo.AuditEvent
-		auditOK  bool
+		notFound       bool
+		affectsIngress bool
+		auditEv        *repo.AuditEvent
+		auditOK        bool
 	)
 	if txErr := db.WithTenant(r.Context(), h.pool, tenant.ID, func(q db.Querier) error {
 		peers := repo.NewPeers(q)
@@ -1673,6 +1695,12 @@ func (h *HTTPServer) apiPeerDelete(w http.ResponseWriter, r *http.Request, authn
 			notFound = true
 			return nil
 		}
+		// Ask before the delete: its ingress services cascade away.
+		affects, aerr := peerAffectsIngress(r.Context(), q, current)
+		if aerr != nil {
+			return aerr
+		}
+		affectsIngress = affects
 		if _, err := peers.Delete(r.Context(), id); err != nil {
 			return fmt.Errorf("delete peer: %w", err)
 		}
@@ -1692,6 +1720,9 @@ func (h *HTTPServer) apiPeerDelete(w http.ResponseWriter, r *http.Request, authn
 		return
 	}
 	h.emitAuditHook(r.Context(), auditEv, auditOK)
+	if affectsIngress && !h.bumpIngressPolicy(r.Context(), w, tenant.ID) {
+		return
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 

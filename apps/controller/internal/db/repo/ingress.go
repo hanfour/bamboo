@@ -170,6 +170,18 @@ func (r *IngressServices) ListByTenant(ctx context.Context, tenantID uuid.UUID) 
 	return out, rows.Err()
 }
 
+// ExistsForPeer reports whether the peer hosts any service, in any
+// state. Peer approval changes and deletion bump the policy revision
+// when it does (ON DELETE CASCADE removes the rows with the peer, so
+// callers ask before deleting).
+func (r *IngressServices) ExistsForPeer(ctx context.Context, peerID uuid.UUID) (bool, error) {
+	var exists bool
+	if err := r.q.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM ingress_services WHERE peer_id = $1)`, peerID).Scan(&exists); err != nil {
+		return false, fmt.Errorf("ingress services for peer: %w", err)
+	}
+	return exists, nil
+}
+
 // Approve records the approver. Returns rows affected.
 func (r *IngressServices) Approve(ctx context.Context, id, approver uuid.UUID) (int64, error) {
 	return r.exec(ctx, `UPDATE ingress_services

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -236,6 +237,9 @@ func (h *HTTPServer) apiCreateIngress(w http.ResponseWriter, r *http.Request, au
 		return
 	}
 	h.emitAuditHook(ctx, auditEv, auditOK)
+	if !h.bumpIngressPolicy(ctx, w, tenant.ID) {
+		return
+	}
 	writeJSON(w, http.StatusCreated, h.ingressServiceToJSON(created))
 }
 
@@ -333,7 +337,7 @@ type ingressMutation func(ctx context.Context, q db.Querier, svcs *repo.IngressS
 // mutateIngress is the shared shape of approve/patch/delete: load the
 // row in the tenant tx, apply fn (which writes its own audit rows), read
 // the row back, emit audit hooks after commit, bump the policy revision
-// when liveness changed (Task 2's generated rules), and answer.
+// when anything changed (Task 2's generated rules), and answer.
 func (h *HTTPServer) mutateIngress(w http.ResponseWriter, r *http.Request, tenant *repo.Tenant, sidStr string, fn ingressMutation) {
 	sid, err := uuid.Parse(sidStr)
 	if err != nil {
@@ -342,9 +346,9 @@ func (h *HTTPServer) mutateIngress(w http.ResponseWriter, r *http.Request, tenan
 	}
 	ctx := r.Context()
 	var (
-		before, after *repo.IngressService
-		evs           []*repo.AuditEvent
-		oks           []bool
+		after *repo.IngressService
+		evs   []*repo.AuditEvent
+		oks   []bool
 	)
 	txErr := db.WithTenant(ctx, h.pool, tenant.ID, func(q db.Querier) error {
 		svcs := repo.NewIngressServices(q)
@@ -356,7 +360,7 @@ func (h *HTTPServer) mutateIngress(w http.ResponseWriter, r *http.Request, tenan
 		if ferr != nil {
 			return ferr
 		}
-		before, evs, oks = cur, e, o
+		evs, oks = e, o
 		upd, gerr := svcs.GetByID(ctx, sid)
 		if errors.Is(gerr, repo.ErrNotFound) {
 			return nil // deleted
@@ -375,18 +379,42 @@ func (h *HTTPServer) mutateIngress(w http.ResponseWriter, r *http.Request, tenan
 	for i := range evs {
 		h.emitAuditHook(ctx, evs[i], oks[i])
 	}
-	wasLive := before.Live()
-	isLive := after != nil && after.Live()
-	if wasLive != isLive && h.coord != nil {
-		if _, err := h.coord.BumpPolicyRevision(ctx, tenant.ID); err != nil {
-			slog.Warn("ingress: bump policy revision", "tenant_id", tenant.ID, "err", err)
-			writeError(w, http.StatusInternalServerError, fmt.Errorf("bump policy revision: %w", err))
-			return
-		}
+	// Every change writes one audit row, so evs doubles as "something
+	// changed". A no-op PATCH does not wake the tenant's peers.
+	if len(evs) > 0 && !h.bumpIngressPolicy(ctx, w, tenant.ID) {
+		return
 	}
 	if after == nil {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
 	writeJSON(w, http.StatusOK, h.ingressServiceToJSON(after))
+}
+
+// bumpIngressPolicy bumps the tenant's policy revision after a change
+// that can affect public-service liveness, so connected peers
+// re-register and pick up the generated rules (spec §4.4). The change
+// has committed; on failure it answers 500 so the operator retries, like
+// the route and exit-node paths. Returns false when it answered.
+func (h *HTTPServer) bumpIngressPolicy(ctx context.Context, w http.ResponseWriter, tenantID uuid.UUID) bool {
+	if h.coord == nil {
+		return true
+	}
+	if _, err := h.coord.BumpPolicyRevision(ctx, tenantID); err != nil {
+		slog.Warn("ingress: bump policy revision", "tenant_id", tenantID, "err", err)
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("bump policy revision: %w", err))
+		return false
+	}
+	return true
+}
+
+// peerAffectsIngress reports whether an approval change or deletion of
+// peer can change public-service liveness: it is the ingress peer or it
+// hosts a service. Run it inside the tenant tx, before a delete (the
+// services cascade away with the peer).
+func peerAffectsIngress(ctx context.Context, q db.Querier, peer *repo.Peer) (bool, error) {
+	if slices.Contains(peer.Tags, policy.IngressTag) {
+		return true, nil
+	}
+	return repo.NewIngressServices(q).ExistsForPeer(ctx, peer.ID)
 }

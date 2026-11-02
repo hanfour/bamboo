@@ -421,3 +421,34 @@ func TestIngress_SoftDeletedTenantIsNotLive(t *testing.T) {
 		t.Fatalf("routes: %v", err)
 	}
 }
+
+func TestIngress_ExistsForPeer(t *testing.T) {
+	admin := requireDB(t)
+	app := requireAppDB(t)
+	ctx := context.Background()
+	fx := seedIngressTenant(t, admin, 212)
+	err := db.WithTenant(ctx, app, fx.tenantID, func(q db.Querier) error {
+		svcs := repo.NewIngressServices(q)
+		before, err := svcs.ExistsForPeer(ctx, fx.peerID)
+		if err != nil {
+			return err
+		}
+		if before {
+			t.Error("ExistsForPeer = true before any service")
+		}
+		if _, err := svcs.Create(ctx, fx.tenantID, fx.peerID, randomLabel(), 47800, nil); err != nil {
+			return err
+		}
+		after, err := svcs.ExistsForPeer(ctx, fx.peerID)
+		if err != nil {
+			return err
+		}
+		if !after {
+			t.Error("ExistsForPeer = false after a pending service was filed")
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("tx: %v", err)
+	}
+}
