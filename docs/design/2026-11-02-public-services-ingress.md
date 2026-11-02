@@ -117,6 +117,15 @@ public service's generated allow rules are placed before authored rules, so
 they take precedence over an authored deny for the same pair; disable the
 service to revoke.
 
+- In a tenant with no ACL rules (full mesh), the ingress peer reaches only
+  peers that host a live service, and no other peer reaches the ingress
+  peer.
+- Toward or through the ingress peer, AllowedIPs carry only the peer's own
+  addresses (IPv4 /32 and IPv6 /128), never approved subnet routes, exit-node
+  defaults, or the NAT64 prefix.
+- In a tenant with rules, authored rules still apply to the ingress peer: an
+  authored `* -> *:*` gives it the whole mesh (addresses only).
+
 ## 5. `bamboo-ingress` (new, `apps/ingress`, AGPLv3)
 
 - Go binary on the host network (it must reach mesh IPs through the host's `wg` interface), listening on the docker bridge gateway address `:8090` so only the Caddy container can reach it. Config: controller URL, service
