@@ -258,6 +258,9 @@ func (h *HTTPServer) apiApproveIngress(w http.ResponseWriter, r *http.Request, a
 		return
 	}
 	h.mutateIngress(w, r, tenant, sidStr, func(ctx context.Context, q db.Querier, svcs *repo.IngressServices, cur *repo.IngressService) ([]*repo.AuditEvent, []bool, error) {
+		if cur.Approved() {
+			return nil, nil, nil // keep the original approver; no audit, no bump
+		}
 		if _, err := svcs.Approve(ctx, cur.ID, ingressApproverID(authn)); err != nil {
 			return nil, nil, err
 		}

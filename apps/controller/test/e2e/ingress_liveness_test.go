@@ -265,3 +265,46 @@ func TestIngressLiveness_IngressTagChangeBumpsRevision(t *testing.T) {
 		}
 	}
 }
+
+// TestRESTIngress_ReapproveIsNoOp: approving an approved service keeps the
+// original approver and time, writes no audit row, and does not bump.
+func TestRESTIngress_ReapproveIsNoOp(t *testing.T) {
+	f := startFixture(t)
+	mac := registerIngressTestPeer(t, f, "mac")
+	base := f.httpURL + "/api/v1"
+	created := ingressCall(t, http.MethodPost, base+"/peers/"+mac.id+"/ingress", "", f.tenantSlug,
+		map[string]any{"label": "svc-" + uuid.NewString()[:8], "target_port": 47800})
+	sid := decodeIngressSvc(t, created).ID
+	first := ingressCall(t, http.MethodPost, base+"/ingress/"+sid+"/approve", "", f.tenantSlug, nil)
+	if first.status != http.StatusOK {
+		t.Fatalf("approve: %d %s", first.status, first.body)
+	}
+	readApproval := func() (approvedAt string) {
+		if err := f.admin.QueryRow(context.Background(),
+			`SELECT approved_at::text FROM ingress_services WHERE id = $1`, sid).Scan(&approvedAt); err != nil {
+			t.Fatalf("read approval: %v", err)
+		}
+		return approvedAt
+	}
+	countApprovals := func() (n int) {
+		if err := f.admin.QueryRow(context.Background(),
+			`SELECT count(*) FROM audit_log WHERE action = 'ingress.approve' AND diff->>'service_id' = $1`, sid).Scan(&n); err != nil {
+			t.Fatalf("count audit: %v", err)
+		}
+		return n
+	}
+	at, rev := readApproval(), policyRevision(t, f)
+	second := ingressCall(t, http.MethodPost, base+"/ingress/"+sid+"/approve", "", f.tenantSlug, nil)
+	if second.status != http.StatusOK || !decodeIngressSvc(t, second).Approved {
+		t.Fatalf("re-approve: %d %s", second.status, second.body)
+	}
+	if got := readApproval(); got != at {
+		t.Errorf("approved_at %s -> %s; re-approve must not overwrite", at, got)
+	}
+	if n := countApprovals(); n != 1 {
+		t.Errorf("ingress.approve audit rows = %d, want 1", n)
+	}
+	if got := policyRevision(t, f); got != rev {
+		t.Errorf("policy revision %d -> %d; re-approve must not bump", rev, got)
+	}
+}
