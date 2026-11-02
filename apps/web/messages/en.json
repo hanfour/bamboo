@@ -736,9 +736,15 @@
       "none": "No token issued.",
       "noIngressPeers": "No approved peer has the ingress tag.",
       "revealTitle": "Copy this token now",
-      "revealHint": "Save it on the VPS as /etc/bamboo-ingress/ingress.token. It is not shown again.",
+      "revealHint": "Save it on the VPS as /etc/bamboo-ingress/ingress.token, owned by uid 65532 with mode 0600 (chmod 0600). It is not shown again.",
       "copy": "Copy",
-      "close": "Done"
+      "close": "Done",
+      "expires": "expires",
+      "copyFailed": "Copy failed. Select the token and copy it by hand."
+    },
+    "readiness": {
+      "noIngressPeer": "Not reachable yet: no approved peer has the ingress tag.",
+      "noToken": "Not reachable yet: issue an ingress service token (none issued, or it expired)."
     }
   },
   "settings": {

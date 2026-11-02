@@ -3,7 +3,7 @@
 'use client';
 
 import { useState, useTransition } from 'react';
-import { useTranslations } from 'next-intl';
+import { useLocale, useTranslations } from 'next-intl';
 import {
   approveIngressAction,
   createIngressAction,
@@ -13,10 +13,13 @@ import {
   type IngressActionResult,
 } from '@/lib/ingressActions';
 import {
+  formatIngressExpiry,
+  ingressReadiness,
   ingressState,
   validateIngressLabel,
   validateIngressPort,
   type IngressList,
+  type IngressReadiness,
   type IngressService,
   type IngressState,
 } from '@/lib/ingress';
@@ -38,7 +41,7 @@ export function IngressView({ list, peers, isAdmin }: { list: IngressList; peers
         </div>
       )}
       <CreateForm peers={approved} onError={setError} />
-      <ServiceTable services={list.services} isAdmin={isAdmin} onError={setError} />
+      <ServiceTable services={list.services} readiness={ingressReadiness(peers, list.token)} isAdmin={isAdmin} onError={setError} />
       {isAdmin && <TokenPanel list={list} peers={approved.filter((p) => p.tags.includes('ingress'))} onError={setError} />}
     </div>
   );
@@ -51,7 +54,9 @@ const stateTone: Record<IngressState, string> = {
   peerPending: 'border-amber-500/60 text-amber-400',
 };
 
-function ServiceTable({ services, isAdmin, onError }: { services: IngressService[]; isAdmin: boolean; onError: (e: string | null) => void }) {
+type RowProps = { readiness: IngressReadiness; isAdmin: boolean; onError: (e: string | null) => void };
+
+function ServiceTable({ services, ...row }: { services: IngressService[] } & RowProps) {
   const t = useTranslations('ingress');
   if (services.length === 0) {
     return (
@@ -72,7 +77,7 @@ function ServiceTable({ services, isAdmin, onError }: { services: IngressService
         </thead>
         <tbody className="divide-y divide-[#777]/20">
           {services.map((s) => (
-            <ServiceRow key={s.id} service={s} isAdmin={isAdmin} onError={onError} />
+            <ServiceRow key={s.id} service={s} {...row} />
           ))}
         </tbody>
       </table>
@@ -80,7 +85,7 @@ function ServiceTable({ services, isAdmin, onError }: { services: IngressService
   );
 }
 
-function ServiceRow({ service: s, isAdmin, onError }: { service: IngressService; isAdmin: boolean; onError: (e: string | null) => void }) {
+function ServiceRow({ service: s, readiness, isAdmin, onError }: { service: IngressService } & RowProps) {
   const t = useTranslations('ingress');
   const [pending, startTransition] = useTransition();
   const [confirming, setConfirming] = useState(false);
@@ -99,6 +104,7 @@ function ServiceRow({ service: s, isAdmin, onError }: { service: IngressService;
       <td className="px-3 py-2">
         <span className={`inline-flex rounded-full border px-2 py-0.5 text-xs font-medium ${stateTone[state]}`}>{t(`state.${state}`)}</span>
         {s.aclRule && <div className="mt-1 font-mono text-[11px] text-bamboo-200/50" title={t('generatedRule')}>{s.aclRule}</div>}
+        {s.live && readiness !== 'ready' && <p className="mt-1 text-[11px] text-amber-400">{t(`readiness.${readiness}`)}</p>}
       </td>
       <td className="space-x-2 px-3 py-2 whitespace-nowrap">
         {isAdmin && !s.approved && (
@@ -195,7 +201,9 @@ function TokenPanel({ list, peers, onError }: { list: IngressList; peers: Peer[]
   const tt = useTranslations('ingress');
   const t = (key: string) => tt(`token.${key}`);
   const [peerId, setPeerId] = useState(list.token?.peerId ?? '');
+  const locale = useLocale();
   const [revealed, setRevealed] = useState<string | null>(null);
+  const [copyFailed, setCopyFailed] = useState(false);
   const [pending, startTransition] = useTransition();
   const current = list.token ? peers.find((p) => p.id === list.token?.peerId)?.hostname ?? list.token.peerId : null;
 
@@ -204,6 +212,7 @@ function TokenPanel({ list, peers, onError }: { list: IngressList; peers: Peer[]
       const res = await issueIngressTokenAction(peerId);
       if (res.ok) {
         setRevealed(res.token);
+        setCopyFailed(false);
         onError(null);
       } else {
         onError(res.error);
@@ -211,12 +220,22 @@ function TokenPanel({ list, peers, onError }: { list: IngressList; peers: Peer[]
     });
   }
 
+  async function copy(token: string) {
+    try {
+      if (!navigator.clipboard) throw new Error('clipboard unavailable');
+      await navigator.clipboard.writeText(token);
+      setCopyFailed(false);
+    } catch {
+      setCopyFailed(true);
+    }
+  }
+
   return (
     <section className="space-y-3 rounded-2xl bg-ink-900 p-4">
       <h2 className="text-[15px] font-medium text-bamboo-50">{t('title')}</h2>
       <p className="text-[13px] text-bamboo-200/60">{t('description')}</p>
       <p className="text-xs text-bamboo-200/70">
-        {list.token ? `${t('current')} ${current} · ${list.token.expiresAt}` : t('none')}
+        {list.token ? `${t('current')} ${current} · ${t('expires')} ${formatIngressExpiry(list.token.expiresAt, locale)}` : t('none')}
       </p>
       {peers.length === 0 ? (
         <p className="text-xs text-amber-400">{t('noIngressPeers')}</p>
@@ -240,9 +259,10 @@ function TokenPanel({ list, peers, onError }: { list: IngressList; peers: Peer[]
           <code className="block break-all font-mono text-xs text-bamboo-100">{revealed}</code>
           <p className="text-xs text-bamboo-200/60">{t('revealHint')}</p>
           <div className="flex gap-3">
-            <button type="button" onClick={() => { void navigator.clipboard?.writeText(revealed); }} className="text-xs text-bamboo-200 underline">{t('copy')}</button>
+            <button type="button" onClick={() => { void copy(revealed); }} className="text-xs text-bamboo-200 underline">{t('copy')}</button>
             <button type="button" onClick={() => setRevealed(null)} className="text-xs text-bamboo-200 underline">{t('close')}</button>
           </div>
+          {copyFailed && <p className="text-xs text-amber-400">{t('copyFailed')}</p>}
         </div>
       )}
     </section>

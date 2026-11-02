@@ -736,9 +736,15 @@
       "none": "尚未發放權杖。",
       "noIngressPeers": "沒有帶 ingress 標籤的已核准節點。",
       "revealTitle": "現在複製這個權杖",
-      "revealHint": "存到 VPS 的 /etc/bamboo-ingress/ingress.token。之後不會再顯示。",
+      "revealHint": "存到 VPS 的 /etc/bamboo-ingress/ingress.token，擁有者 uid 65532，權限 0600（chmod 0600）。之後不會再顯示。",
       "copy": "複製",
-      "close": "完成"
+      "close": "完成",
+      "expires": "到期",
+      "copyFailed": "複製失敗，請選取權杖後手動複製。"
+    },
+    "readiness": {
+      "noIngressPeer": "尚無法連線：沒有帶 ingress 標籤的已核准節點。",
+      "noToken": "尚無法連線：請發放入口服務權杖（尚未發放或已過期）。"
     }
   },
   "settings": {

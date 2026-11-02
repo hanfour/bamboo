@@ -15,7 +15,7 @@ import type { Peer } from '@/lib/types';
 
 vi.mock('next-intl', () => {
   const translate = (key: string) => key;
-  return { useTranslations: () => translate };
+  return { useTranslations: () => translate, useLocale: () => 'en' };
 });
 
 vi.mock('@/lib/ingressActions', () => ({
@@ -114,5 +114,47 @@ describe('IngressView', () => {
     expect(await screen.findByText('tok-secret')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'token.close' }));
     expect(screen.queryByText('tok-secret')).toBeNull();
+  });
+
+  it('says how to store the token and reports a failed copy', async () => {
+    const writeText = vi.fn(async () => { throw new Error('denied'); });
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+    const user = userEvent.setup();
+    render(<IngressView list={list} peers={peers} isAdmin />);
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+    await user.selectOptions(screen.getByLabelText('token.peerLabel'), 'p2');
+    await user.click(screen.getByRole('button', { name: 'token.issue' }));
+    expect(await screen.findByText('token.revealHint')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'token.copy' }));
+    expect(writeText).toHaveBeenCalledWith('tok-secret');
+    expect(await screen.findByText('token.copyFailed')).toBeInTheDocument();
+  });
+
+  it('formats the token expiry with the locale', () => {
+    const expiresAt = '2027-11-02T00:00:00Z';
+    render(<IngressView list={{ ...list, token: { peerId: 'p2', issuedAt: '2026-11-02T00:00:00Z', expiresAt } }} peers={peers} isAdmin />);
+    const formatted = new Intl.DateTimeFormat('en', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(expiresAt));
+    expect(screen.getByText(new RegExp(formatted.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))).toBeInTheDocument();
+    expect(screen.queryByText(new RegExp(expiresAt))).toBeNull();
+  });
+
+  it('warns on a live service when the tenant has no valid ingress token', () => {
+    const live = { ...list.services[0], approved: true, enabled: true, live: true };
+    render(<IngressView list={{ ...list, services: [live] }} peers={peers} isAdmin />);
+    expect(screen.getByText('readiness.noToken')).toBeInTheDocument();
+  });
+
+  it('warns on a live service when no peer carries the ingress tag', () => {
+    const live = { ...list.services[0], approved: true, enabled: true, live: true };
+    const token = { peerId: 'p2', issuedAt: '2026-11-02T00:00:00Z', expiresAt: '2999-01-01T00:00:00Z' };
+    render(<IngressView list={{ ...list, token, services: [live] }} peers={[peers[0]]} isAdmin />);
+    expect(screen.getByText('readiness.noIngressPeer')).toBeInTheDocument();
+  });
+
+  it('shows no readiness warning when the ingress is set up', () => {
+    const live = { ...list.services[0], approved: true, enabled: true, live: true };
+    const token = { peerId: 'p2', issuedAt: '2026-11-02T00:00:00Z', expiresAt: '2999-01-01T00:00:00Z' };
+    render(<IngressView list={{ ...list, token, services: [live] }} peers={peers} isAdmin />);
+    expect(screen.queryByText(/readiness\./)).toBeNull();
   });
 });
