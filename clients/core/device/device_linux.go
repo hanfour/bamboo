@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"sync"
 
 	"github.com/hanfour/bamboo/clients/core/wg"
 	"github.com/vishvananda/netlink"
@@ -34,30 +35,52 @@ func New(opts Options) (Device, error) {
 }
 
 type linuxDevice struct {
-	opts Options
-	wg   *wgctrl.Client
-	link netlink.Link
+	opts      Options
+	wg        wireGuardClient
+	mu        sync.Mutex
+	endpoints map[wgtypes.Key]string
+	link      netlink.Link
+}
+
+type wireGuardClient interface {
+	Device(string) (*wgtypes.Device, error)
+	ConfigureDevice(string, wgtypes.Config) error
+	Close() error
 }
 
 // Apply implements Device.
 func (d *linuxDevice) Apply(_ context.Context, cfg *wg.DeviceConfig) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	peers, err := desiredPeers(cfg)
+	if err != nil {
+		return err
+	}
 	if err := d.ensureLink(); err != nil {
 		return err
 	}
 	if err := d.applyAddress(cfg); err != nil {
 		return err
 	}
-	if err := d.applyWireGuard(cfg); err != nil {
+	return d.configureAndFinish(cfg, peers, func() error {
+		if err := netlink.LinkSetUp(d.link); err != nil {
+			return fmt.Errorf("link up: %w", err)
+		}
+		return d.applyRoutes(cfg)
+	})
+}
+
+func (d *linuxDevice) configureAndFinish(cfg *wg.DeviceConfig, peers []wgtypes.PeerConfig, finish func() error) error {
+	if err := d.applyPreparedWireGuard(cfg, peers); err != nil {
 		return err
 	}
-	if err := netlink.LinkSetUp(d.link); err != nil {
-		return fmt.Errorf("link up: %w", err)
-	}
-	return d.applyRoutes(cfg)
+	return finish()
 }
 
 // Stats implements Device.
 func (d *linuxDevice) Stats() ([]PeerStats, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	if d.link == nil {
 		return nil, nil
 	}
@@ -84,6 +107,8 @@ func (d *linuxDevice) Stats() ([]PeerStats, error) {
 
 // Close implements Device.
 func (d *linuxDevice) Close() error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	defer func() { _ = d.wg.Close() }()
 	if d.link == nil {
 		return nil
@@ -137,54 +162,77 @@ func (d *linuxDevice) addAddr(p netip.Prefix) error {
 	return nil
 }
 
-func (d *linuxDevice) applyWireGuard(cfg *wg.DeviceConfig) error {
-	priv, err := wgtypes.NewKey(cfg.PrivateKey[:])
-	if err != nil {
-		return fmt.Errorf("wgtypes private key: %w", err)
+func desiredPeers(cfg *wg.DeviceConfig) ([]wgtypes.PeerConfig, error) {
+	if cfg == nil {
+		return nil, fmt.Errorf("missing device config")
 	}
-
 	peers := make([]wgtypes.PeerConfig, 0, len(cfg.Peers))
+	seen := make(map[wgtypes.Key]bool)
 	for _, p := range cfg.Peers {
-		pub, err := wgtypes.NewKey(p.PublicKey[:])
-		if err != nil {
-			return fmt.Errorf("wgtypes peer pubkey: %w", err)
+		pub := wgtypes.Key(p.PublicKey)
+		if seen[pub] {
+			return nil, fmt.Errorf("duplicate peer key")
 		}
-		allowed := make([]net.IPNet, 0, len(p.AllowedIPs))
+		seen[pub] = true
+		ka := p.PersistentKeepalive
+		if ka < 0 {
+			return nil, fmt.Errorf("negative keepalive")
+		}
+		pc := wgtypes.PeerConfig{PublicKey: pub, ReplaceAllowedIPs: true, PersistentKeepaliveInterval: &ka}
 		for _, a := range p.AllowedIPs {
-			allowed = append(allowed, net.IPNet{
-				IP:   a.Addr().AsSlice(),
-				Mask: net.CIDRMask(a.Bits(), a.Addr().BitLen()),
-			})
-		}
-		pc := wgtypes.PeerConfig{
-			PublicKey:         pub,
-			ReplaceAllowedIPs: true,
-			AllowedIPs:        allowed,
+			if !a.IsValid() {
+				return nil, fmt.Errorf("invalid allowed IP")
+			}
+			pc.AllowedIPs = append(pc.AllowedIPs, net.IPNet{IP: a.Addr().AsSlice(), Mask: net.CIDRMask(a.Bits(), a.Addr().BitLen())})
 		}
 		if p.Endpoint != "" {
 			ep, err := net.ResolveUDPAddr("udp", p.Endpoint)
-			if err == nil {
-				pc.Endpoint = ep
+			if err != nil {
+				return nil, fmt.Errorf("peer endpoint: %w", err)
 			}
-		}
-		if p.PersistentKeepalive > 0 {
-			ka := p.PersistentKeepalive
-			pc.PersistentKeepaliveInterval = &ka
+			pc.Endpoint = ep
 		}
 		peers = append(peers, pc)
 	}
+	return peers, nil
+}
 
+func (d *linuxDevice) applyPreparedWireGuard(cfg *wg.DeviceConfig, peers []wgtypes.PeerConfig) error {
+	actual, err := d.wg.Device(d.opts.InterfaceName)
+	if err != nil {
+		return fmt.Errorf("wg device: %w", err)
+	}
+	existing := make(map[wgtypes.Key]bool)
+	for _, p := range actual.Peers {
+		existing[p.PublicKey] = true
+	}
+	next := make(map[wgtypes.Key]string)
+	for i := range peers {
+		key := peers[i].PublicKey
+		intent := cfg.Peers[i].Endpoint
+		previous, known := d.endpoints[key]
+		if existing[key] && known && previous == intent {
+			peers[i].Endpoint = nil
+		}
+		next[key] = intent
+	}
+	for key := range existing {
+		if _, ok := next[key]; !ok {
+			peers = append(peers, wgtypes.PeerConfig{PublicKey: key, Remove: true})
+		}
+	}
+	priv := wgtypes.Key(cfg.PrivateKey)
 	port := int(cfg.ListenPort)
-	wgcfg := wgtypes.Config{
-		PrivateKey:   &priv,
-		ListenPort:   &port,
-		ReplacePeers: true,
-		Peers:        peers,
+	config := wgtypes.Config{PrivateKey: &priv, Peers: peers}
+	if port != 0 {
+		config.ListenPort = &port
 	}
-	if cfg.ListenPort == 0 {
-		wgcfg.ListenPort = nil
+	if err := d.wg.ConfigureDevice(d.opts.InterfaceName, config); err != nil {
+		d.endpoints = nil
+		return err
 	}
-	return d.wg.ConfigureDevice(d.opts.InterfaceName, wgcfg)
+	d.endpoints = next
+	return nil
 }
 
 func (d *linuxDevice) applyRoutes(cfg *wg.DeviceConfig) error {

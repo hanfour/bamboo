@@ -23,8 +23,9 @@ var ErrUnsupported = errors.New("device bring-up not supported on this OS in CLI
 
 // Device is the platform-specific handle to a configured WireGuard interface.
 //
-// Apply is idempotent: calling it again with a new config replaces the
-// interface state. Close removes the interface.
+// Apply accepts the full authoritative desired snapshot, removing peers absent
+// from it. Unchanged endpoint intent preserves runtime roaming and handshake
+// state. Close removes the interface.
 type Device interface {
 	// Apply (re)configures the interface from cfg: assigns Address,
 	// installs the WireGuard private/peer set, brings the link up, and

@@ -185,15 +185,6 @@ func runUp(cmd *cobra.Command, _ []string) error {
 			_ = relaySess.client.Close()
 		}
 	}()
-	if relayClient != nil {
-		for i := range cfg.Peers {
-			if cfg.Peers[i].Endpoint == "" {
-				if r, ok := relayProxies[cfg.Peers[i].PublicKey.Base64()]; ok {
-					cfg.Peers[i].Endpoint = r
-				}
-			}
-		}
-	}
 
 	dev, err := device.New(device.Options{InterfaceName: flagIface})
 	if err != nil {
@@ -208,7 +199,21 @@ func runUp(cmd *cobra.Command, _ []string) error {
 		}
 	}()
 
-	if err := dev.Apply(cmd.Context(), cfg); err != nil {
+	reapply := &deviceReapplier{dev: dev}
+	transition := &relayTransition{owner: reapply}
+	defer func() {
+		if err := transition.Close(); err != nil {
+			slog.Warn("pending relay close", "err", err)
+		}
+	}()
+	initialOverrides := make(map[string]string)
+	for _, p := range cfg.Peers {
+		if p.Endpoint == "" {
+			initialOverrides[p.PublicKey.Base64()] = relayProxies[p.PublicKey.Base64()]
+		}
+	}
+	reapply.overrides = initialOverrides
+	if err := reapply.Apply(cmd.Context(), cfg); err != nil {
 		return fmt.Errorf("apply: %w", err)
 	}
 	slog.Info("tunnel up", "iface", flagIface, "address", cfg.Address.String())
@@ -260,10 +265,6 @@ func runUp(cmd *cobra.Command, _ []string) error {
 	//   4. close the old relay client (releases its proxy
 	//      listeners and the WSS to the old relay)
 	//
-	// Failure at step 1 or 2 leaves everything intact — we don't
-	// tear down the working relay just because a new one wouldn't
-	// dial or apply.
-	//
 	// The env-var override is honored — if BAMBOO_RELAY_URL was
 	// set at bring-up, the operator pinned this client and we
 	// don't second-guess them. regionHint biases the picker
@@ -284,7 +285,6 @@ func runUp(cmd *cobra.Command, _ []string) error {
 			slog.Info("region hint: using controller-inferred", "region", regionHint)
 		}
 	}
-	reapply := &deviceReapplier{dev: dev, base: cfg}
 	onRelaysChanged := func(handlerCtx context.Context, servers []*bamboov1.RelayServer) {
 		if pinned {
 			slog.Info("relays_changed: ignoring (BAMBOO_RELAY_URL pinned by operator)")
@@ -314,14 +314,15 @@ func runUp(cmd *cobra.Command, _ []string) error {
 		// that joined since bring-up also gets a proxy port on
 		// the new relay (and one that left no longer takes one).
 		_, cachedPeers := cache.Snapshot()
-		newClient, newProxies, err := openRelayAtURL(handlerCtx, newURL, resp.GetSelf().GetId(), cachedPeers, priv, session, wgPort)
+		var newClient *relay.Client
+		var newProxies clientsync.PeerRelayMap
+		err = transition.Apply(handlerCtx, func() (io.Closer, map[string]string, error) {
+			var err error
+			newClient, newProxies, err = openRelayAtURL(daemonCtx, newURL, resp.GetSelf().GetId(), cachedPeers, priv, session, wgPort)
+			return newClient, newProxies, err
+		})
 		if err != nil {
-			slog.Warn("relays_changed: open new relay failed; staying on current", "err", err)
-			return
-		}
-		if err := reapply.Reapply(handlerCtx, newProxies); err != nil {
-			slog.Warn("relays_changed: apply new relay endpoints failed; staying on current", "err", err)
-			_ = newClient.Close()
+			slog.Warn("relays_changed: relay transition failed; staying on current", "err", err)
 			return
 		}
 		// Cancel old fallback, start fresh with new map, close
@@ -338,7 +339,7 @@ func runUp(cmd *cobra.Command, _ []string) error {
 		relaySess.client = newClient
 		relaySess.url = newURL
 		relaySess.mu.Unlock()
-		go clientsync.RunRelayFallback(fallbackCtx, dev, reapply, newProxies, time.Now())
+		go clientsync.RunRelayFallback(fallbackCtx, dev, reapply.bound(), newProxies, time.Now())
 		if oldClient != nil {
 			_ = oldClient.Close()
 		}
@@ -357,22 +358,16 @@ func runUp(cmd *cobra.Command, _ []string) error {
 		return device.SumBytes(stats)
 	}
 
-	go clientsync.RunHeartbeat(daemonCtx, heartbeater, resp.GetSelf().GetId(), discover, reportBytes, egress.ActiveHealth)
-	go clientsync.RunWatchPeers(daemonCtx, adapter, dev, priv, cache, resp.GetSelf().GetId(), refresh, onRelaysChanged, func(resp *bamboov1.RegisterResponse) { reconcileEgress(egress, resp) })
 	if relayClient != nil {
-		// Initial fallback goroutine: under daemonCtx so process
-		// exit cancels it, but ALSO under a per-launch context
-		// stored in relaySess.fallbackCancel so the §4 P2 stage
-		// 4b-2 swap can stop+restart it without taking down the
-		// whole daemon. (reapply is defined in the swap handler
-		// above; reusing it here keeps both the initial fallback
-		// and any post-swap fallback wired to the same base cfg.)
 		fallbackCtx, fallbackCancel := context.WithCancel(daemonCtx)
 		relaySess.mu.Lock()
 		relaySess.fallbackCancel = fallbackCancel
 		relaySess.mu.Unlock()
-		go clientsync.RunRelayFallback(fallbackCtx, dev, reapply, relayProxies, time.Now())
+		go clientsync.RunRelayFallback(fallbackCtx, dev, reapply.bound(), relayProxies, time.Now())
 	}
+
+	go clientsync.RunHeartbeat(daemonCtx, heartbeater, resp.GetSelf().GetId(), discover, reportBytes, egress.ActiveHealth)
+	go clientsync.RunWatchPeers(daemonCtx, adapter, reapply, priv, cache, resp.GetSelf().GetId(), refresh, onRelaysChanged, func(resp *bamboov1.RegisterResponse) { reconcileEgress(egress, resp) })
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
@@ -623,18 +618,6 @@ func openRelayAtURL(ctx context.Context, relayURL, selfID string, peers []*bambo
 		proxies[p.GetWireguardPublicKey()] = proxyAddr
 	}
 	return c, proxies, nil
-}
-
-// deviceReapplier wraps the bamboo CLI's device + base config so the
-// generic relay-fallback monitor can re-apply with endpoint overrides.
-type deviceReapplier struct {
-	dev  device.Device
-	base *wg.DeviceConfig
-}
-
-func (r *deviceReapplier) Reapply(ctx context.Context, overrides map[string]string) error {
-	out := clientsync.ApplyEndpointOverrides(r.base, overrides)
-	return r.dev.Apply(ctx, out)
 }
 
 // mintRelayToken calls the controller's POST /api/v1/relay-token
