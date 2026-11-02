@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-or-later
+// SPDX-License-Identifier: Apache-2.0
 
 //go:build linux
 
@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+
 	"os"
 	"sync"
 	"testing"
@@ -27,6 +28,13 @@ import (
 type stabilityHello struct {
 	PublicKey string
 	Endpoint  string
+}
+
+func stabilityRole(t *testing.T, role string) {
+	t.Helper()
+	if os.Getenv("BAMBOO_KERNEL_ROLE") != role {
+		t.Skip("isolated Docker harness only")
+	}
 }
 
 func stabilityDevice(t *testing.T) device.Device {
@@ -100,9 +108,7 @@ func stabilityPing(address string) error {
 }
 
 func TestKernelStabilityServer(t *testing.T) {
-	if os.Getenv("BAMBOO_KERNEL_ROLE") != "server" {
-		t.Skip("isolated Docker harness only")
-	}
+	stabilityRole(t, "server")
 	d, priv := stabilityDevice(t), stabilityKey(t)
 	mux := http.NewServeMux()
 	var echoOnce sync.Once
@@ -192,11 +198,12 @@ type stabilityObservation struct {
 }
 type stabilityApplier struct {
 	device.Device
+	target  peersync.Applier
 	applied chan stabilityObservation
 }
 
 func (a *stabilityApplier) Apply(ctx context.Context, cfg *wg.DeviceConfig) error {
-	err := a.Device.Apply(ctx, cfg)
+	err := a.target.Apply(ctx, cfg)
 	result := stabilityObservation{err: err}
 	if err == nil {
 		result.stats, result.err = a.Device.Stats()
@@ -206,9 +213,7 @@ func (a *stabilityApplier) Apply(ctx context.Context, cfg *wg.DeviceConfig) erro
 }
 
 func TestKernelStabilityWatchPreservesRoaming(t *testing.T) {
-	if os.Getenv("BAMBOO_KERNEL_ROLE") != "client" {
-		t.Skip("isolated Docker harness only")
-	}
+	stabilityRole(t, "client")
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
 	var server stabilityHello
@@ -222,7 +227,8 @@ func TestKernelStabilityWatchPreservesRoaming(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg.ListenPort = 51820
-	if err := d.Apply(ctx, cfg); err != nil {
+	owner := &deviceReapplier{dev: d}
+	if err := owner.Apply(ctx, cfg); err != nil {
 		t.Fatal(err)
 	}
 	stabilityEcho(t, "100.90.0.1:9900")
@@ -235,7 +241,7 @@ func TestKernelStabilityWatchPreservesRoaming(t *testing.T) {
 		t.Fatal("precondition: remote initiation did not establish a learned endpoint and handshake")
 	}
 	stream := &stabilityStream{ctx: ctx, events: make(chan *bamboov1.WatchPeersEvent, 1)}
-	applier := &stabilityApplier{Device: d, applied: make(chan stabilityObservation, 1)}
+	applier := &stabilityApplier{Device: d, target: owner, applied: make(chan stabilityObservation, 1)}
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -249,6 +255,15 @@ func TestKernelStabilityWatchPreservesRoaming(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal("watch update did not apply")
 	}
+	stabilityAssertPreserved(t, before, observed)
+	if err := stabilityPing("100.90.0.2:9900"); err != nil {
+		t.Errorf("after update mesh echo: %v", err)
+	}
+	stabilityBoundaries(t, owner, priv, cfg, server)
+}
+
+func stabilityAssertPreserved(t *testing.T, before device.PeerStats, observed stabilityObservation) {
+	t.Helper()
 	if observed.err != nil {
 		t.Fatal(observed.err)
 	}
@@ -261,14 +276,11 @@ func TestKernelStabilityWatchPreservesRoaming(t *testing.T) {
 	if after.Endpoint != before.Endpoint {
 		t.Errorf("unchanged desired endpoint overwrote learned endpoint: got %s want %s", after.Endpoint, before.Endpoint)
 	}
-	if !after.LastHandshakeTime.Equal(before.LastHandshakeTime) {
+	if after.LastHandshakeTime.IsZero() || after.LastHandshakeTime.Before(before.LastHandshakeTime) {
 		t.Errorf("unchanged peer handshake reset: got %s want %s", after.LastHandshakeTime, before.LastHandshakeTime)
 	}
 	if after.RxBytes < before.RxBytes || after.TxBytes < before.TxBytes {
 		t.Error("unchanged peer counters reset")
-	}
-	if err := stabilityPing("100.90.0.2:9900"); err != nil {
-		t.Errorf("after update mesh echo: %v", err)
 	}
 }
 

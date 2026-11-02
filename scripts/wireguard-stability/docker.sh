@@ -7,7 +7,13 @@ image="${BAMBOO_KERNEL_IMAGE:-node:22.23.3-bookworm}"
 mkdir -p "$out"
 if [[ "${1:-}" == build ]]; then
   cd "$root"
-  CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go test -c -o "$out/stability.test" ./clients/cli/cmd/bamboo
+  arch="${BAMBOO_KERNEL_ARCH:-$(docker info --format '{{.Architecture}}')}"
+  case "$arch" in
+    aarch64|arm64) arch=arm64 ;;
+    x86_64|amd64) arch=amd64 ;;
+    *) echo "Unsupported Docker architecture: $arch" >&2; exit 2 ;;
+  esac
+  CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go test -c -o "$out/stability.test" ./clients/cli/cmd/bamboo
   exit
 fi
 if [[ "${1:-}" != run ]]; then

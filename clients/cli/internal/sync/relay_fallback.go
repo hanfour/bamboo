@@ -35,17 +35,15 @@ type StatsProvider interface {
 }
 
 // Reapplier rebuilds the device config given a peer-pubkey ->
-// endpoint override map and re-applies it. Tests inject a fake; the
-// production implementation lives in clients/cli/cmd/bamboo/up.go.
+// endpoint override map and re-applies it.
 type Reapplier interface {
 	Reapply(ctx context.Context, endpointOverrides map[string]string) error
 }
 
 // RunRelayFallback periodically checks per-peer last-handshake time
 // against FallbackThreshold. Peers stale longer than that get
-// swapped to their relay proxy endpoint via Reapply. Once swapped, a
-// peer stays on the relay until the next register / reconnect — we
-// do not flap back to direct because a successful relay handshake
+// swapped to their relay proxy endpoint via Reapply. The monitor does
+// not switch them back to direct because a successful relay handshake
 // would be the "last_handshake" we'd be checking.
 //
 // startedAt is the time the device was first configured; we don't
@@ -64,12 +62,16 @@ func RunRelayFallback(
 	t := time.NewTicker(RelayFallbackInterval)
 	defer t.Stop()
 
+	runRelayFallback(ctx, stats, reapply, relays, startedAt, t.C)
+}
+
+func runRelayFallback(ctx context.Context, stats StatsProvider, reapply Reapplier, relays PeerRelayMap, startedAt time.Time, ticks <-chan time.Time) {
 	overrides := make(map[string]string)
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case now := <-t.C:
+		case now := <-ticks:
 			if now.Sub(startedAt) < FallbackThreshold {
 				continue
 			}
@@ -77,6 +79,10 @@ func RunRelayFallback(
 			if err != nil {
 				slog.Debug("relay-fallback stats", "err", err)
 				continue
+			}
+			pending := make(map[string]string, len(overrides))
+			for key, endpoint := range overrides {
+				pending[key] = endpoint
 			}
 			changed := false
 			for _, p := range snapshot {
@@ -98,12 +104,14 @@ func RunRelayFallback(
 					"direct", p.Endpoint,
 					"relay", relayEP,
 				)
-				overrides[p.PublicKey] = relayEP
+				pending[p.PublicKey] = relayEP
 				changed = true
 			}
 			if changed {
-				if err := reapply.Reapply(ctx, overrides); err != nil {
+				if err := reapply.Reapply(ctx, pending); err != nil {
 					slog.Warn("relay-fallback reapply", "err", err)
+				} else {
+					overrides = pending
 				}
 			}
 		}
