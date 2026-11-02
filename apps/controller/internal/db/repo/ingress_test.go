@@ -342,3 +342,82 @@ func TestIngressTokens_PutGetReplace(t *testing.T) {
 		t.Fatalf("tx: %v", err)
 	}
 }
+
+// TestIngress_PeerMustBelongToTenant pins the WITH CHECK that ties peer_id
+// to the row's tenant, on both tables, for insert and update.
+func TestIngress_PeerMustBelongToTenant(t *testing.T) {
+	admin := requireDB(t)
+	app := requireAppDB(t)
+	ctx := context.Background()
+	a := seedIngressTenant(t, admin, 209)
+	b := seedIngressTenant(t, admin, 210)
+
+	// Same-tenant control: works.
+	var svcID uuid.UUID
+	if err := db.WithTenant(ctx, app, a.tenantID, func(q db.Querier) error {
+		s, err := repo.NewIngressServices(q).Create(ctx, a.tenantID, a.peerID, randomLabel(), 47800, nil)
+		if err != nil {
+			return err
+		}
+		svcID = s.ID
+		return repo.NewIngressTokens(q).Put(ctx, repo.IngressToken{TenantID: a.tenantID, PeerID: a.peerID, JTI: uuid.New(), ExpiresAt: time.Now().Add(time.Hour)})
+	}); err != nil {
+		t.Fatalf("same-tenant writes: %v", err)
+	}
+
+	failing := map[string]func(q db.Querier) error{
+		"service insert": func(q db.Querier) error {
+			_, err := repo.NewIngressServices(q).Create(ctx, a.tenantID, b.peerID, randomLabel(), 47800, nil)
+			return err
+		},
+		"service update": func(q db.Querier) error {
+			_, err := q.Exec(ctx, `UPDATE ingress_services SET peer_id = $2 WHERE id = $1`, svcID, b.peerID)
+			return err
+		},
+		"token put": func(q db.Querier) error {
+			return repo.NewIngressTokens(q).Put(ctx, repo.IngressToken{TenantID: a.tenantID, PeerID: b.peerID, JTI: uuid.New(), ExpiresAt: time.Now().Add(time.Hour)})
+		},
+	}
+	for name, fn := range failing {
+		if err := db.WithTenant(ctx, app, a.tenantID, fn); err == nil {
+			t.Errorf("%s: cross-tenant peer_id accepted", name)
+		}
+	}
+}
+
+func TestIngress_SoftDeletedTenantIsNotLive(t *testing.T) {
+	admin := requireDB(t)
+	app := requireAppDB(t)
+	ctx := context.Background()
+	fx := seedIngressTenant(t, admin, 211)
+	label := randomLabel()
+	if err := db.WithTenant(ctx, app, fx.tenantID, func(q db.Querier) error {
+		svcs := repo.NewIngressServices(q)
+		s, err := svcs.Create(ctx, fx.tenantID, fx.peerID, label, 47800, nil)
+		if err != nil {
+			return err
+		}
+		if _, err := svcs.Approve(ctx, s.ID, uuid.New()); err != nil {
+			return err
+		}
+		_, err = svcs.SetEnabled(ctx, s.ID, true)
+		return err
+	}); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	if _, err := admin.Exec(ctx, `UPDATE tenants SET deleted_at = now() WHERE id = $1`, fx.tenantID); err != nil {
+		t.Fatalf("soft delete: %v", err)
+	}
+	if live, err := repo.NewIngressServices(app).LabelLive(ctx, label); err != nil || live {
+		t.Errorf("LabelLive = %v, %v; want false", live, err)
+	}
+	if err := db.WithTenant(ctx, app, fx.tenantID, func(q db.Querier) error {
+		routes, err := repo.NewIngressServices(q).ListLiveRoutes(ctx, fx.tenantID)
+		if err == nil && len(routes) != 0 {
+			t.Errorf("live routes for soft-deleted tenant: %+v", routes)
+		}
+		return err
+	}); err != nil {
+		t.Fatalf("routes: %v", err)
+	}
+}

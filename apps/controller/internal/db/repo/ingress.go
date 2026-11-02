@@ -212,6 +212,7 @@ func (r *IngressServices) ListLiveRoutes(ctx context.Context, tenantID uuid.UUID
 		SELECT s.id, s.label, s.peer_id, host(p.ip), s.target_port
 		  FROM ingress_services s
 		  JOIN peers p ON p.id = s.peer_id
+		  JOIN tenants t ON t.id = s.tenant_id AND t.deleted_at IS NULL
 		 WHERE s.tenant_id = $1
 		   AND s.enabled AND s.approved_by IS NOT NULL
 		   AND p.approval_status = 'approved'

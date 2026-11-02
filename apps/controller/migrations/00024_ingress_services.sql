@@ -51,14 +51,24 @@ ALTER TABLE ingress_services FORCE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS tenant_isolation ON ingress_services;
 CREATE POLICY tenant_isolation ON ingress_services
     USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid)
-    WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
+    WITH CHECK (
+        tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid
+        -- peers is RLS-filtered by the same GUC, so this pins peer_id to the
+        -- row's own tenant (same pattern as peer_tags in 00022).
+        AND EXISTS (SELECT 1 FROM peers WHERE peers.id = ingress_services.peer_id)
+    );
 
 ALTER TABLE ingress_tokens ENABLE ROW LEVEL SECURITY;
 ALTER TABLE ingress_tokens FORCE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS tenant_isolation ON ingress_tokens;
 CREATE POLICY tenant_isolation ON ingress_tokens
     USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid)
-    WITH CHECK (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
+    WITH CHECK (
+        tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid
+        -- peers is RLS-filtered by the same GUC, so this pins peer_id to the
+        -- row's own tenant (same pattern as peer_tags in 00022).
+        AND EXISTS (SELECT 1 FROM peers WHERE peers.id = ingress_tokens.peer_id)
+    );
 
 -- RLS bootstrap lookups (ADR 0014, project-goals P0 item 2). Labels are
 -- unique across tenants, so "is this label taken" and "is this name live"
@@ -81,6 +91,7 @@ AS $fn$
         SELECT 1
           FROM ingress_services s
           JOIN peers p ON p.id = s.peer_id
+          JOIN tenants t ON t.id = s.tenant_id AND t.deleted_at IS NULL
          WHERE s.label = p_label
            AND s.enabled
            AND s.approved_by IS NOT NULL
