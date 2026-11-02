@@ -31,10 +31,11 @@ import (
 
 // Server holds the gRPC + HTTP servers and dependencies.
 type Server struct {
-	cfg  *config.Config
-	pool *db.Pool
-	grpc *grpc.Server
-	http *HTTPServer
+	cfg   *config.Config
+	pool  *db.Pool
+	grpc  *grpc.Server
+	http  *HTTPServer
+	coord *handlers.CoordinatorHandler
 }
 
 // New constructs a Server with all gRPC services registered.
@@ -106,10 +107,11 @@ func New(cfg *config.Config, pool *db.Pool, ch *clickhouse.Conn) (*Server, error
 	httpSrv.SetWebURL(cfg.Auth.OIDC.WebURL)
 
 	return &Server{
-		cfg:  cfg,
-		pool: pool,
-		grpc: grpcSrv,
-		http: httpSrv,
+		cfg:   cfg,
+		pool:  pool,
+		grpc:  grpcSrv,
+		http:  httpSrv,
+		coord: coordHandler,
 	}, nil
 }
 
@@ -217,6 +219,8 @@ func resolveSessionTTL(cfgRaw string, fallback time.Duration) time.Duration {
 // Run blocks until ctx is canceled or either listener errors. On shutdown
 // signal it performs a graceful gRPC stop and HTTP shutdown.
 func (s *Server) Run(ctx context.Context) error {
+	// Stop coalesced peer-refresh timers once the listeners are down.
+	defer s.coord.Close()
 	listener, err := net.Listen("tcp", s.cfg.Server.GRPCAddr)
 	if err != nil {
 		return fmt.Errorf("listen %s: %w", s.cfg.Server.GRPCAddr, err)

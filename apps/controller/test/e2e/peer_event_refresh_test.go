@@ -64,6 +64,7 @@ func TestPeerEvents_PolicyChangedFollowsWhenEnforcing(t *testing.T) {
 		}
 		t.Run(name, func(t *testing.T) {
 			f := startFixture(t)
+			f.coordSrv.SetPeerRefreshWindow(50 * time.Millisecond)
 			watcher := registerIngressTestPeer(t, f, "watcher")
 			if enforcing {
 				if _, err := f.coordSrv.BumpPolicyRevision(context.Background(), fixtureTenantID(t, f)); err != nil {

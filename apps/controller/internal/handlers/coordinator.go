@@ -43,6 +43,9 @@ type CoordinatorHandler struct {
 	// tables so the RLS backstop (ADR-0014) sees app.tenant_id.
 	// tenants and relay_servers are not RLS-scoped and stay on the pool.
 	pool *db.Pool
+	// peerRefresh coalesces the PolicyChanged follow-ups of peer
+	// membership events (publishPeerEvent). Stopped by Close.
+	peerRefresh *peerRefreshCoalescer
 	// requireAuth mirrors HTTPServer.requireAuth. When true, Register
 	// rejects callers that present neither a pre-auth-key credential
 	// nor a bearer-token credential — the x-tenant-slug metadata
@@ -248,21 +251,30 @@ func (h *CoordinatorHandler) PublishPeerUpdatedIfVisible(ctx context.Context, te
 // publishPeerEvent is the single publisher for peer membership events.
 // PeerAdded and PeerUpdated carry no AllowedIps (the bus is tenant-wide
 // and AllowedIps differ per recipient), and a client enforcing ACLs
-// (policy revision > 0) reads a peer without AllowedIps as denied. So in
-// an enforcing tenant the event is followed by PolicyChanged at the
-// current revision, and clients re-register for fresh AllowedIps. No bump
-// is needed: the CLI daemon and the Apple clients re-register on any
-// PolicyChanged regardless of its revision. At revision 0 clients fall
-// back to the peer's /32 and nothing extra is published.
-func (h *CoordinatorHandler) publishPeerEvent(ctx context.Context, tenantID uuid.UUID, event *bamboov1.WatchPeersEvent) {
+// (policy revision > 0) reads a peer without AllowedIps as denied. So the
+// event schedules a PolicyChanged follow-up and clients re-register for
+// fresh AllowedIps. Follow-ups are coalesced per tenant (one per window,
+// trailing edge, revision read at send time, none at revision 0, where
+// clients fall back to the peer's /32). No bump is needed: the CLI daemon
+// and the Apple clients re-register on any PolicyChanged regardless of
+// its revision.
+func (h *CoordinatorHandler) publishPeerEvent(_ context.Context, tenantID uuid.UUID, event *bamboov1.WatchPeersEvent) {
 	h.bus.Publish(tenantID, event)
 	if event.GetPeerAdded() == nil && event.GetPeerUpdated() == nil {
 		return
 	}
-	rev := h.policyRevision(ctx, tenantID)
-	if rev == 0 {
-		return
-	}
+	h.peerRefresh.Schedule(tenantID)
+}
+
+// refreshRevision reads the revision for a coalesced follow-up; it runs
+// on a timer, outside any request context.
+func (h *CoordinatorHandler) refreshRevision(tenantID uuid.UUID) int64 {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return h.policyRevision(ctx, tenantID)
+}
+
+func (h *CoordinatorHandler) publishPolicyChanged(tenantID uuid.UUID, rev int64) {
 	h.bus.Publish(tenantID, &bamboov1.WatchPeersEvent{
 		Event: &bamboov1.WatchPeersEvent_PolicyChanged{
 			PolicyChanged: &bamboov1.PolicyChanged{PolicyRevision: rev},
@@ -407,7 +419,7 @@ func (h *CoordinatorHandler) SetRequireAuth(require bool) {
 // the Register path. The events bus is shared with WatchPeers stream
 // subscribers.
 func NewCoordinatorHandler(pool *db.Pool, auth *AuthHandler, bus *events.Bus) *CoordinatorHandler {
-	return &CoordinatorHandler{
+	h := &CoordinatorHandler{
 		tenants:  repo.NewTenants(pool),
 		users:    repo.NewUsers(pool),
 		peers:    repo.NewPeers(pool),
@@ -419,7 +431,17 @@ func NewCoordinatorHandler(pool *db.Pool, auth *AuthHandler, bus *events.Bus) *C
 		ops:      operate.NewHub(),
 		pool:     pool,
 	}
+	h.peerRefresh = newPeerRefreshCoalescer(defaultPeerRefreshWindow, h.refreshRevision, h.publishPolicyChanged)
+	return h
 }
+
+// Close stops background work: pending coalesced PolicyChanged sends.
+// Call it on controller shutdown, before the pool closes.
+func (h *CoordinatorHandler) Close() { h.peerRefresh.Close() }
+
+// SetPeerRefreshWindow changes the coalescing window for peer-event
+// PolicyChanged follow-ups (tests use a short one).
+func (h *CoordinatorHandler) SetPeerRefreshWindow(d time.Duration) { h.peerRefresh.SetWindow(d) }
 
 // Register handles peer registration. See resolveTenant for credential
 // precedence.
