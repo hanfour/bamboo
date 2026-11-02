@@ -137,6 +137,14 @@ func (c *Conn) applySchema(ctx context.Context) error {
 		`ALTER TABLE connection_events
 		   ADD COLUMN IF NOT EXISTS prev_path LowCardinality(String) AFTER path`,
 
+		// Public services ingress request rows (event_type
+		// 'ingress_request'). Additive; existing writers leave the
+		// defaults ('' / 0).
+		`ALTER TABLE connection_events ADD COLUMN IF NOT EXISTS service_id String`,
+		`ALTER TABLE connection_events ADD COLUMN IF NOT EXISTS client_ip String`,
+		`ALTER TABLE connection_events ADD COLUMN IF NOT EXISTS http_status UInt16`,
+		`ALTER TABLE connection_events ADD COLUMN IF NOT EXISTS duration_ms UInt32`,
+
 		// anomaly_findings is the Tier-2 ML pipeline's output. The Go
 		// controller never writes here; the bamboo-ai Python module
 		// produces rows after each scheduled training pass.

@@ -3,12 +3,14 @@
 package e2e
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/hanfour/bamboo/apps/controller/internal/auth"
@@ -299,4 +301,112 @@ func TestInternalIngress_TokenRejectedWhenPeerIneligible(t *testing.T) {
 	}
 	expect2("garbage", "x.y")
 	expect2("tampered", token+"A")
+}
+
+func postIngressEvents(t *testing.T, url, token string, payload any) jsonResponse {
+	t.Helper()
+	buf, ok := payload.([]byte)
+	if !ok {
+		buf, _ = json.Marshal(payload)
+	}
+	req, _ := http.NewRequest(http.MethodPost, url, bytes.NewReader(buf))
+	req.Header.Set("Content-Type", "application/json")
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST events: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	return jsonResponse{status: resp.StatusCode, body: body}
+}
+
+func ingressEvent(sid string) map[string]any {
+	return map[string]any{"service_id": sid, "client_ip": "203.0.113.7", "status": 200,
+		"bytes_in": 10, "bytes_out": 20, "duration_ms": 5, "occurred_at": time.Now().UTC()}
+}
+
+func TestInternalIngress_EventsAcceptsOnlyOwnServices(t *testing.T) {
+	f := startFixture(t)
+	mac := registerIngressTestPeer(t, f, "mac")
+	vps := registerIngressTestPeer(t, f, "vps")
+	tagPeer(t, f, vps.id, "ingress")
+	token := issueIngressToken(t, f, vps.id)
+	svcID := makeLiveService(t, f, mac.id)
+	url := f.httpURL + "/internal/v1/ingress/events"
+	ev := ingressEvent
+
+	if r := postIngressEvents(t, url, "", map[string]any{"events": []any{ev(svcID)}}); r.status != http.StatusUnauthorized {
+		t.Errorf("no token: %d, want 401", r.status)
+	}
+	r := postIngressEvents(t, url, token, map[string]any{"events": []any{ev(svcID), ev(uuid.NewString()), ev("not-a-uuid")}})
+	if r.status != http.StatusAccepted || string(bytes.TrimSpace(r.body)) != `{"accepted":1}` {
+		t.Errorf("events: %d %s, want 202 {\"accepted\":1}", r.status, r.body)
+	}
+	tooMany := make([]any, 1001)
+	for i := range tooMany {
+		tooMany[i] = ev(svcID)
+	}
+	if r := postIngressEvents(t, url, token, map[string]any{"events": tooMany}); r.status != http.StatusRequestEntityTooLarge {
+		t.Errorf("1001 events: %d, want 413", r.status)
+	}
+}
+
+// TestInternalIngress_EventsStrictPayload: the client cannot pick the
+// tenant or peer, and cannot smuggle extra fields (headers, bodies).
+func TestInternalIngress_EventsStrictPayload(t *testing.T) {
+	f := startFixture(t)
+	mac := registerIngressTestPeer(t, f, "mac")
+	vps := registerIngressTestPeer(t, f, "vps")
+	tagPeer(t, f, vps.id, "ingress")
+	token := issueIngressToken(t, f, vps.id)
+	svcID := makeLiveService(t, f, mac.id)
+	url := f.httpURL + "/internal/v1/ingress/events"
+
+	with := func(k string, v any) map[string]any {
+		e := ingressEvent(svcID)
+		e[k] = v
+		return map[string]any{"events": []any{e}}
+	}
+	bad := map[string]any{
+		"event tenant_id":     with("tenant_id", uuid.NewString()),
+		"event peer_id":       with("peer_id", uuid.NewString()),
+		"event authorization": with("authorization", "Bearer x"),
+		"event body":          with("body", "secret"),
+		"top-level tenant_id": map[string]any{"tenant_id": uuid.NewString(), "events": []any{ingressEvent(svcID)}},
+		"wrong type":          with("status", "200"),
+		"trailing data":       []byte(`{"events":[]} {"events":[]}`),
+		"not an object":       []byte(`[1,2]`),
+	}
+	for name, payload := range bad {
+		if r := postIngressEvents(t, url, token, payload); r.status != http.StatusBadRequest {
+			t.Errorf("%s: %d %s, want 400", name, r.status, r.body)
+		}
+	}
+	huge := []byte(`{"events":[],"pad":"` + strings.Repeat("a", 1<<20) + `"}`)
+	if r := postIngressEvents(t, url, token, huge); r.status != http.StatusRequestEntityTooLarge {
+		t.Errorf("over 1 MiB: %d, want 413", r.status)
+	}
+	if r := postIngressEvents(t, url, token, map[string]any{"events": []any{}}); r.status != http.StatusAccepted || string(bytes.TrimSpace(r.body)) != `{"accepted":0}` {
+		t.Errorf("empty batch: %d %s, want 202 {\"accepted\":0}", r.status, r.body)
+	}
+}
+
+// TestInternalIngress_EventsTenantScoped: tenant B's token cannot report
+// requests for tenant A's service.
+func TestInternalIngress_EventsTenantScoped(t *testing.T) {
+	a := startFixture(t)
+	macA := registerIngressTestPeer(t, a, "mac-a")
+	svcA := makeLiveService(t, a, macA.id)
+
+	b := startFixture(t)
+	vpsB := registerIngressTestPeer(t, b, "vps-b")
+	tagPeer(t, b, vpsB.id, "ingress")
+	tokenB := issueIngressToken(t, b, vpsB.id)
+	r := postIngressEvents(t, b.httpURL+"/internal/v1/ingress/events", tokenB, map[string]any{"events": []any{ingressEvent(svcA)}})
+	if r.status != http.StatusAccepted || string(bytes.TrimSpace(r.body)) != `{"accepted":0}` {
+		t.Errorf("cross-tenant: %d %s, want 202 {\"accepted\":0}", r.status, r.body)
+	}
 }

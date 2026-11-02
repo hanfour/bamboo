@@ -57,6 +57,12 @@ func (h *HTTPServer) routeInternalIngress(w http.ResponseWriter, r *http.Request
 			return
 		}
 		h.internalIngressRoutes(w, r)
+	case "/internal/v1/ingress/events":
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		h.internalIngressEvents(w, r)
 	default:
 		http.NotFound(w, r)
 	}
