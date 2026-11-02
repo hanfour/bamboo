@@ -37,7 +37,7 @@ with the control plane. Cookies: services must not rely on cookies scoped to
 
 ```
 client ──https──> VPS :443  Caddy (TLS, on-demand cert, `ask` → controller)
-                     └─ http ─> bamboo-ingress (host network, :8090 on the docker bridge gateway)
+                     └─ http ─> bamboo-ingress (host network, 10.213.0.1:8090 on the ingress_edge bridge)
                                    └─ http over wg ─> <peer mesh IP>:<target_port>
 ```
 
@@ -129,8 +129,16 @@ service to revoke.
 
 ## 5. `bamboo-ingress` (new, `apps/ingress`, AGPLv3)
 
-- Go binary on the host network (it must reach mesh IPs through the host's `wg` interface), listening on the docker bridge gateway address `:8090` so only the Caddy container can reach it. Config: controller URL, service
-  token path, public suffix `svc.miilink.net`.
+- Go binary on the host network (it must reach mesh IPs through the host's `wg` interface), listening on `10.213.0.1:8090`, the gateway of a dedicated compose bridge `ingress_edge` (`10.213.0.0/24`, host interface `br-bamboo-edge`), so Caddy reaches it over a directly attached network. Default `BAMBOO_INGRESS_LISTEN=10.213.0.1:8090`. Config: controller URL, service
+  token path, public suffix `svc.miilink.net`, trusted proxies.
+- Trusted proxies: `X-Forwarded-For` is honoured only on connections from
+  `BAMBOO_INGRESS_TRUSTED_PROXIES`; infra/full sets it to Caddy's fixed
+  `ingress_edge` address `10.213.0.2/32`. Other sources are keyed by their
+  socket address. Client-supplied `X-Real-IP`, `True-Client-IP`, and
+  `Forwarded` are dropped.
+- Routes: on 401/403 from the routes endpoint (token revoked or expired)
+  the table is cleared; on network errors and 5xx the last good table is
+  kept.
 - Routing: exact `Host` match against the routes table; unknown host → 404,
   service gone → 502 with a short body.
 - Limits (in-memory token bucket, reuse `apps/controller/internal/ratelimit`):
@@ -150,8 +158,13 @@ service to revoke.
 - Caddy: add a site block for `*.svc.miilink.net` with
   `tls { on_demand }`, global `on_demand_tls { ask http://controller:8081/internal/v1/ingress/ask }`
   (the controller's REST listener, `BAMBOO_HTTP_ADDR`), and
-  `reverse_proxy host.docker.internal:8090` (compose `extra_hosts: host-gateway`) with
-  `flush_interval -1`. Existing control-plane and relay sites are unchanged.
+  `reverse_proxy host.docker.internal:8090` with `flush_interval -1`. Compose
+  maps `host.docker.internal` to `10.213.0.1` (`extra_hosts`) and attaches
+  Caddy to `ingress_edge` at the fixed address `10.213.0.2`; traffic to the
+  gateway is delivered locally without NAT, so the ingress sees `10.213.0.2`.
+  The controller publishes its REST port on host loopback only
+  (`127.0.0.1:${BAMBOO_CONTROLLER_HOST_PORT:-8081}`) for the host-network
+  ingress. Existing control-plane and relay sites are unchanged.
 - The VPS's bamboo CLI peer runs as a systemd service (`install-service`); `bamboo-ingress` runs as a compose service with `network_mode: host` so it routes to mesh IPs through the `wg` interface.
 - Never break the existing control plane: the change only adds a site block,
   a compose service, and a systemd unit.

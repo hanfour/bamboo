@@ -42,6 +42,71 @@ fi
 TARGET="$(grep '^BAMBOO_IMAGE_TAG=' .env | tail -n1 | cut -d= -f2-)"
 log "deploying tag: ${TARGET:-latest (BAMBOO_IMAGE_TAG unset)}"
 
+# --- 0b. Host port preflight -------------------------------------------
+# The controller publishes 127.0.0.1:${BAMBOO_CONTROLLER_HOST_PORT:-8081}
+# for the host-network ingress, and the ingress binds 127.0.0.1:8091 and
+# 10.213.0.1:8090. If another process holds one of them, the recreate
+# below would leave the control plane (or the ingress) unable to start.
+# Check first and abort before anything touches the running stack.
+env_value() { grep "^$1=" .env | tail -n1 | cut -d= -f2- || true; }
+
+# listening ADDR PORT: true when something listens on ADDR:PORT or on a
+# wildcard address for PORT (a wildcard bind blocks the specific one).
+listening() {
+    ss -ltnH 2>/dev/null | awk '{print $4}' | grep -Eqx "(${1//./\\.}|0\.0\.0\.0|\*|\[::\]):$2"
+}
+
+# require_port ADDR PORT OWNER_CHECK...: abort unless ADDR:PORT is free or
+# OWNER_CHECK (a command) confirms our own container holds it.
+require_port() {
+    local addr="$1" port="$2"
+    shift 2
+    if ! listening "$addr" "$port"; then
+        return 0
+    fi
+    if "$@"; then
+        return 0
+    fi
+    echo "ERROR: ${addr}:${port} is already in use by a process outside this stack." >&2
+    echo "       Nothing was changed; the running controller is untouched." >&2
+    echo "       Find it with: sudo ss -ltnp 'sport = :${port}'" >&2
+    if [ "$port" = "$CONTROLLER_HOST_PORT" ]; then
+        echo "       Stop it, or set BAMBOO_CONTROLLER_HOST_PORT to a free port in .env." >&2
+    else
+        echo "       Stop it before enabling the ingress profile." >&2
+    fi
+    exit 3
+}
+
+# Our controller publishes the port: docker compose port prints it.
+controller_holds_port() {
+    docker compose port controller 8081 2>/dev/null | grep -qx "127.0.0.1:${CONTROLLER_HOST_PORT}"
+}
+
+# The ingress uses the host network, so docker cannot attribute the
+# socket; a running ingress container of this project is taken as the
+# holder (recreating it releases the port first).
+ingress_running() {
+    docker compose ps --status running --services 2>/dev/null | grep -qx ingress
+}
+
+CONTROLLER_HOST_PORT="$(env_value BAMBOO_CONTROLLER_HOST_PORT)"
+CONTROLLER_HOST_PORT="${CONTROLLER_HOST_PORT:-8081}"
+INGRESS_ENABLED=0
+if grep -Eq '^COMPOSE_PROFILES=.*\bingress\b' .env; then
+    INGRESS_ENABLED=1
+fi
+if command -v ss >/dev/null 2>&1; then
+    log "checking host ports"
+    require_port 127.0.0.1 "$CONTROLLER_HOST_PORT" controller_holds_port
+    if [ "$INGRESS_ENABLED" = 1 ]; then
+        require_port 127.0.0.1 8091 ingress_running
+        require_port 10.213.0.1 8090 ingress_running
+    fi
+else
+    log "ss not found; skipping the host port preflight (check 127.0.0.1:${CONTROLLER_HOST_PORT} by hand)"
+fi
+
 # --- 1. Pre-deploy backup ----------------------------------------------
 # A failed migration is the scariest step; take a fresh verified dump
 # first. Reuse backup.sh so the dump is integrity-checked + retained the
@@ -85,7 +150,7 @@ docker compose up -d controller web relay
 # Public services ingress is opt-in (COMPOSE_PROFILES=ingress in .env).
 # `up -d ingress` also applies a changed caddy service definition, since
 # the ingress depends on Caddy's ingress_edge bridge.
-if grep -Eq '^COMPOSE_PROFILES=.*\bingress\b' .env; then
+if [ "$INGRESS_ENABLED" = 1 ]; then
     log "pulling + recreating ingress"
     docker compose pull ingress && docker compose up -d ingress \
         || echo "warning: ingress did not start; check 'docker compose ps caddy ingress' and 'docker compose logs ingress'"

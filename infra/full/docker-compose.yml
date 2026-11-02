@@ -99,9 +99,11 @@ services:
       BAMBOO_INGRESS_SUFFIX: "${INGRESS_SUFFIX:-}"
     # Loopback only, so the host-network ingress can reach /internal/*.
     # Never publish this on 0.0.0.0: the REST listener has no TLS and
-    # /internal/v1/ingress/ask needs no token.
+    # /internal/v1/ingress/ask needs no token. BAMBOO_CONTROLLER_HOST_PORT
+    # (default 8081) moves the host side when 8081 is taken; deploy.sh
+    # refuses to recreate the controller while another process holds it.
     ports:
-      - "127.0.0.1:8081:8081"
+      - "127.0.0.1:${BAMBOO_CONTROLLER_HOST_PORT:-8081}:8081"
     volumes:
       # Read-only mount; the host timer writes via mv(1) so the
       # controller never sees a half-written dump.
@@ -181,7 +183,7 @@ services:
       BAMBOO_INGRESS_SUFFIX: "${INGRESS_SUFFIX:-}"
       BAMBOO_INGRESS_LISTEN: "10.213.0.1:8090"
       BAMBOO_INGRESS_ADMIN_LISTEN: "127.0.0.1:8091"
-      BAMBOO_CONTROLLER_URL: "http://127.0.0.1:8081"
+      BAMBOO_CONTROLLER_URL: "http://127.0.0.1:${BAMBOO_CONTROLLER_HOST_PORT:-8081}"
       BAMBOO_INGRESS_TOKEN_FILE: "/etc/bamboo-ingress/ingress.token"
       BAMBOO_INGRESS_TRUSTED_PROXIES: "10.213.0.2/32"
     volumes:

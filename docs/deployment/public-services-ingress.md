@@ -21,17 +21,21 @@ client ─https─> VPS :443 Caddy (on-demand cert; ask → controller:8081)
 - Caddy (existing container) terminates TLS. A certificate is issued per
   name, on demand, only when
   `GET http://controller:8081/internal/v1/ingress/ask?domain=<name>` answers
-  200, which it does only for a live service. There is no wildcard
-  certificate.
+  200, which it does only for a live service whose tenant holds a current,
+  unexpired ingress token (step 6). There is no wildcard certificate.
 - `bamboo-ingress` (compose service `ingress`, `network_mode: host`) listens
   on `10.213.0.1:8090`, the gateway of the `ingress_edge` bridge
   (`br-bamboo-edge`, subnet `10.213.0.0/24`). It polls the controller every
-  10 s over `127.0.0.1:8081` and proxies to `<peer mesh IP>:<port>` over the
+  10 s over `127.0.0.1:8081` (the controller's host port,
+  `BAMBOO_CONTROLLER_HOST_PORT`, default 8081) and proxies to `<peer mesh IP>:<port>` over the
   ingress peer's WireGuard interface. Admin listener `127.0.0.1:8091`
   (`/healthz`, `/version`, `/metrics`).
 - The controller publishes its REST port on `127.0.0.1:8081` only. Never
   change this to `0.0.0.0`: the listener has no TLS and the `ask` endpoint
-  needs no token.
+  needs no token. If another process on the host already uses 8081, set
+  `BAMBOO_CONTROLLER_HOST_PORT` in `.env` to a free port; compose publishes
+  that port and points the ingress's `BAMBOO_CONTROLLER_URL` at it. The
+  container port stays 8081, so Caddy's `ask` URL does not change.
 - The VPS is an ordinary mesh peer (`bamboo install-service`) tagged
   `ingress`, in the same tenant as the services it serves. One ingress peer
   serves one tenant.
@@ -66,6 +70,25 @@ Other containers on the host can also open connections to `10.213.0.1:8090`
 ## Enable
 
 Do these in order. Steps 1 to 4 change nothing that users see.
+
+### 0. Pre-deploy checks
+
+```bash
+docker version --format '{{.Server.Version}}'   # 28 or newer
+sudo ss -ltnp | grep -E ':(8081|8091|8090)\b'     # expect no output
+ip route | grep 10.213.0                        # expect no output
+```
+
+- Docker 28 or newer: older engines had an L2-neighbour reachability issue
+  for ports published on `127.0.0.1`, which the controller's port relies on.
+- 8081 is the controller's host port (or your `BAMBOO_CONTROLLER_HOST_PORT`);
+  8091 and 8090 are the ingress's admin and proxy listeners. A line here
+  means another process holds the port: stop it, or for 8081 pick another
+  `BAMBOO_CONTROLLER_HOST_PORT`. `deploy.sh` runs the same check and aborts,
+  before touching the running controller, when one of these ports is held
+  by something other than this stack (8091 and 8090 only once
+  `COMPOSE_PROFILES` includes `ingress`).
+- `10.213.0.0/24` must not be in use on the host (see step 3).
 
 ### 1. DNS (manual)
 
@@ -213,6 +236,18 @@ sudo nft add rule inet bamboo_ingress input iifname "bamboo1" drop
 # Persist: add the same table to /etc/nftables.conf.
 ```
 
+c) If the VPS also runs the Path A hub on `bamboo0` (step 4), drop traffic
+to the ingress listener's address that arrives from the hub mesh, so a hub
+peer that routes `10.213.0.1` through the hub cannot reach the ingress
+directly:
+
+```bash
+sudo iptables -I INPUT 1 -i bamboo0 -d 10.213.0.1 -j DROP
+sudo netfilter-persistent save
+# ufw:      sudo ufw deny in on bamboo0 to 10.213.0.1
+# nftables: sudo nft add rule inet bamboo_ingress input iifname "bamboo0" ip daddr 10.213.0.1 drop
+```
+
 These rules touch only INPUT. The hub's `FORWARD -i bamboo0 -o bamboo0`
 rule and Docker's own rules are unaffected. The WireGuard UDP port arrives
 on the public interface and is unaffected too.
@@ -297,7 +332,9 @@ numbers.
 - Repeated failed validations for one name are also limited. They usually
   mean DNS for `*.svc.example.com` is wrong or port 80/443 is blocked.
 - Names that the `ask` endpoint refuses never reach Let's Encrypt, so
-  scanners hitting random `*.svc.example.com` names cost nothing.
+  scanners hitting random `*.svc.example.com` names cost nothing. A tenant
+  that has not issued an ingress token (or whose token expired) gets no
+  certificates either.
 
 ## Monitoring
 
@@ -323,9 +360,11 @@ than a few minutes), `bamboo_ingress_routes_refresh_failures_total`,
   drops the route at its next poll, within about 10 s, and cuts that
   service's open streams. Further requests get 404 or 502, and Caddy issues
   no new certificate for the name.
-- If the controller is unreachable, the ingress keeps serving its last good
-  table. To stop everything at once regardless, stop the container:
-  `docker compose stop ingress`.
+- If the controller is unreachable or answers 5xx, the ingress keeps
+  serving its last good table. If it rejects the token (401/403: rotated,
+  expired, or the peer lost `tag:ingress`), the ingress clears its table
+  and serves 404 until a valid token is in place. To stop everything at
+  once regardless, stop the container: `docker compose stop ingress`.
 
 ## Roll back
 
@@ -356,6 +395,25 @@ Caddy sites.
 4. Optional, on the VPS: `sudo bamboo uninstall-service`, delete the
    `vps-ingress` peer in the Web UI, `sudo rm -r /etc/bamboo-ingress`, and
    remove the firewall rules from step 5.
+
+5. Full revert of the stack files, to put `infra/full` back exactly as it
+   was before this feature (no loopback port on the controller, Caddy off
+   `ingress_edge`). Run steps 1 and 3 first, then from the repository root
+   on the VPS, with `<previous-ref>` the commit or tag you deployed before:
+
+   ```bash
+   git checkout <previous-ref> -- infra/full
+   cd infra/full
+   docker compose up -d controller caddy     # recreate both from the old files
+   docker network rm full_ingress_edge       # the bridge is now unused
+   ip -4 addr show br-bamboo-edge            # "does not exist"
+   ```
+
+   `docker network rm` fails while a container is still attached; check with
+   `docker network inspect full_ingress_edge`. The network name is
+   `<compose project>_ingress_edge`; the project is `full` when compose runs
+   from `infra/full`. Ports 80 and 443 are down for the few seconds Caddy
+   takes to restart.
 
 Migration 00024 is additive. Roll it back only together with the rest of
 the release (`docker compose run --rm controller migrate down` once).
