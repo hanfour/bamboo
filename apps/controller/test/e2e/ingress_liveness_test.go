@@ -100,38 +100,45 @@ func TestIngressMesh_AllowAllTenantGatesIngressPeer(t *testing.T) {
 	}
 }
 
-// TestIngressLiveness_ServiceMutationsBumpRevision: every service change
-// bumps the policy revision so connected peers re-register.
+// TestIngressLiveness_ServiceMutationsBumpRevision: a service change bumps
+// the policy revision (so connected peers re-register) exactly when it
+// changes liveness. Filing or approving a disabled service, or deleting a
+// service that is not live, leaves the tenant's peers alone.
 func TestIngressLiveness_ServiceMutationsBumpRevision(t *testing.T) {
 	f := startFixture(t)
 	mac := registerIngressTestPeer(t, f, "mac")
 	base := f.httpURL + "/api/v1"
 	var sid string
+	approve := func() jsonResponse {
+		return ingressCall(t, http.MethodPost, base+"/ingress/"+sid+"/approve", "", f.tenantSlug, nil)
+	}
+	patch := func(body map[string]any) func() jsonResponse {
+		return func() jsonResponse { return ingressCall(t, http.MethodPatch, base+"/ingress/"+sid, "", f.tenantSlug, body) }
+	}
+	del := func() jsonResponse { return ingressCall(t, http.MethodDelete, base+"/ingress/"+sid, "", f.tenantSlug, nil) }
+	create := func() jsonResponse {
+		r := ingressCall(t, http.MethodPost, base+"/peers/"+mac.id+"/ingress", "", f.tenantSlug,
+			map[string]any{"label": "svc-" + uuid.NewString()[:8], "target_port": 47800})
+		sid = decodeIngressSvc(t, r).ID
+		return r
+	}
 	steps := []struct {
-		name string
-		call func() jsonResponse
+		name     string
+		call     func() jsonResponse
+		wantBump bool
 	}{
-		{"create", func() jsonResponse {
-			r := ingressCall(t, http.MethodPost, base+"/peers/"+mac.id+"/ingress", "", f.tenantSlug,
-				map[string]any{"label": "svc-" + uuid.NewString()[:8], "target_port": 47800})
-			sid = decodeIngressSvc(t, r).ID
-			return r
-		}},
-		{"approve", func() jsonResponse {
-			return ingressCall(t, http.MethodPost, base+"/ingress/"+sid+"/approve", "", f.tenantSlug, nil)
-		}},
-		{"enable", func() jsonResponse {
-			return ingressCall(t, http.MethodPatch, base+"/ingress/"+sid, "", f.tenantSlug, map[string]any{"enabled": true})
-		}},
-		{"port change", func() jsonResponse {
-			return ingressCall(t, http.MethodPatch, base+"/ingress/"+sid, "", f.tenantSlug, map[string]any{"target_port": 47801})
-		}},
-		{"disable", func() jsonResponse {
-			return ingressCall(t, http.MethodPatch, base+"/ingress/"+sid, "", f.tenantSlug, map[string]any{"enabled": false})
-		}},
-		{"delete", func() jsonResponse {
-			return ingressCall(t, http.MethodDelete, base+"/ingress/"+sid, "", f.tenantSlug, nil)
-		}},
+		{"create", create, false},
+		{"approve while disabled", approve, false},
+		{"enable (goes live)", patch(map[string]any{"enabled": true}), true},
+		{"port change (live -> pending)", patch(map[string]any{"target_port": 47801}), true},
+		{"port change while pending", patch(map[string]any{"target_port": 47802}), false},
+		{"approve (goes live again)", approve, true},
+		{"disable (goes dark)", patch(map[string]any{"enabled": false}), true},
+		{"delete while dark", del, false},
+		{"create again", create, false},
+		{"enable while pending", patch(map[string]any{"enabled": true}), false},
+		{"approve (goes live)", approve, true},
+		{"delete while live", del, true},
 	}
 	for _, s := range steps {
 		before := policyRevision(t, f)
@@ -139,8 +146,8 @@ func TestIngressLiveness_ServiceMutationsBumpRevision(t *testing.T) {
 		if r.status >= 300 {
 			t.Fatalf("%s: %d %s", s.name, r.status, r.body)
 		}
-		if after := policyRevision(t, f); after <= before {
-			t.Errorf("%s: policy revision %d -> %d, want a bump", s.name, before, after)
+		if bumped := policyRevision(t, f) > before; bumped != s.wantBump {
+			t.Errorf("%s: bump=%v, want %v", s.name, bumped, s.wantBump)
 		}
 	}
 }

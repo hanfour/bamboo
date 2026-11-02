@@ -245,9 +245,8 @@ func (h *HTTPServer) apiCreateIngress(w http.ResponseWriter, r *http.Request, au
 		return
 	}
 	h.emitAuditHook(ctx, auditEv, auditOK)
-	if !h.bumpIngressPolicy(ctx, w, tenant.ID) {
-		return
-	}
+	// A new service is pending and disabled, never live: no bump, so a
+	// member filing requests cannot make the whole tenant re-register.
 	writeJSON(w, http.StatusCreated, h.ingressServiceToJSON(created))
 }
 
@@ -348,7 +347,7 @@ type ingressMutation func(ctx context.Context, q db.Querier, svcs *repo.IngressS
 // mutateIngress is the shared shape of approve/patch/delete: load the
 // row in the tenant tx, apply fn (which writes its own audit rows), read
 // the row back, emit audit hooks after commit, bump the policy revision
-// when anything changed (Task 2's generated rules), and answer.
+// when liveness changed (Task 2's generated rules), and answer.
 func (h *HTTPServer) mutateIngress(w http.ResponseWriter, r *http.Request, tenant *repo.Tenant, sidStr string, fn ingressMutation) {
 	sid, err := uuid.Parse(sidStr)
 	if err != nil {
@@ -357,9 +356,10 @@ func (h *HTTPServer) mutateIngress(w http.ResponseWriter, r *http.Request, tenan
 	}
 	ctx := r.Context()
 	var (
-		after *repo.IngressService
-		evs   []*repo.AuditEvent
-		oks   []bool
+		before *repo.IngressService
+		after  *repo.IngressService
+		evs    []*repo.AuditEvent
+		oks    []bool
 	)
 	txErr := db.WithTenant(ctx, h.pool, tenant.ID, func(q db.Querier) error {
 		svcs := repo.NewIngressServices(q)
@@ -367,6 +367,7 @@ func (h *HTTPServer) mutateIngress(w http.ResponseWriter, r *http.Request, tenan
 		if lerr != nil {
 			return lerr
 		}
+		before = cur
 		e, o, ferr := fn(ctx, q, svcs, cur)
 		if ferr != nil {
 			return ferr
@@ -390,9 +391,10 @@ func (h *HTTPServer) mutateIngress(w http.ResponseWriter, r *http.Request, tenan
 	for i := range evs {
 		h.emitAuditHook(ctx, evs[i], oks[i])
 	}
-	// Every change writes one audit row, so evs doubles as "something
-	// changed". A no-op PATCH does not wake the tenant's peers.
-	if len(evs) > 0 && !h.bumpIngressPolicy(ctx, w, tenant.ID) {
+	// Peers re-register only when the service's liveness flipped (a
+	// deleted service is not live). Approving a disabled service or
+	// changing a pending one's port does not wake the tenant's peers.
+	if before.Live() != after.Live() && !h.bumpIngressPolicy(ctx, w, tenant.ID) {
 		return
 	}
 	if after == nil {

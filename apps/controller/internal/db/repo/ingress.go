@@ -39,8 +39,12 @@ type IngressService struct {
 func (s *IngressService) Approved() bool { return s.ApprovedBy != nil }
 
 // Live reports whether the public name should route: enabled, approved,
-// and on an approved peer. A deleted peer cascades the row away.
+// and on an approved peer. A deleted peer cascades the row away; a nil
+// service (deleted) is not live.
 func (s *IngressService) Live() bool {
+	if s == nil {
+		return false // deleted
+	}
 	return s.Enabled && s.ApprovedBy != nil && s.PeerApprovalStatus == "approved"
 }
 
