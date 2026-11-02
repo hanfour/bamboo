@@ -5,7 +5,11 @@ from datetime import UTC, datetime
 from typing import Any
 
 from anomaly.cli import run_all
-from anomaly.clickhouse_io import fetch_active_tenants
+from anomaly.clickhouse_io import (
+    INGRESS_REQUEST_EVENT_TYPE,
+    fetch_active_tenants,
+    fetch_connection_events,
+)
 
 
 class _QueryResult:
@@ -34,6 +38,29 @@ def test_fetch_active_tenants_returns_ids_and_passes_window_and_floor():
     assert "connection_events" in sql
     assert "HAVING" in sql.upper()
     assert params == {"since": since, "min_events": 50}
+
+
+def test_ingress_request_event_type_matches_controller():
+    # apps/controller/internal/clickhouse/connections_ingress.go
+    assert INGRESS_REQUEST_EVENT_TYPE == "ingress_request"
+
+
+def test_fetch_active_tenants_ignores_ingress_request_rows():
+    client = _FakeClient([])
+
+    fetch_active_tenants(client, datetime(2026, 10, 1, tzinfo=UTC), min_events=50)
+
+    sql, _ = client.queries[0]
+    assert "event_type != 'ingress_request'" in sql
+
+
+def test_fetch_connection_events_ignores_ingress_request_rows():
+    client = _FakeClient([])
+
+    fetch_connection_events(client, "a-tenant", datetime(2026, 10, 1, tzinfo=UTC))
+
+    sql, _ = client.queries[0]
+    assert "event_type != 'ingress_request'" in sql
 
 
 def test_run_all_runs_every_tenant_and_reports_success():

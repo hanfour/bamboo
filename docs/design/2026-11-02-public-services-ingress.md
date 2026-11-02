@@ -137,7 +137,10 @@ service to revoke.
   (YesChef needs 5 MiB); upstream dial timeout 5 s; idle stream timeout 10 min.
 - Telemetry: per request `{service_id, client_ip, status, bytes_in, bytes_out,
   duration}` to ClickHouse `connection_events` (`proto/bamboo/v1/telemetry.proto`);
-  never request or response bodies, never `Authorization`.
+  never request or response bodies, never `Authorization`. These rows carry
+  `event_type = 'ingress_request'`, and bamboo-ai excludes them from tenant
+  selection, training, and scoring, so internet HTTP traffic never shapes the
+  mesh anomaly models.
 - `/healthz`, `/version`, Prometheus `/metrics`.
 
 ## 6. Deployment (`infra/full`)
