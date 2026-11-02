@@ -299,9 +299,27 @@ func (h *AuthHandler) RevokePreAuthKey(ctx context.Context, req *bamboov1.Revoke
 	return &bamboov1.RevokePreAuthKeyResponse{}, nil
 }
 
-// redeemAndReturnKey is shared by RedeemPreAuthKey and Register's pre-auth
-// path. It validates the presented secret and increments the use counter.
+// redeemAndReturnKey is used by RedeemPreAuthKey. It validates the
+// presented secret and increments the use counter in its own transaction.
 func (h *AuthHandler) redeemAndReturnKey(ctx context.Context, presentedSecret string) (*repo.PreAuthKey, error) {
+	key, err := h.checkPreAuthKey(ctx, presentedSecret)
+	if err != nil {
+		return nil, err
+	}
+	err = db.WithTenant(ctx, h.pool, key.TenantID, func(q db.Querier) error {
+		return h.consumePreAuthKeyTx(ctx, q, key)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return key, nil
+}
+
+// checkPreAuthKey validates a presented secret without consuming it.
+// Register consumes the key with consumePreAuthKeyTx inside the same
+// transaction that inserts the peer, so a failed insert leaves a
+// single-use key usable.
+func (h *AuthHandler) checkPreAuthKey(ctx context.Context, presentedSecret string) (*repo.PreAuthKey, error) {
 	id, err := auth.ParseSecret(presentedSecret)
 	if err != nil {
 		return nil, status.Error(codes.Unauthenticated, "invalid pre-auth key format")
@@ -339,33 +357,32 @@ func (h *AuthHandler) redeemAndReturnKey(ctx context.Context, presentedSecret st
 		return nil, status.Error(codes.Unauthenticated, "invalid pre-auth key")
 	}
 
-	// Atomically consume the redemption. The earlier use_count check is a
-	// fast-path; this is the real single-use guard and closes the TOCTOU
-	// race (audit M-3) — two concurrent Register calls with the same
-	// single-use key can both pass the check above, but only one gets
-	// consumed==true here; the loser is rejected instead of onboarding a
-	// second device.
-	err = db.WithTenant(ctx, h.pool, key.TenantID, func(q db.Querier) error {
-		ok, merr := repo.NewPreAuthKeys(q).MarkRedeemed(ctx, key.ID)
-		if merr != nil {
-			return status.Errorf(codes.Internal, "mark redeemed: %v", merr)
-		}
-		if !ok {
-			return status.Error(codes.PermissionDenied, "pre-auth key already used")
-		}
-		auditOnSavepoint(ctx, h.audits, q, &repo.AuditEvent{
-			TenantID:     &key.TenantID,
-			ActorType:    "system",
-			Action:       "preauthkey.redeem",
-			ResourceType: "pre_auth_key",
-			ResourceID:   &key.ID,
-		})
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
 	return key, nil
+}
+
+// consumePreAuthKeyTx atomically consumes one redemption of key inside
+// q's transaction. The use_count check in checkPreAuthKey is a
+// fast-path; this is the real single-use guard and closes the TOCTOU
+// race (audit M-3) — two concurrent Register calls with the same
+// single-use key can both pass the check, but only one gets
+// consumed==true here; the loser is rejected instead of onboarding a
+// second device.
+func (h *AuthHandler) consumePreAuthKeyTx(ctx context.Context, q db.Querier, key *repo.PreAuthKey) error {
+	ok, merr := repo.NewPreAuthKeys(q).MarkRedeemed(ctx, key.ID)
+	if merr != nil {
+		return status.Errorf(codes.Internal, "mark redeemed: %v", merr)
+	}
+	if !ok {
+		return status.Error(codes.PermissionDenied, "pre-auth key already used")
+	}
+	auditOnSavepoint(ctx, h.audits, q, &repo.AuditEvent{
+		TenantID:     &key.TenantID,
+		ActorType:    "system",
+		Action:       "preauthkey.redeem",
+		ResourceType: "pre_auth_key",
+		ResourceID:   &key.ID,
+	})
+	return nil
 }
 
 // RequireAdmin gates a gRPC handler on the calling principal having

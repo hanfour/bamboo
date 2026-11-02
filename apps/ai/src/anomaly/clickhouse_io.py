@@ -14,6 +14,14 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from clickhouse_connect.driver.client import Client
 
+# Public-services ingress request rows (written by the controller's
+# /internal/v1/ingress/events endpoint) describe HTTP traffic from the
+# internet, not mesh connections. They are excluded from both tenant
+# selection and training/scoring data. The string must match
+# IngressRequestEventType in apps/controller/internal/clickhouse.
+INGRESS_REQUEST_EVENT_TYPE = "ingress_request"
+_EXCLUDE_INGRESS = f"event_type != '{INGRESS_REQUEST_EVENT_TYPE}'"
+
 
 def fetch_connection_events(
     client: Client,
@@ -30,7 +38,7 @@ def fetch_connection_events(
     """
 
     rows = client.query(
-        """
+        f"""
         SELECT
             occurred_at,
             event_type,
@@ -41,6 +49,7 @@ def fetch_connection_events(
         FROM connection_events
         WHERE tenant_id = %(tenant_id)s
           AND occurred_at >= %(since)s
+          AND {_EXCLUDE_INGRESS}
         ORDER BY occurred_at ASC
         LIMIT %(limit)s
         """,
@@ -75,10 +84,11 @@ def fetch_active_tenants(
     """
 
     rows = client.query(
-        """
+        f"""
         SELECT toString(tenant_id) AS tenant
         FROM connection_events
         WHERE occurred_at >= %(since)s
+          AND {_EXCLUDE_INGRESS}
         GROUP BY tenant_id
         HAVING count() >= %(min_events)s
         ORDER BY tenant

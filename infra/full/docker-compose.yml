@@ -92,6 +92,18 @@ services:
       # wg-state-reporter.timer and reconciles peer liveness into
       # the DB. Empty path disables; controller HTTP is unaffected.
       BAMBOO_WG_STATE_PATH: "/var/lib/bamboo/wg-state.txt"
+      # Public services ingress. Empty key ⇒ token/routes endpoints answer
+      # 503 and nothing else changes. Generate with `controller relaykey`
+      # and use the SIGNING value (must differ from the relay key).
+      BAMBOO_INGRESS_SIGNING_KEY: "${BAMBOO_INGRESS_SIGNING_KEY:-}"
+      BAMBOO_INGRESS_SUFFIX: "${INGRESS_SUFFIX:-}"
+    # Loopback only, so the host-network ingress can reach /internal/*.
+    # Never publish this on 0.0.0.0: the REST listener has no TLS and
+    # /internal/v1/ingress/ask needs no token. BAMBOO_CONTROLLER_HOST_PORT
+    # (default 8081) moves the host side when 8081 is taken; deploy.sh
+    # refuses to recreate the controller while another process holds it.
+    ports:
+      - "127.0.0.1:${BAMBOO_CONTROLLER_HOST_PORT:-8081}:8081"
     volumes:
       # Read-only mount; the host timer writes via mv(1) so the
       # controller never sees a half-written dump.
@@ -156,6 +168,38 @@ services:
       - ai-models:/var/lib/bamboo-ai/models
     command: ["run-all", "--since", "${BAMBOO_AI_SINCE:-7d}", "--min-events", "${BAMBOO_AI_MIN_EVENTS:-50}"]
 
+  # Public services ingress proxy. Opt-in: set COMPOSE_PROFILES=ingress in
+  # .env once the token file exists (docs/deployment/public-services-ingress.md).
+  # Host network so it reaches peer mesh IPs through the host's WireGuard
+  # interface. It listens only on the ingress_edge bridge gateway, so only
+  # the host and containers on that bridge (Caddy) reach it, and it trusts
+  # X-Forwarded-For only from Caddy's fixed address.
+  ingress:
+    image: ghcr.io/hanfour/bamboo-ingress:${BAMBOO_IMAGE_TAG:-latest}
+    profiles: ["ingress"]
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      BAMBOO_INGRESS_SUFFIX: "${INGRESS_SUFFIX:-}"
+      BAMBOO_INGRESS_LISTEN: "10.213.0.1:8090"
+      BAMBOO_INGRESS_ADMIN_LISTEN: "127.0.0.1:8091"
+      BAMBOO_CONTROLLER_URL: "http://127.0.0.1:${BAMBOO_CONTROLLER_HOST_PORT:-8081}"
+      BAMBOO_INGRESS_TOKEN_FILE: "/etc/bamboo-ingress/ingress.token"
+      BAMBOO_INGRESS_TRUSTED_PROXIES: "10.213.0.2/32"
+    volumes:
+      # The directory, not the file: a rotated token written as a new file
+      # (new inode) is still seen, and a missing file never makes docker
+      # create a directory in its place. The token file is owned by uid
+      # 65532 (distroless nonroot), mode 0600.
+      - /etc/bamboo-ingress:/etc/bamboo-ingress:ro
+    depends_on:
+      controller:
+        condition: service_healthy
+      # Caddy's start creates the ingress_edge bridge whose gateway
+      # address this service binds.
+      caddy:
+        condition: service_started
+
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped
@@ -169,6 +213,20 @@ services:
     environment:
       DOMAIN: "${DOMAIN}"
       RELAY_DOMAIN: "${RELAY_DOMAIN}"
+      # Never empty: Caddy's {$INGRESS_SUFFIX:svc.invalid} default applies
+      # only to an unset variable, and an empty one makes the site "*.",
+      # which fails to load and would take every site down with it.
+      INGRESS_SUFFIX: "${INGRESS_SUFFIX:-svc.invalid}"
+    # Public services: host.docker.internal is the ingress_edge bridge's
+    # gateway, a host address that bamboo-ingress listens on. Caddy reaches
+    # it over its ingress_edge interface (a connected route, no NAT), so the
+    # ingress sees Caddy's fixed address 10.213.0.2 as the source.
+    extra_hosts:
+      - "host.docker.internal:10.213.0.1"
+    networks:
+      default:
+      ingress_edge:
+        ipv4_address: 10.213.0.2
     depends_on:
       controller:
         condition: service_healthy
@@ -176,6 +234,24 @@ services:
         condition: service_started
       relay:
         condition: service_started
+
+# Fixed bridge for Caddy → bamboo-ingress. Pinned so the ingress can
+# bind its gateway and trust exactly Caddy's address; the fixed bridge
+# name gives the host firewall a stable interface to match. 10.213.0.0/24
+# is outside Docker's default pools (172.17–31.x, 192.168.x) and the
+# Lightsail VPC (172.26.0.0/16); if it collides with a route on your
+# host (`ip route`), change every 10.213.0.x in this file together. The
+# default network is left as it is: compose recreates a network whose
+# settings change, which would restart every container on it.
+networks:
+  ingress_edge:
+    driver: bridge
+    driver_opts:
+      com.docker.network.bridge.name: br-bamboo-edge
+    ipam:
+      config:
+        - subnet: 10.213.0.0/24
+          gateway: 10.213.0.1
 
 volumes:
   postgres-data:

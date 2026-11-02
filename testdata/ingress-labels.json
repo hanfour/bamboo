@@ -1,0 +1,51 @@
+{
+  "_comment": "Shared public services ingress label and host test vectors (docs/design/2026-11-02-public-services-ingress.md). Read by the controller (apps/controller/internal/db/repo, internal/server), the ingress proxy (apps/ingress/internal/routes), and the web UI (apps/web/src/lib) tests so their rules cannot drift. hosts.match/reject use the suffix below and only cover rules every consumer shares; port handling is proxy-only and stays in its own tests.",
+  "suffix": "svc.example.test",
+  "labels": {
+    "valid": [
+      "a",
+      "0",
+      "yeschef",
+      "a-1",
+      "a--b",
+      "9lives",
+      "0123456789012345678901234567890a"
+    ],
+    "invalid": [
+      "",
+      "-a",
+      "a-",
+      "-",
+      "A",
+      "Bad",
+      "a.b",
+      "a_b",
+      "a b",
+      " a",
+      "a\n",
+      "é",
+      "0123456789012345678901234567890ab"
+    ],
+    "reserved": ["www", "api", "admin", "relay", "controller", "ingress", "mail"]
+  },
+  "hosts": {
+    "match": [
+      { "host": "yeschef.svc.example.test", "label": "yeschef" },
+      { "host": "YesChef.SVC.Example.Test", "label": "yeschef" },
+      { "host": "yeschef.svc.example.test.", "label": "yeschef" },
+      { "host": "a-1.svc.example.test", "label": "a-1" }
+    ],
+    "reject": [
+      "svc.example.test",
+      ".svc.example.test",
+      "x.yeschef.svc.example.test",
+      "yeschef.example.test",
+      "yeschef.svc.example.test..",
+      "yeschef.svc.example.testx",
+      "www.svc.example.test",
+      "-a.svc.example.test",
+      "a_b.svc.example.test",
+      ""
+    ]
+  }
+}

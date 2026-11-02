@@ -120,6 +120,7 @@ func startFixture(t *testing.T) *fixture {
 		_ = conn.Close()
 		httpSrv.Close()
 		grpcSrv.GracefulStop()
+		coord.Close()
 		// Best-effort cleanup of rows this test created.
 		cleanupTenant(admin, f.tenantSlug)
 		admin.Close()

@@ -181,6 +181,16 @@ func (h *HTTPServer) routePeersSub(w http.ResponseWriter, r *http.Request, authn
 		h.apiDeskStatus(w, r, authn, tenant, id)
 		return true
 	}
+	// "{id}/ingress" — file a public-service request for this peer
+	// (docs/design/2026-11-02-public-services-ingress.md §4.2).
+	if id, found := strings.CutSuffix(rest, "/ingress"); found && id != "" && !strings.Contains(id, "/") {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return true
+		}
+		h.apiCreateIngress(w, r, authn, tenant, id)
+		return true
+	}
 	// "{id}" — single peer GET/PATCH/DELETE.
 	if !strings.Contains(rest, "/") {
 		switch r.Method {

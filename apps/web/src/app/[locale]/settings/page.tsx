@@ -83,6 +83,7 @@ function SettingsView({
  <APITokensCard />
  <WebhooksCard />
  {isAdmin && <RelaysCard />}
+ {isAdmin && <IngressCard />}
  </div>
  </section>
 
@@ -151,6 +152,24 @@ function RelaysCard() {
  return (
  <Link
  href="/relays"
+ className="group flex h-full items-start justify-between gap-4 rounded-2xl bg-ink-900 p-5 transition-colors hover:bg-ink-850"
+ >
+ <div className="min-w-0">
+ <h3 className="text-[15px] font-medium text-bamboo-50">{t('title')}</h3>
+ <p className="mt-1.5 text-[13px] leading-5 text-bamboo-200/60">{t('description')}</p>
+ <p className="mt-3 text-xs font-medium text-bamboo-200/80 group-hover:text-bamboo-50">
+ {t('link')} →
+ </p>
+ </div>
+ </Link>
+ );
+}
+
+function IngressCard() {
+ const t = useTranslations('settings.ingressCard');
+ return (
+ <Link
+ href="/ingress"
  className="group flex h-full items-start justify-between gap-4 rounded-2xl bg-ink-900 p-5 transition-colors hover:bg-ink-850"
  >
  <div className="min-w-0">

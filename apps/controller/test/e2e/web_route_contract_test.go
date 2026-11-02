@@ -88,6 +88,14 @@ func TestWebRouteContract(t *testing.T) {
 		{method: http.MethodPost, path: "/api/v1/peers/" + dummyID + "/desk/term/in", noBody: true},
 		{method: http.MethodDelete, path: "/api/v1/peers/" + dummyID + "/desk/term", noBody: true},
 		{method: http.MethodGet, path: "/api/v1/peers/" + dummyID + "/desk/term/out"},
+
+		// Public services ingress (apps/web ingress page).
+		{method: http.MethodGet, path: "/api/v1/ingress"},
+		{method: http.MethodPost, path: "/api/v1/peers/" + dummyID + "/ingress", noBody: true},
+		{method: http.MethodPost, path: "/api/v1/ingress/" + dummyID + "/approve", noBody: true},
+		{method: http.MethodPatch, path: "/api/v1/ingress/" + dummyID, noBody: true},
+		{method: http.MethodDelete, path: "/api/v1/ingress/" + dummyID, noBody: true},
+		{method: http.MethodPost, path: "/api/v1/ingress/token", noBody: true},
 	}
 
 	// First probe a synthetic path that definitely doesn't exist so

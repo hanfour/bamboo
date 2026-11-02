@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -99,6 +100,7 @@ func (h *HTTPServer) routeAPI(w http.ResponseWriter, r *http.Request) {
 	case h.routeInvitations(w, r, authn, tenant):
 	case h.routeAPITokens(w, r, authn, tenant):
 	case h.routeWebhooks(w, r, authn, tenant):
+	case h.routeIngress(w, r, authn, tenant):
 	case h.routePolicy(w, r, authn, tenant):
 	default:
 		h.routeReadOnlyAndDNS(w, r, authn, tenant)
@@ -979,7 +981,13 @@ func (h *HTTPServer) apiPeerPatch(w http.ResponseWriter, r *http.Request, authn 
 	// transition, would even mislead subscribers into re-adding a
 	// peer the PeerRemoved just told them to drop.
 	if len(diff) > 0 && !statusChanged {
-		h.coord.PublishPeerUpdatedIfVisible(tenant.ID, updated)
+		h.coord.PublishPeerUpdatedIfVisible(r.Context(), tenant.ID, updated)
+	}
+	// Public services ingress: attaching or removing tag:ingress changes
+	// who the ingress peer is, so every peer re-pulls its AllowedIPs.
+	if slices.Contains(current.Tags, policy.IngressTag) != slices.Contains(updated.Tags, policy.IngressTag) &&
+		!h.bumpIngressPolicy(r.Context(), w, tenant.ID) {
+		return
 	}
 
 	writeJSON(w, http.StatusOK, peerToJSON(updated))
@@ -1115,7 +1123,7 @@ func (h *HTTPServer) apiPeerApprove(w http.ResponseWriter, r *http.Request, auth
 		return
 	}
 	var current *repo.Peer
-	var notFound bool
+	var notFound, affectsIngress bool
 	if txErr := db.WithTenant(r.Context(), h.pool, tenant.ID, func(q db.Querier) error {
 		got, ok, gerr := getPeerInTenant(r.Context(), q, tenant.ID, id)
 		if gerr != nil {
@@ -1126,7 +1134,9 @@ func (h *HTTPServer) apiPeerApprove(w http.ResponseWriter, r *http.Request, auth
 			return nil
 		}
 		current = got
-		return nil
+		affects, aerr := peerAffectsIngress(r.Context(), q, got)
+		affectsIngress = affects
+		return aerr
 	}); txErr != nil {
 		writeError(w, http.StatusInternalServerError, txErr)
 		return
@@ -1165,6 +1175,11 @@ func (h *HTTPServer) apiPeerApprove(w http.ResponseWriter, r *http.Request, auth
 		} else {
 			h.emitAuditHook(r.Context(), auditEv, auditOK)
 		}
+		// Public services ingress: the peer's services or its ingress
+		// role just changed state; peers must re-register.
+		if affectsIngress && !h.bumpIngressPolicy(r.Context(), w, tenant.ID) {
+			return
+		}
 	}
 	writeJSON(w, http.StatusOK, peerToJSON(updated))
 }
@@ -1185,7 +1200,7 @@ func (h *HTTPServer) apiPeerReject(w http.ResponseWriter, r *http.Request, authn
 		return
 	}
 	var current *repo.Peer
-	var notFound bool
+	var notFound, affectsIngress bool
 	if txErr := db.WithTenant(r.Context(), h.pool, tenant.ID, func(q db.Querier) error {
 		got, ok, gerr := getPeerInTenant(r.Context(), q, tenant.ID, id)
 		if gerr != nil {
@@ -1196,7 +1211,9 @@ func (h *HTTPServer) apiPeerReject(w http.ResponseWriter, r *http.Request, authn
 			return nil
 		}
 		current = got
-		return nil
+		affects, aerr := peerAffectsIngress(r.Context(), q, got)
+		affectsIngress = affects
+		return aerr
 	}); txErr != nil {
 		writeError(w, http.StatusInternalServerError, txErr)
 		return
@@ -1228,6 +1245,11 @@ func (h *HTTPServer) apiPeerReject(w http.ResponseWriter, r *http.Request, authn
 			slog.Warn("peer.reject audit tx failed", "peer_id", id, "err", txErr)
 		} else {
 			h.emitAuditHook(r.Context(), auditEv, auditOK)
+		}
+		// Public services ingress: the peer's services or its ingress
+		// role just changed state; peers must re-register.
+		if affectsIngress && !h.bumpIngressPolicy(r.Context(), w, tenant.ID) {
+			return
 		}
 	}
 	writeJSON(w, http.StatusOK, peerToJSON(updated))
@@ -1658,9 +1680,10 @@ func (h *HTTPServer) apiPeerDelete(w http.ResponseWriter, r *http.Request, authn
 		return
 	}
 	var (
-		notFound bool
-		auditEv  *repo.AuditEvent
-		auditOK  bool
+		notFound       bool
+		affectsIngress bool
+		auditEv        *repo.AuditEvent
+		auditOK        bool
 	)
 	if txErr := db.WithTenant(r.Context(), h.pool, tenant.ID, func(q db.Querier) error {
 		peers := repo.NewPeers(q)
@@ -1672,6 +1695,12 @@ func (h *HTTPServer) apiPeerDelete(w http.ResponseWriter, r *http.Request, authn
 			notFound = true
 			return nil
 		}
+		// Ask before the delete: its ingress services cascade away.
+		affects, aerr := peerAffectsIngress(r.Context(), q, current)
+		if aerr != nil {
+			return aerr
+		}
+		affectsIngress = affects
 		if _, err := peers.Delete(r.Context(), id); err != nil {
 			return fmt.Errorf("delete peer: %w", err)
 		}
@@ -1691,6 +1720,9 @@ func (h *HTTPServer) apiPeerDelete(w http.ResponseWriter, r *http.Request, authn
 		return
 	}
 	h.emitAuditHook(r.Context(), auditEv, auditOK)
+	if affectsIngress && !h.bumpIngressPolicy(r.Context(), w, tenant.ID) {
+		return
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -2804,18 +2836,30 @@ func (h *HTTPServer) apiSimulatePolicy(w http.ResponseWriter, r *http.Request, a
 		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid policy: %v", parseErr))
 		return
 	}
-	var peers []*repo.Peer
+	var (
+		peers      []*repo.Peer
+		liveRoutes []repo.IngressRoute
+	)
 	if txErr := db.WithTenant(r.Context(), h.pool, tenant.ID, func(q db.Querier) error {
 		ps, err := repo.NewPeers(q).ListByTenant(r.Context(), tenant.ID)
 		if err != nil {
 			return fmt.Errorf("list peers: %w", err)
 		}
 		peers = ps
+		routes, err := repo.NewIngressServices(q).ListLiveRoutes(r.Context(), tenant.ID)
+		if err != nil {
+			return err
+		}
+		liveRoutes = routes
 		return nil
 	}); txErr != nil {
 		writeError(w, http.StatusInternalServerError, txErr)
 		return
 	}
+	// Public services ingress: the same generated rules and zero-rule
+	// gate Register applies, so the matrix matches what peers receive.
+	gate := handlers.NewIngressGate(liveRoutes)
+	effective := gate.Policy(parsed)
 	// Only approved peers participate in the mesh (issue #133), so
 	// only approved peers participate in the simulator. Pending /
 	// rejected rows would skew the matrix toward "you can't reach
@@ -2840,7 +2884,7 @@ func (h *HTTPServer) apiSimulatePolicy(w http.ResponseWriter, r *http.Request, a
 				SourceHostname: src.Hostname,
 				DestID:         dst.ID.String(),
 				DestHostname:   dst.Hostname,
-				Allow:          simulateAllow(parsed, src, dst),
+				Allow:          gate.Permits(effective, src, dst) && simulateAllow(effective, src, dst),
 			}
 			if edge.Allow {
 				edge.AllowedIPs = dstTunnelIPs(dst)

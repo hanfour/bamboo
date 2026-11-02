@@ -43,6 +43,9 @@ type CoordinatorHandler struct {
 	// tables so the RLS backstop (ADR-0014) sees app.tenant_id.
 	// tenants and relay_servers are not RLS-scoped and stay on the pool.
 	pool *db.Pool
+	// peerRefresh coalesces the PolicyChanged follow-ups of peer
+	// membership events (publishPeerEvent). Stopped by Close.
+	peerRefresh *peerRefreshCoalescer
 	// requireAuth mirrors HTTPServer.requireAuth. When true, Register
 	// rejects callers that present neither a pre-auth-key credential
 	// nor a bearer-token credential — the x-tenant-slug metadata
@@ -97,7 +100,7 @@ func (h *CoordinatorHandler) ApprovePeer(ctx context.Context, peerID uuid.UUID, 
 		// terminal state). No event to publish.
 		return updated, false, nil
 	}
-	h.bus.Publish(updated.TenantID, &bamboov1.WatchPeersEvent{
+	h.publishPeerEvent(ctx, updated.TenantID, &bamboov1.WatchPeersEvent{
 		Event: &bamboov1.WatchPeersEvent_PeerAdded{
 			PeerAdded: &bamboov1.PeerAdded{Peer: toProtoPeer(updated)},
 		},
@@ -166,7 +169,10 @@ func (h *CoordinatorHandler) SetPeerStatus(ctx context.Context, peerID uuid.UUID
 	if current.Status == newStatus {
 		return current, false, nil
 	}
-	var updated *repo.Peer
+	var (
+		updated   *repo.Peer
+		bumpedRev int64
+	)
 	err = db.WithTenant(ctx, h.pool, current.TenantID, func(q db.Querier) error {
 		peers := repo.NewPeers(q)
 		if _, serr := peers.SetStatus(ctx, peerID, newStatus); serr != nil {
@@ -177,10 +183,15 @@ func (h *CoordinatorHandler) SetPeerStatus(ctx context.Context, peerID uuid.UUID
 			return gerr
 		}
 		updated = u
-		return nil
+		rev, berr := bumpIfIngressLivenessChangedTx(ctx, q, current, newStatus)
+		bumpedRev = rev
+		return berr
 	})
 	if err != nil {
 		return nil, false, err
+	}
+	if bumpedRev > 0 {
+		h.publishPolicyChanged(updated.TenantID, bumpedRev)
 	}
 
 	var event *bamboov1.WatchPeersEvent
@@ -216,7 +227,7 @@ func (h *CoordinatorHandler) SetPeerStatus(ctx context.Context, peerID uuid.UUID
 		}
 	}
 	if event != nil {
-		h.bus.Publish(updated.TenantID, event)
+		h.publishPeerEvent(ctx, updated.TenantID, event)
 	}
 	return updated, true, nil
 }
@@ -231,18 +242,70 @@ func (h *CoordinatorHandler) SetPeerStatus(ctx context.Context, peerID uuid.UUID
 // Used by HTTP PATCH for hostname / dnsName / tags changes that
 // don't transition status (status transitions have their own event
 // via SetPeerStatus and shouldn't double-emit).
-func (h *CoordinatorHandler) PublishPeerUpdatedIfVisible(tenantID uuid.UUID, peer *repo.Peer) {
+func (h *CoordinatorHandler) PublishPeerUpdatedIfVisible(ctx context.Context, tenantID uuid.UUID, peer *repo.Peer) {
 	if peer.ApprovalStatus != "approved" {
 		return
 	}
 	if peer.Status == "disabled" {
 		return
 	}
-	h.bus.Publish(tenantID, &bamboov1.WatchPeersEvent{
+	h.publishPeerEvent(ctx, tenantID, &bamboov1.WatchPeersEvent{
 		Event: &bamboov1.WatchPeersEvent_PeerUpdated{
 			PeerUpdated: &bamboov1.PeerUpdated{Peer: toProtoPeer(peer)},
 		},
 	})
+}
+
+// publishPeerEvent is the single publisher for peer membership events.
+// PeerAdded and PeerUpdated carry no AllowedIps (the bus is tenant-wide
+// and AllowedIps differ per recipient), and a client enforcing ACLs
+// (policy revision > 0) reads a peer without AllowedIps as denied. So the
+// event schedules a PolicyChanged follow-up and clients re-register for
+// fresh AllowedIps. Follow-ups are coalesced per tenant (one per window,
+// trailing edge, revision read at send time, none at revision 0, where
+// clients fall back to the peer's /32). No bump is needed: the CLI daemon
+// and the Apple clients re-register on any PolicyChanged regardless of
+// its revision.
+func (h *CoordinatorHandler) publishPeerEvent(_ context.Context, tenantID uuid.UUID, event *bamboov1.WatchPeersEvent) {
+	h.bus.Publish(tenantID, event)
+	if event.GetPeerAdded() == nil && event.GetPeerUpdated() == nil {
+		return
+	}
+	h.peerRefresh.Schedule(tenantID)
+}
+
+// refreshRevision reads the revision for a coalesced follow-up; it runs
+// on a timer, outside any request context.
+func (h *CoordinatorHandler) refreshRevision(tenantID uuid.UUID) int64 {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return h.policyRevision(ctx, tenantID)
+}
+
+func (h *CoordinatorHandler) publishPolicyChanged(tenantID uuid.UUID, rev int64) {
+	h.bus.Publish(tenantID, &bamboov1.WatchPeersEvent{
+		Event: &bamboov1.WatchPeersEvent_PolicyChanged{
+			PolicyChanged: &bamboov1.PolicyChanged{PolicyRevision: rev},
+		},
+	})
+}
+
+// policyRevision returns the tenant's policy revision; 0 when no row
+// exists or the lookup fails (the pre-existing, non-enforcing view).
+func (h *CoordinatorHandler) policyRevision(ctx context.Context, tenantID uuid.UUID) int64 {
+	var rev int64
+	err := db.WithTenant(ctx, h.pool, tenantID, func(q db.Querier) error {
+		rec, gerr := repo.NewPolicies(q).Get(ctx, tenantID)
+		if gerr != nil {
+			return gerr
+		}
+		rev = rec.Revision
+		return nil
+	})
+	if err != nil && !errors.Is(err, repo.ErrNotFound) {
+		slog.Warn("load policy revision for peer event", "tenant_id", tenantID, "err", err)
+	}
+	return rev
 }
 
 // PublishRelaysChanged broadcasts the fresh eligible-relay list to
@@ -364,7 +427,7 @@ func (h *CoordinatorHandler) SetRequireAuth(require bool) {
 // the Register path. The events bus is shared with WatchPeers stream
 // subscribers.
 func NewCoordinatorHandler(pool *db.Pool, auth *AuthHandler, bus *events.Bus) *CoordinatorHandler {
-	return &CoordinatorHandler{
+	h := &CoordinatorHandler{
 		tenants:  repo.NewTenants(pool),
 		users:    repo.NewUsers(pool),
 		peers:    repo.NewPeers(pool),
@@ -376,7 +439,17 @@ func NewCoordinatorHandler(pool *db.Pool, auth *AuthHandler, bus *events.Bus) *C
 		ops:      operate.NewHub(),
 		pool:     pool,
 	}
+	h.peerRefresh = newPeerRefreshCoalescer(defaultPeerRefreshWindow, h.refreshRevision, h.publishPolicyChanged)
+	return h
 }
+
+// Close stops background work: pending coalesced PolicyChanged sends.
+// Call it on controller shutdown, before the pool closes.
+func (h *CoordinatorHandler) Close() { h.peerRefresh.Close() }
+
+// SetPeerRefreshWindow changes the coalescing window for peer-event
+// PolicyChanged follow-ups (tests use a short one).
+func (h *CoordinatorHandler) SetPeerRefreshWindow(d time.Duration) { h.peerRefresh.SetWindow(d) }
 
 // Register handles peer registration. See resolveTenant for credential
 // precedence.
@@ -388,7 +461,7 @@ func (h *CoordinatorHandler) Register(ctx context.Context, req *bamboov1.Registe
 		return nil, status.Error(codes.InvalidArgument, "hostname is required")
 	}
 
-	tenant, ownerUserID, autoApprove, initialTags, renewOnly, err := h.resolveCredential(ctx, req)
+	tenant, ownerUserID, autoApprove, initialTags, renewOnly, preAuthKey, err := h.resolveCredential(ctx, req)
 	if err != nil {
 		return nil, err
 	}
@@ -413,8 +486,21 @@ func (h *CoordinatorHandler) Register(ctx context.Context, req *bamboov1.Registe
 	var (
 		self      *repo.Peer
 		isNewPeer bool
+		// bumpedRev is the revision a new ingress peer's insert
+		// transaction lifted the tenant to; 0 when it did not bump.
+		bumpedRev int64
 	)
 	if existing != nil {
+		// Re-registration still spends one redemption of a presented
+		// key, as before; a new peer spends it in its insert tx.
+		if preAuthKey != nil {
+			err = db.WithTenant(ctx, h.pool, tenant.ID, func(q db.Querier) error {
+				return h.auth.consumePreAuthKeyTx(ctx, q, preAuthKey)
+			})
+			if err != nil {
+				return nil, err
+			}
+		}
 		self = existing
 		// A peer enrolled before its credential carried a user keeps
 		// that user on the next register. An already-attributed peer
@@ -551,6 +637,11 @@ func (h *CoordinatorHandler) Register(ctx context.Context, req *bamboov1.Registe
 			initialApproval = "approved"
 		}
 		err = db.WithTenant(ctx, h.pool, tenant.ID, func(q db.Querier) error {
+			if preAuthKey != nil {
+				if kerr := h.auth.consumePreAuthKeyTx(ctx, q, preAuthKey); kerr != nil {
+					return kerr
+				}
+			}
 			peers := repo.NewPeers(q)
 			used, uerr := peers.UsedIPs(ctx, tenant.ID)
 			if uerr != nil {
@@ -585,6 +676,11 @@ func (h *CoordinatorHandler) Register(ctx context.Context, req *bamboov1.Registe
 				}
 				self.Tags = applied
 			}
+			rev, berr := liftRevisionForIngressTx(ctx, q, tenant.ID, self)
+			if berr != nil {
+				return status.Errorf(codes.Internal, "bump policy revision for ingress peer: %v", berr)
+			}
+			bumpedRev = rev
 			auditDiff := map[string]any{"hostname": self.Hostname, "ip": self.IP, "os": self.OS, "approval_status": self.ApprovalStatus}
 			if dnsName != "" {
 				auditDiff["peer_dns_name"] = dnsName
@@ -613,6 +709,9 @@ func (h *CoordinatorHandler) Register(ctx context.Context, req *bamboov1.Registe
 			"approval_status", self.ApprovalStatus,
 		)
 		isNewPeer = true
+		if bumpedRev > 0 {
+			h.publishPolicyChanged(tenant.ID, bumpedRev)
+		}
 	}
 
 	// Compose response.
@@ -651,6 +750,22 @@ func (h *CoordinatorHandler) Register(ctx context.Context, req *bamboov1.Registe
 	}
 
 	policyDoc, currentRev := h.loadPolicyAndRevision(ctx, tenant.ID)
+	// A new ingress peer lifted the revision in its insert tx
+	// (liftRevisionForIngressTx). This covers an existing peer that
+	// carries tag:ingress at revision 0, so it stays a fallback.
+	if currentRev == 0 && isIngressPeer(self) {
+		rev, berr := h.BumpPolicyRevision(ctx, tenant.ID)
+		if berr != nil {
+			return nil, status.Errorf(codes.Internal, "bump policy revision for ingress peer: %v", berr)
+		}
+		currentRev = rev
+	}
+	// Public services ingress: generated tag:ingress rules for live
+	// services. Never persisted in HCL (spec §4.4). ingress gates the
+	// ingress peer in tenants without authored rules.
+	liveRoutes := h.liveIngressRoutes(ctx, tenant.ID, allPeers)
+	policyDoc = policy.WithIngressRules(policyDoc, ingressTargets(liveRoutes))
+	ingress := newIngressView(liveRoutes)
 
 	resp := &bamboov1.RegisterResponse{
 		Self:              toProtoPeer(self),
@@ -705,7 +820,7 @@ func (h *CoordinatorHandler) Register(ctx context.Context, req *bamboov1.Registe
 			continue
 		}
 		pp := toProtoPeer(p)
-		pp.AllowedIps = allowedIPsFor(policyDoc, self, p, egressRoute)
+		pp.AllowedIps = ingress.allowedIPs(policyDoc, self, p, egressRoute)
 		resp.Peers = append(resp.Peers, pp)
 	}
 
@@ -718,7 +833,7 @@ func (h *CoordinatorHandler) Register(ctx context.Context, req *bamboov1.Registe
 	// the PeerAdded when the admin flips the gate. Rejected peers
 	// (re-registering after rejection) likewise produce no event.
 	if isNewPeer && selfApproved {
-		h.bus.Publish(tenant.ID, &bamboov1.WatchPeersEvent{
+		h.publishPeerEvent(ctx, tenant.ID, &bamboov1.WatchPeersEvent{
 			Event: &bamboov1.WatchPeersEvent_PeerAdded{
 				PeerAdded: &bamboov1.PeerAdded{Peer: resp.Self},
 			},
@@ -811,7 +926,7 @@ func (h *CoordinatorHandler) Heartbeat(ctx context.Context, req *bamboov1.Heartb
 			// SetPeerStatus PeerRemoved (or never added it for a
 			// still-pending registration). Raw bus.Publish would
 			// re-introduce the peer in their view of the mesh.
-			h.PublishPeerUpdatedIfVisible(updated.TenantID, updated)
+			h.PublishPeerUpdatedIfVisible(ctx, updated.TenantID, updated)
 		}
 	}
 
@@ -1020,50 +1135,52 @@ func (h *CoordinatorHandler) loadPeerForMutation(ctx context.Context, peerID uui
 // onboarding credential) or a bearer/session token issued by the
 // controller. The REST adapter has its own corresponding check; this
 // path covers gRPC Register.
-func (h *CoordinatorHandler) resolveCredential(ctx context.Context, req *bamboov1.RegisterRequest) (tenant *repo.Tenant, ownerUserID *uuid.UUID, autoApprove bool, initialTags []string, renewOnly bool, err error) {
+func (h *CoordinatorHandler) resolveCredential(ctx context.Context, req *bamboov1.RegisterRequest) (tenant *repo.Tenant, ownerUserID *uuid.UUID, autoApprove bool, initialTags []string, renewOnly bool, preAuthKey *repo.PreAuthKey, err error) {
 	if tenant, owner, ok, perr := h.reusePeerSession(ctx, req); perr != nil {
-		return nil, nil, false, nil, false, perr
+		return nil, nil, false, nil, false, nil, perr
 	} else if ok {
-		return tenant, owner, true, nil, true, nil
+		return tenant, owner, true, nil, true, nil, nil
 	}
 
 	if secret := req.GetPreAuthKeySecret(); secret != "" {
-		key, err := h.auth.redeemAndReturnKey(ctx, secret)
+		// Validated, not consumed: Register consumes it in the
+		// transaction that writes the peer (consumePreAuthKeyTx).
+		key, err := h.auth.checkPreAuthKey(ctx, secret)
 		if err != nil {
-			return nil, nil, false, nil, false, err
+			return nil, nil, false, nil, false, nil, err
 		}
 		t, err := h.tenants.GetByID(ctx, key.TenantID)
 		if err != nil {
-			return nil, nil, false, nil, false, status.Errorf(codes.Internal, "tenant by id: %v", err)
+			return nil, nil, false, nil, false, nil, status.Errorf(codes.Internal, "tenant by id: %v", err)
 		}
-		return t, key.CreatedBy, key.AutoApprove, key.Tags, false, nil
+		return t, key.CreatedBy, key.AutoApprove, key.Tags, false, key, nil
 	}
 
 	if token := req.GetBearerToken(); token != "" {
 		t, userID, err := h.auth.resolveBearerToken(ctx, token)
 		if err != nil {
-			return nil, nil, false, nil, false, err
+			return nil, nil, false, nil, false, nil, err
 		}
 		// Bearer-token register implies an authenticated user —
 		// auto-approve so a person signing in to add their own laptop
 		// doesn't have to click "approve" on their own device.
-		return t, &userID, true, nil, false, nil
+		return t, &userID, true, nil, false, nil, nil
 	}
 
 	if h.requireAuth {
-		return nil, nil, false, nil, false, status.Error(codes.PermissionDenied, "Register requires a pre-auth key or bearer credential when require_auth is enabled")
+		return nil, nil, false, nil, false, nil, status.Error(codes.PermissionDenied, "Register requires a pre-auth key or bearer credential when require_auth is enabled")
 	}
 
 	slug := tenantSlugFromMetadata(ctx)
 	t, terr := h.tenants.GetOrCreate(ctx, slug, "Default Tenant", repo.DefaultTenantCIDR)
 	if terr != nil {
-		return nil, nil, false, nil, false, status.Errorf(codes.Internal, "tenant resolve: %v", terr)
+		return nil, nil, false, nil, false, nil, status.Errorf(codes.Internal, "tenant resolve: %v", terr)
 	}
 	// Dev-fallback path: no admin context, auto-approve so make
 	// local-up + make local-bootstrap keep working without a manual
 	// approval click in the middle. The peer has no owner, so only
 	// tag: and cidr: rules can match it.
-	return t, nil, true, nil, false, nil
+	return t, nil, true, nil, false, nil, nil
 }
 
 // reusePeerSession returns the tenant of a peer-session bearer that
@@ -1292,6 +1409,8 @@ func computeNAT64EgressRoute(tenant *repo.Tenant, peers []*repo.Peer, now time.T
 //  4. 0.0.0.0/0 (and ::/0) when src has elected dst as its exit
 //     node (issue #137) and dst is exit_node_approved. Default-route
 //     reachability lets src forward public traffic through dst.
+//
+// When either side carries tag:ingress, only (1) is emitted.
 func allowedIPsFor(p *policy.Policy, src, dst *repo.Peer, egress nat64EgressRoute) []string {
 	if !policy.Allow(p, peerView(src, p), peerView(dst, p)) {
 		return nil
@@ -1308,6 +1427,12 @@ func allowedIPsFor(p *policy.Policy, src, dst *repo.Peer, egress nat64EgressRout
 	// above) emitting a single entry.
 	if dst.IP6 != "" {
 		out = append(out, dst.IP6+"/128")
+	}
+	// Public services ingress (spec §4.4): the ingress peer and its
+	// targets exchange bare addresses only. No subnet, exit, or NAT64
+	// route ever runs through or toward the internet-facing peer.
+	if isIngressPeer(src) || isIngressPeer(dst) {
+		return out
 	}
 	// Subnet router (issue #136): merge admin-approved CIDRs.
 	out = append(out, dst.ApprovedRoutes...)

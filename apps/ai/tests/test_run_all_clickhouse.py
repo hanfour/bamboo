@@ -37,7 +37,11 @@ CREATE TABLE connection_events (
     bytes_received       UInt64,
     rtt_ms               UInt32,
     reason               String,
-    matched_rule_id      String
+    matched_rule_id      String,
+    service_id           String,
+    client_ip            String,
+    http_status          UInt16,
+    duration_ms          UInt32
 ) ENGINE = MergeTree ORDER BY (tenant_id, occurred_at)
 """
 
@@ -124,4 +128,33 @@ def test_run_all_trains_busy_tenants_and_skips_thin_ones(ch_db, tmp_path, monkey
     }
     assert tenants == {str(busy)}
     assert (tmp_path / f"{busy}.joblib").exists()
+    assert not (tmp_path / f"{thin}.joblib").exists()
+
+
+def _ingress_events(tenant: uuid.UUID, n: int) -> list[tuple]:
+    now = datetime.now(UTC)
+    return [
+        (
+            uuid.uuid4(), tenant, now - timedelta(minutes=i + 1), uuid.uuid4(), uuid.uuid4(),
+            "ingress_request", "ingress", "", 4096, 120, 0, "", "",
+            str(uuid.uuid4()), "203.0.113.7", 200, 35,
+        )
+        for i in range(n)
+    ]  # fmt: skip
+
+
+INGRESS_COLS = [*COLS, "service_id", "client_ip", "http_status", "duration_ms"]
+
+
+def test_run_all_ignores_ingress_request_rows(ch_db, tmp_path, monkeypatch):
+    db, url = ch_db
+    thin = uuid.uuid4()
+    db.insert("connection_events", _events(thin, 5), column_names=COLS)
+    db.insert("connection_events", _ingress_events(thin, 300), column_names=INGRESS_COLS)
+    monkeypatch.setenv("BAMBOO_AI_MODEL_DIR", str(tmp_path))
+
+    code = main(["run-all", "--clickhouse-url", url, "--since", "7d", "--min-events", "50"])
+
+    assert code == 0
+    assert db.query("SELECT count() FROM anomaly_findings").result_rows == [(0,)]
     assert not (tmp_path / f"{thin}.joblib").exists()

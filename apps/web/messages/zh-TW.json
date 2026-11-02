@@ -703,6 +703,50 @@
       "never": "尚未檢查"
     }
   },
+  "ingress": {
+    "title": "公開服務",
+    "subtitle": "把節點上的服務發布在 https://<label>.<suffix>。每個服務都要管理員核准，由入口節點經 mesh 轉送請求。",
+    "empty": "尚無公開服務。",
+    "errorPrefix": "錯誤：",
+    "generatedRule": "系統產生的 ACL 規則，不能在政策編輯器修改",
+    "columns": { "label": "名稱", "url": "網址", "peer": "節點", "port": "埠號", "state": "狀態", "actions": "操作" },
+    "state": { "pending": "待核准", "approved": "已核准，未啟用", "live": "上線中", "peerPending": "節點未核准" },
+    "actions": { "approve": "核准", "enable": "啟用", "disable": "停用", "delete": "刪除", "confirmDelete": "確認刪除", "cancel": "取消" },
+    "form": {
+      "openButton": "新增服務",
+      "cancel": "取消",
+      "peerLabel": "節點",
+      "labelLabel": "名稱",
+      "labelHint": "小寫英文字母、數字與中間的連字號，最多 32 個字元。",
+      "portLabel": "目標埠號",
+      "portHint": "節點 mesh IP 上的 1024–65535。",
+      "submit": "建立",
+      "invalidLabel": "請使用 1–32 個小寫英文字母、數字或中間的連字號。",
+      "reservedLabel": "這個名稱是保留字。",
+      "invalidPort": "埠號必須介於 1024 與 65535。",
+      "peerRequired": "請選擇節點。"
+    },
+    "token": {
+      "title": "入口服務權杖",
+      "description": "入口節點用這個權杖取得路由並回傳請求紀錄。發新權杖會讓舊權杖失效。",
+      "peerLabel": "入口節點（帶 ingress 標籤）",
+      "issue": "發放權杖",
+      "rotate": "更換權杖",
+      "current": "目前權杖：",
+      "none": "尚未發放權杖。",
+      "noIngressPeers": "沒有帶 ingress 標籤的已核准節點。",
+      "revealTitle": "現在複製這個權杖",
+      "revealHint": "存到 VPS 的 /etc/bamboo-ingress/ingress.token，擁有者 uid 65532，權限 0600（chmod 0600）。之後不會再顯示。",
+      "copy": "複製",
+      "close": "完成",
+      "expires": "到期",
+      "copyFailed": "複製失敗，請選取權杖後手動複製。"
+    },
+    "readiness": {
+      "noIngressPeer": "尚無法連線：沒有帶 ingress 標籤的已核准節點。",
+      "noToken": "尚無法連線：請發放入口服務權杖（尚未發放或已過期）。"
+    }
+  },
   "settings": {
     "title": "設定",
     "subtitle": "管理租戶與帳號相關設定。",
@@ -748,6 +792,11 @@
       "title": "Relay 伺服器",
       "description": "共用基礎設施，協助位於對稱 NAT 後的節點轉發 WireGuard 封包。Controller 每 30 秒探測一次，無法到達者會自動隱藏。",
       "link": "前往 Relay 伺服器"
+    },
+    "ingressCard": {
+      "title": "公開服務",
+      "description": "經入口節點把節點上的服務發布到網際網路，需管理員核准。",
+      "link": "前往公開服務"
     },
     "auditExportCard": {
       "title": "稽核日誌匯出",

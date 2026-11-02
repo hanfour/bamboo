@@ -148,3 +148,18 @@ func TestApplyEnvOverrides_ReleaseFeed(t *testing.T) {
 		}
 	})
 }
+
+func TestLoad_ingressEnv(t *testing.T) {
+	t.Setenv("BAMBOO_INGRESS_SIGNING_KEY", "c2VlZA==")
+	t.Setenv("BAMBOO_INGRESS_SUFFIX", "SVC.Example.Test.")
+	cfg, err := Load(writeConfig(t, validBody))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Ingress.SigningKey != "c2VlZA==" {
+		t.Errorf("SigningKey = %q", cfg.Ingress.SigningKey)
+	}
+	if cfg.Ingress.Suffix != "svc.example.test" {
+		t.Errorf("Suffix = %q, want lowercased without trailing dot", cfg.Ingress.Suffix)
+	}
+}

@@ -466,3 +466,61 @@ func TestRunHeartbeat_ThreadsNAT64Health(t *testing.T) {
 		t.Errorf("non-egress NAT64EgressHealthy = %v, want nil", *got)
 	}
 }
+
+// TestRunWatchPeers_EnforcingPeerAddedRecoveredByPolicyChanged pins the
+// controller/client contract for ACL-enforcing tenants (revision > 0):
+// PeerAdded carries no AllowedIps, so the cache build alone drops the new
+// peer; the PolicyChanged the controller publishes right after makes the
+// daemon re-register, and the peer comes back with its AllowedIps.
+func TestRunWatchPeers_EnforcingPeerAddedRecoveredByPolicyChanged(t *testing.T) {
+	priv, _ := wg.GeneratePrivateKey()
+	self := peer("self", "100.64.0.1")
+	cache := sync.New(self, nil)
+	cache.SetPolicyRevision(1)
+	newbie := peer("newbie", "100.64.0.2")
+
+	cli := &fakeClient{}
+	app := &fakeApplier{}
+	refresh := func(_ context.Context) (*bamboov1.RegisterResponse, error) {
+		withIPs := &bamboov1.Peer{
+			Id: newbie.GetId(), Ip: newbie.GetIp(), WireguardPublicKey: newbie.GetWireguardPublicKey(),
+			AllowedIps: []string{"100.64.0.2/32"},
+		}
+		return &bamboov1.RegisterResponse{PolicyRevision: 1, Self: self, Peers: []*bamboov1.Peer{withIPs}}, nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go sync.RunWatchPeers(ctx, cli, app, priv, cache, self.GetId(), refresh, nil, nil)
+
+	var evts chan *bamboov1.WatchPeersEvent
+	for deadline := time.Now().Add(time.Second); evts == nil && time.Now().Before(deadline); {
+		_, evts, _ = cli.snapshot()
+		time.Sleep(5 * time.Millisecond)
+	}
+	if evts == nil {
+		t.Fatal("stream never opened")
+	}
+	waitApplies := func(n int) *wg.DeviceConfig {
+		t.Helper()
+		for deadline := time.Now().Add(time.Second); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
+			app.mu.Lock()
+			count, last := app.count, app.last
+			app.mu.Unlock()
+			if count >= n {
+				return last
+			}
+		}
+		t.Fatalf("device applied fewer than %d times", n)
+		return nil
+	}
+
+	evts <- &bamboov1.WatchPeersEvent{Event: &bamboov1.WatchPeersEvent_PeerAdded{PeerAdded: &bamboov1.PeerAdded{Peer: newbie}}}
+	if cfg := waitApplies(1); len(cfg.Peers) != 0 {
+		t.Fatalf("enforcing cache build kept a peer without AllowedIps: %+v", cfg.Peers)
+	}
+	evts <- &bamboov1.WatchPeersEvent{Event: &bamboov1.WatchPeersEvent_PolicyChanged{PolicyChanged: &bamboov1.PolicyChanged{PolicyRevision: 1}}}
+	cfg := waitApplies(2)
+	if len(cfg.Peers) != 1 || len(cfg.Peers[0].AllowedIPs) != 1 || cfg.Peers[0].AllowedIPs[0].String() != "100.64.0.2/32" {
+		t.Fatalf("after PolicyChanged refresh, peers = %+v; want newbie with 100.64.0.2/32", cfg.Peers)
+	}
+}

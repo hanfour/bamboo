@@ -30,6 +30,20 @@ type Config struct {
 	WGSync      WGSyncConfig      `yaml:"wgsync"`
 	SMTP        SMTPConfig        `yaml:"smtp"`
 	ReleaseFeed ReleaseFeedConfig `yaml:"release_feed"`
+	Ingress     IngressConfig     `yaml:"ingress"`
+}
+
+// IngressConfig configures public services ingress
+// (docs/design/2026-11-02-public-services-ingress.md). Both empty ⇒ the
+// feature is off: admin REST still lists/creates rows, but ask answers
+// 404 and token/routes endpoints answer 503.
+type IngressConfig struct {
+	// SigningKey is a base64 Ed25519 seed (same format as
+	// relay_signing_key; generate with `controller relaykey` and use the
+	// first value). It must differ from the relay signing key.
+	SigningKey string `yaml:"signing_key"`
+	// Suffix is the public DNS suffix, e.g. "svc.miilink.net".
+	Suffix string `yaml:"suffix"`
 }
 
 // ReleaseFeedConfig drives the GitHub-releases poller that powers
@@ -270,6 +284,13 @@ func (c *Config) applyEnvOverrides() {
 	if v := os.Getenv("BAMBOO_RELAY_SIGNING_KEY"); v != "" {
 		c.Auth.RelaySigningKey = v
 	}
+	if v := os.Getenv("BAMBOO_INGRESS_SIGNING_KEY"); v != "" {
+		c.Ingress.SigningKey = v
+	}
+	if v := os.Getenv("BAMBOO_INGRESS_SUFFIX"); v != "" {
+		c.Ingress.Suffix = v
+	}
+	c.Ingress.Suffix = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(c.Ingress.Suffix)), ".")
 	if v := os.Getenv("BAMBOO_REQUIRE_AUTH"); v != "" {
 		// Any value other than "true" / "1" disables prod mode; this
 		// avoids accidental enables from leftover empty exports.

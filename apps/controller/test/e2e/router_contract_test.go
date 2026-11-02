@@ -85,6 +85,13 @@ func TestRouterContract_AllRoutes(t *testing.T) {
 		{http.MethodPost, "/api/v1/webhooks/" + id + "/test", false},
 		{http.MethodPatch, "/api/v1/webhooks/" + id, true},
 		{http.MethodDelete, "/api/v1/webhooks/" + id, false},
+		// Public services ingress.
+		{http.MethodGet, "/api/v1/ingress", false},
+		{http.MethodPost, "/api/v1/peers/" + id + "/ingress", true},
+		{http.MethodPost, "/api/v1/ingress/" + id + "/approve", false},
+		{http.MethodPatch, "/api/v1/ingress/" + id, true},
+		{http.MethodDelete, "/api/v1/ingress/" + id, false},
+		{http.MethodPost, "/api/v1/ingress/token", true},
 		// Policy + tooling.
 		{http.MethodGet, "/api/v1/policy", false},
 		{http.MethodPut, "/api/v1/policy", true},
@@ -129,6 +136,10 @@ func TestRouterContract_AllRoutes(t *testing.T) {
 		{http.MethodPost, "/api/v1/me", true},                             // GET-only
 		{http.MethodGet, "/api/v1/policy/validate", false},                // POST-only
 		{http.MethodDelete, "/api/v1/policy", false},                      // GET/PUT only
+		{http.MethodPut, "/api/v1/ingress", true},                         // GET-only
+		{http.MethodGet, "/api/v1/ingress/" + id + "/approve", false},     // POST-only
+		{http.MethodGet, "/api/v1/peers/" + id + "/ingress", false},       // POST-only
+		{http.MethodGet, "/api/v1/ingress/token", false},                  // POST-only
 	}
 	for _, r := range wrongMethod {
 		t.Run("405 "+r.method+" "+r.path, func(t *testing.T) {

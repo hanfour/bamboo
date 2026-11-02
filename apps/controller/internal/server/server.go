@@ -6,6 +6,7 @@ package server
 
 import (
 	"context"
+	"crypto/ed25519"
 	"fmt"
 	"log/slog"
 	"net"
@@ -30,10 +31,11 @@ import (
 
 // Server holds the gRPC + HTTP servers and dependencies.
 type Server struct {
-	cfg  *config.Config
-	pool *db.Pool
-	grpc *grpc.Server
-	http *HTTPServer
+	cfg   *config.Config
+	pool  *db.Pool
+	grpc  *grpc.Server
+	http  *HTTPServer
+	coord *handlers.CoordinatorHandler
 }
 
 // New constructs a Server with all gRPC services registered.
@@ -82,6 +84,17 @@ func New(cfg *config.Config, pool *db.Pool, ch *clickhouse.Conn) (*Server, error
 		}
 		httpSrv.SetRelaySigningKey(signKey)
 	}
+	// Public services ingress. A malformed key fails startup, like the
+	// relay key; an empty one leaves the feature off.
+	var ingressKey ed25519.PrivateKey
+	if cfg.Ingress.SigningKey != "" {
+		k, err := auth.ParseRelaySigningKey(cfg.Ingress.SigningKey)
+		if err != nil {
+			return nil, fmt.Errorf("parse BAMBOO_INGRESS_SIGNING_KEY: %w", err)
+		}
+		ingressKey = k
+	}
+	httpSrv.SetIngressConfig(ingressKey, cfg.Ingress.Suffix)
 	// Per-IP brute-force limiting on login / register / relay-token
 	// (audit H-4). On by default; set BAMBOO_RATE_LIMIT_DISABLED=true to
 	// opt out (e.g. load testing).
@@ -94,10 +107,11 @@ func New(cfg *config.Config, pool *db.Pool, ch *clickhouse.Conn) (*Server, error
 	httpSrv.SetWebURL(cfg.Auth.OIDC.WebURL)
 
 	return &Server{
-		cfg:  cfg,
-		pool: pool,
-		grpc: grpcSrv,
-		http: httpSrv,
+		cfg:   cfg,
+		pool:  pool,
+		grpc:  grpcSrv,
+		http:  httpSrv,
+		coord: coordHandler,
 	}, nil
 }
 
@@ -205,6 +219,8 @@ func resolveSessionTTL(cfgRaw string, fallback time.Duration) time.Duration {
 // Run blocks until ctx is canceled or either listener errors. On shutdown
 // signal it performs a graceful gRPC stop and HTTP shutdown.
 func (s *Server) Run(ctx context.Context) error {
+	// Stop coalesced peer-refresh timers once the listeners are down.
+	defer s.coord.Close()
 	listener, err := net.Listen("tcp", s.cfg.Server.GRPCAddr)
 	if err != nil {
 		return fmt.Errorf("listen %s: %w", s.cfg.Server.GRPCAddr, err)
