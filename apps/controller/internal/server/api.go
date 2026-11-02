@@ -2836,18 +2836,30 @@ func (h *HTTPServer) apiSimulatePolicy(w http.ResponseWriter, r *http.Request, a
 		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid policy: %v", parseErr))
 		return
 	}
-	var peers []*repo.Peer
+	var (
+		peers      []*repo.Peer
+		liveRoutes []repo.IngressRoute
+	)
 	if txErr := db.WithTenant(r.Context(), h.pool, tenant.ID, func(q db.Querier) error {
 		ps, err := repo.NewPeers(q).ListByTenant(r.Context(), tenant.ID)
 		if err != nil {
 			return fmt.Errorf("list peers: %w", err)
 		}
 		peers = ps
+		routes, err := repo.NewIngressServices(q).ListLiveRoutes(r.Context(), tenant.ID)
+		if err != nil {
+			return err
+		}
+		liveRoutes = routes
 		return nil
 	}); txErr != nil {
 		writeError(w, http.StatusInternalServerError, txErr)
 		return
 	}
+	// Public services ingress: the same generated rules and zero-rule
+	// gate Register applies, so the matrix matches what peers receive.
+	gate := handlers.NewIngressGate(liveRoutes)
+	effective := gate.Policy(parsed)
 	// Only approved peers participate in the mesh (issue #133), so
 	// only approved peers participate in the simulator. Pending /
 	// rejected rows would skew the matrix toward "you can't reach
@@ -2872,7 +2884,7 @@ func (h *HTTPServer) apiSimulatePolicy(w http.ResponseWriter, r *http.Request, a
 				SourceHostname: src.Hostname,
 				DestID:         dst.ID.String(),
 				DestHostname:   dst.Hostname,
-				Allow:          simulateAllow(parsed, src, dst),
+				Allow:          gate.Permits(effective, src, dst) && simulateAllow(effective, src, dst),
 			}
 			if edge.Allow {
 				edge.AllowedIPs = dstTunnelIPs(dst)

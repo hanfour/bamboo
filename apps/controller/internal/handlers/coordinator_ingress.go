@@ -138,3 +138,28 @@ func bumpIfIngressLivenessChangedTx(ctx context.Context, q db.Querier, peer *rep
 	}
 	return repo.NewPolicies(q).Bump(ctx, peer.TenantID)
 }
+
+// IngressGate is the public-services view a Register applies, exported so
+// the policy simulator renders the same matrix peers receive.
+type IngressGate struct {
+	view    ingressView
+	targets []policy.IngressTarget
+}
+
+// NewIngressGate builds the gate from the tenant's live routes.
+func NewIngressGate(routes []repo.IngressRoute) IngressGate {
+	return IngressGate{view: newIngressView(routes), targets: ingressTargets(routes)}
+}
+
+// Policy returns p with the generated ingress rules applied (unchanged
+// for a zero-rule policy, see policy.WithIngressRules).
+func (g IngressGate) Policy(p *policy.Policy) *policy.Policy {
+	return policy.WithIngressRules(p, g.targets)
+}
+
+// Permits reports whether the zero-rule ingress gate lets src reach dst
+// under p (the policy returned by Policy). Tenants with rules always
+// pass here; the generated rules gate them.
+func (g IngressGate) Permits(p *policy.Policy, src, dst *repo.Peer) bool {
+	return !policy.AllowsAll(p) || g.view.allowAllPermits(src, dst)
+}
