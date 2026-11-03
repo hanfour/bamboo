@@ -537,6 +537,23 @@ func (h *CoordinatorHandler) Register(ctx context.Context, req *bamboov1.Registe
 			}
 			if changed {
 				self.Endpoints = eps
+				// Same as the heartbeat path: re-fetch so the event
+				// carries current fields, then publish gated on
+				// visibility. A failed fetch skips the event only.
+				var updated *repo.Peer
+				gerr := db.WithTenant(ctx, h.pool, tenant.ID, func(q db.Querier) error {
+					p, err := repo.NewPeers(q).GetByID(ctx, self.ID)
+					if err != nil {
+						return err
+					}
+					updated = p
+					return nil
+				})
+				if gerr != nil || updated == nil {
+					slog.Warn("re-register: skip PeerUpdated, reload peer failed", "peer_id", self.ID, "error", gerr)
+				} else {
+					h.PublishPeerUpdatedIfVisible(ctx, tenant.ID, updated)
+				}
 			}
 		}
 		// Refresh the client version and OS. Without this a client that
